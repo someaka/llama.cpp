@@ -90,6 +90,10 @@ struct llama_context {
 
     float * get_embeddings_layer_inp(uint32_t lid);
 
+    float * get_hidden_state(int32_t layer);
+    float * get_hidden_state_ith(int32_t layer, int32_t i);
+    int32_t get_hidden_state_n_tokens() const;
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -116,6 +120,7 @@ struct llama_context {
     void set_embeddings_nextn(bool value, bool masked);
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
+    void set_extract_hidden_states(bool value);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
@@ -303,6 +308,10 @@ private:
     // host buffers for output layer input embeddings, per layer
     // populated when cparams.output_layer_inp[il] is true
     std::vector<buffer_view<float>> embd_layer_inp;
+
+    // per-layer hidden state buffer (flat: n_hidden_tokens * n_embd per layer), only when extract_hidden_states
+    std::vector<float> hidden_state_buf;
+    int32_t n_hidden_tokens = 0;
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active

@@ -16,6 +16,7 @@ using json = nlohmann::ordered_json;
 enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
+    SERVER_TASK_TYPE_HIDDEN_STATES,
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
@@ -96,6 +97,11 @@ struct task_params {
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+
+    // Hidden states
+    std::vector<int> hidden_layers; // specific layers to extract
+    bool hidden_all_layers = false; // extract all layers
+    bool hidden_normalize = false; // normalize hidden state vectors
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -187,6 +193,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_HIDDEN_STATES:
                 return true;
             default:
                 return false;
@@ -464,6 +471,15 @@ struct server_task_result_embd : server_task_result {
     json to_json_non_oaicompat();
 
     json to_json_oaicompat();
+};
+
+
+struct server_task_result_hidden_states : server_task_result {
+    std::map<int32_t, std::vector<float>> hidden_states; // layer -> vector
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_rerank : server_task_result {

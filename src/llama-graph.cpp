@@ -1307,6 +1307,7 @@ void llm_graph_result::reset() {
     t_sampled_probs.clear();
     t_sampled_logits.clear();
     t_candidates.clear();
+    t_hidden_layers.clear();
 
     params = {};
 
@@ -1372,6 +1373,11 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
     for (auto * tensor : t_candidates) {
         if (tensor != nullptr) {
             ggml_set_output(tensor);
+        }
+    }
+    for (auto * t : t_hidden_layers) {
+        if (t != nullptr) {
+            ggml_set_output(t);
         }
     }
 }
