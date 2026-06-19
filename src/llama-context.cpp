@@ -67,6 +67,7 @@ llama_context::llama_context(
     cparams.embeddings              = params.embeddings;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
+    cparams.extract_hidden_states   = params.extract_hidden_states;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -958,6 +959,43 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
     return embd_layer_inp[lid].data;
 }
 
+float * llama_context::get_hidden_state(int32_t layer) {
+    if (hidden_state_buf.empty() || n_hidden_tokens == 0) {
+        return nullptr;
+    }
+
+    const int32_t n_layers = (int32_t) hidden_state_buf.size() / (n_hidden_tokens * model.hparams.n_embd_out());
+
+    if (layer < 0 || layer >= n_layers) {
+        return nullptr;
+    }
+
+    return hidden_state_buf.data() + layer * n_hidden_tokens * model.hparams.n_embd_out();
+}
+
+float * llama_context::get_hidden_state_ith(int32_t layer, int32_t i) {
+    const float * layer_data = get_hidden_state(layer);
+    if (layer_data == nullptr) {
+        return nullptr;
+    }
+
+    // support negative indices: -1 = last token
+    if (i < 0) {
+        i = n_hidden_tokens + i;
+    }
+
+    if (i < 0 || i >= n_hidden_tokens) {
+        return nullptr;
+    }
+
+    const uint32_t n_embd_out = model.hparams.n_embd_out();
+    return const_cast<float *>(layer_data) + i * n_embd_out;
+}
+
+int32_t llama_context::get_hidden_state_n_tokens() const {
+    return n_hidden_tokens;
+}
+
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     output_reorder();
 
@@ -1154,6 +1192,12 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
     // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
     sched_need_reserve = true;
+}
+
+void llama_context::set_extract_hidden_states(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.extract_hidden_states = value;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -1994,6 +2038,28 @@ int llama_context::decode(const llama_batch & batch_inp) {
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
+
+    // extract per-layer hidden states if enabled
+    if (cparams.extract_hidden_states) {
+        auto * hres = gf_res_prev.get();
+        const uint32_t n_embd_out = hparams.n_embd_out();
+        const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
+
+        if (n_layers > 0) {
+            const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
+            hidden_state_buf.resize(n_layers * n_tokens * n_embd_out);
+            n_hidden_tokens = n_tokens;
+
+            for (int32_t il = 0; il < n_layers; il++) {
+                auto * t = hres->t_hidden_layers[il];
+                if (t == nullptr) continue;
+                ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
+                GGML_ASSERT(backend_res != nullptr);
+                float * dst = hidden_state_buf.data() + il * n_tokens * n_embd_out;
+                ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
+            }
+        }
+    }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -3470,6 +3536,7 @@ llama_context_params llama_context_default_params() {
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
+        /*.extract_hidden_states       =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
@@ -3641,6 +3708,10 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
 }
 
+void llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden_states) {
+    ctx->set_extract_hidden_states(extract_hidden_states);
+}
+
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
 }
@@ -3723,6 +3794,22 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+float * llama_get_hidden_state(llama_context * ctx, int32_t layer) {
+    ctx->synchronize();
+
+    return ctx->get_hidden_state(layer);
+}
+
+float * llama_get_hidden_state_ith(llama_context * ctx, int32_t layer, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_hidden_state_ith(layer, i);
+}
+
+int32_t llama_get_hidden_state_n_tokens(llama_context * ctx) {
+    return ctx->get_hidden_state_n_tokens();
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

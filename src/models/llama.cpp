@@ -225,6 +225,10 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
 
         // input for next layer
         inpL = cur;
+
+        if (cparams.extract_hidden_states) {
+            res->t_hidden_layers.push_back(cur);
+        }
     }
     cur = inpL;
 

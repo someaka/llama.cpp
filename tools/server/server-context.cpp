@@ -2171,6 +2171,68 @@ private:
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
+    void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
+        auto res = std::make_unique<server_task_result_hidden_states>();
+        res->id       = slot.task->id;
+        res->index    = slot.task->index;
+        res->n_tokens = slot.task->n_tokens();
+
+        const int32_t n_embd = llama_model_n_embd(model_tgt);
+        const int32_t n_layer = llama_model_n_layer(model_tgt);
+
+        // determine which layers to extract
+        std::vector<int> layers;
+        if (slot.task->params.hidden_all_layers) {
+            layers.resize(n_layer + 1);
+            for (int i = 0; i <= n_layer; i++) {
+                layers[i] = i;
+            }
+        } else {
+            layers = slot.task->params.hidden_layers;
+        }
+
+        // enable hidden state extraction
+        llama_set_extract_hidden_states(slot.ctx_tgt, true);
+
+        const int32_t n_hs_tokens = llama_get_hidden_state_n_tokens(slot.ctx_tgt);
+
+        for (int layer : layers) {
+            if (layer < 0 || layer > n_layer) {
+                SLT_WRN(slot, "hidden state layer %d out of range [0, %d], skipping\n", layer, n_layer);
+                continue;
+            }
+
+            float * hs = llama_get_hidden_state(slot.ctx_tgt, layer);
+            if (hs == nullptr) {
+                SLT_WRN(slot, "failed to get hidden state for layer %d\n", layer);
+                res->hidden_states[layer] = std::vector<float>(n_embd, 0.0f);
+                continue;
+            }
+
+            // return last token's hidden state (pooled-like behavior)
+            std::vector<float> vec(hs + (n_hs_tokens - 1) * n_embd,
+                                   hs + n_hs_tokens * n_embd);
+
+            if (slot.task->params.hidden_normalize) {
+                float norm = 0.0f;
+                for (float v : vec) norm += v * v;
+                norm = std::sqrt(norm);
+                if (norm > 0.0f) {
+                    for (size_t j = 0; j < vec.size(); j++) vec[j] /= norm;
+                }
+            }
+
+            res->hidden_states[layer] = std::move(vec);
+        }
+
+        // disable hidden state extraction
+        llama_set_extract_hidden_states(slot.ctx_tgt, false);
+
+        SLT_DBG(slot, "%s", "sending hidden states\n");
+        queue_results.send(std::move(res));
+    }
+
+
 
     void process_single_task(server_task && task) {
         switch (task.type) {
@@ -2178,6 +2240,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_HIDDEN_STATES:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -3437,6 +3500,13 @@ private:
                         continue; // continue loop of slots
                     }
 
+                    if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                        send_hidden_states(slot, batch_view);
+                        slot.release();
+                        slot.i_batch = -1;
+                        continue; // continue loop of slots
+                    }
+
                     GGML_ASSERT(slot.task->need_sampling());
 
                     // prompt evaluated for next-token prediction
@@ -4674,6 +4744,111 @@ void server_routes::init_routes() {
     this->post_embeddings_oai = [this](const server_http_req & req) {
         return handle_embeddings_impl(req, TASK_RESPONSE_TYPE_OAI_EMBD);
     };
+    this->post_hidden_states = [this](const server_http_req & req) {
+        auto res = create_response();
+        
+        // Check if hidden states are supported
+        const int32_t n_layer = llama_model_n_layer(model_tgt);
+        if (n_layer <= 0) {
+            res->error(format_error_response("Hidden states extraction not supported by this model", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        const json body = json::parse(req.body);
+        
+        // Parse layers parameter
+        std::vector<int> layers;
+        bool all_layers = false;
+        
+        if (body.contains("layers")) {
+            const json & layers_json = body["layers"];
+            if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
+                all_layers = true;
+            } else if (layers_json.is_array()) {
+                for (const auto & layer : layers_json) {
+                    if (!layer.is_number_integer()) {
+                        res->error(format_error_response("layers array must contain integers", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    int layer_num = layer.get<int>();
+                    if (layer_num < 0 || layer_num > n_layer) {
+                        res->error(format_error_response(
+                            "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",
+                            ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    layers.push_back(layer_num);
+                }
+            } else {
+                res->error(format_error_response("layers must be an array or string 'all'", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        } else {
+            // Default to all layers if not specified
+            all_layers = true;
+        }
+
+        // Parse normalize parameter
+        bool normalize = false;
+        if (body.contains("normalize")) {
+            if (!body["normalize"].is_boolean()) {
+                res->error(format_error_response("normalize must be a boolean", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            normalize = body["normalize"].get<bool>();
+        }
+
+        // Get input text
+        if (!body.contains("input")) {
+            res->error(format_error_response("input field is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        std::string input_text = body["input"];
+        
+        // Tokenize the input
+        llama_tokens tokens = tokenize(ctx_server.vocab, input_text, true, true);
+        if (tokens.empty()) {
+            res->error(format_error_response("Failed to tokenize input", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // Create and queue the task
+        json responses = json::array();
+        auto & rd = res->rd;
+        {
+            server_task task = server_task(SERVER_TASK_TYPE_HIDDEN_STATES);
+            task.id = rd.get_new_id();
+            task.tokens = std::move(tokens);
+            task.params.hidden_layers = std::move(layers);
+            task.params.hidden_all_layers = all_layers;
+            task.params.hidden_normalize = normalize;
+            
+            rd.post_tasks(std::move(task));
+        }
+
+        // Wait for the results
+        auto all_results = rd.wait_for_all(req.should_stop);
+
+        // Collect results
+        if (all_results.is_terminated) {
+            return res;
+        } else if (all_results.error) {
+            res->error(all_results.error->to_json());
+            return res;
+        } else {
+            for (auto & res : all_results.results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(res.get()) != nullptr);
+                responses.push_back(res->to_json());
+            }
+        }
+
+        // Format response
+        json root = json(responses);
+        res->ok(root);
+        return res;
+    };
+
 
     this->post_rerank = [this](const server_http_req & req) {
         auto res = create_response();
