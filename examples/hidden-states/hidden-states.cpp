@@ -31,8 +31,9 @@ int main(int argc, char ** argv) {
     }
 
     const char * prompt = "Hello, world!";
+    const llama_vocab * vocab = llama_model_get_vocab(model);
     std::vector<llama_token> tokens(512);
-    int n_tokens = llama_tokenize(model, prompt, strlen(prompt), tokens.data(), tokens.size(), true, true);
+    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), tokens.size(), true, true);
     if (n_tokens < 0) {
         fprintf(stderr, "%s: failed to tokenize\n", __func__);
         llama_free(ctx);
