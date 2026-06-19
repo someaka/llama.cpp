@@ -12,37 +12,6 @@
 #include <iostream>
 #include <fstream>
 
-// -- RAII Wrappers for Automatic Resource Cleanup -----------------------
-
-struct LlamaModel {
-    llama_model * model;
-    LlamaModel() : model(nullptr) {}
-    LlamaModel(llama_model * m) : model(m) {}
-    ~LlamaModel() { if (model) llama_model_free(model); }
-    LlamaModel(const LlamaModel &) = delete;
-    LlamaModel & operator=(const LlamaModel &) = delete;
-    operator llama_model *() const { return model; }
-    explicit operator bool() const { return model != nullptr; }
-};
-
-struct LlamaContext {
-    llama_context * ctx;
-    LlamaContext() : ctx(nullptr) {}
-    LlamaContext(llama_context * c) : ctx(c) {}
-    ~LlamaContext() { if (ctx) llama_free(ctx); }
-    LlamaContext(const LlamaContext &) = delete;
-    LlamaContext & operator=(const LlamaContext &) = delete;
-    operator llama_context *() const { return ctx; }
-    explicit operator bool() const { return ctx != nullptr; }
-};
-
-struct LlamaBackend {
-    LlamaBackend() { llama_backend_init(); }
-    ~LlamaBackend() { llama_backend_free(); }
-    LlamaBackend(const LlamaBackend &) = delete;
-    LlamaBackend & operator=(const LlamaBackend &) = delete;
-};
-
 static void print_usage(const char * prog) {
     printf("usage: %s [options]\n\n", prog);
     printf("Extract per-layer hidden states from a model for a given prompt.\n\n");
@@ -66,7 +35,7 @@ static void print_usage(const char * prog) {
 static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::vector<int> layers;
     if (strcmp(str, "all") == 0) {
-        for (int i = 0; i < n_layers; i++) {
+        for (int i = 0; i <= n_layers; i++) {
             layers.push_back(i);
         }
         return layers;
@@ -74,17 +43,12 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::stringstream ss(str);
     std::string item;
     while (std::getline(ss, item, ',')) {
-        char *endp = nullptr;
-        long val = strtol(item.c_str(), &endp, 10);
-        if (endp == item.c_str() || *endp != '\0') {
-            fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
-            return {};
+        int val = std::stoi(item);
+        if (val < 0 || val > n_layers) {
+            fprintf(stderr, "error: layer %d out of range [0, %d]\n", val, n_layers);
+            exit(1);
         }
-        if (val < 0 || val >= n_layers) {
-            fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_layers);
-            return {};
-        }
-        layers.push_back((int)val);
+        layers.push_back(val);
     }
     return layers;
 }
@@ -98,17 +62,7 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
         size_t end = item.find_last_not_of(" \t");
         if (start == std::string::npos) continue;
         item = item.substr(start, end - start + 1);
-        char *endp = nullptr;
-        long val = strtol(item.c_str(), &endp, 10);
-        if (endp == item.c_str() || *endp != '\0') {
-            fprintf(stderr, "error: invalid token '%s' (not a number)\n", item.c_str());
-            return {};
-        }
-        if (val < 0) {
-            fprintf(stderr, "error: invalid token id %ld (must be non-negative)\n", val);
-            return {};
-        }
-        tokens.push_back((llama_token) val);
+        tokens.push_back((llama_token) std::stoi(item));
     }
     return tokens;
 }
@@ -155,12 +109,10 @@ int main(int argc, char ** argv) {
             no_bos = true;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
-            n_threads = (int) strtol(argv[i], nullptr, 10);
-            if (n_threads < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
+            n_threads = std::stoi(argv[i]);
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
-            n_gpu_layers = (int) strtol(argv[i], nullptr, 10);
-            if (n_gpu_layers < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
+            n_gpu_layers = std::stoi(argv[i]);
         } else if (arg == "--output") {
             if (++i >= argc) { fprintf(stderr, "error: --output requires an argument\n"); return 1; }
             output_file = argv[i];
@@ -201,14 +153,15 @@ int main(int argc, char ** argv) {
         prompt_text = prompt_str.c_str();
     }
 
-    LlamaBackend backend;
+    llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
 
-    LlamaModel model(llama_model_load_from_file(model_path, model_params));
+    llama_model * model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         fprintf(stderr, "error: failed to load model '%s'\n", model_path);
+        llama_backend_free();
         return 1;
     }
 
@@ -225,9 +178,11 @@ int main(int argc, char ** argv) {
     ctx_params.extract_hidden_states = true;
     ctx_params.no_perf = true;
 
-    LlamaContext ctx(llama_init_from_model(model, ctx_params));
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "error: failed to create context\n");
+        llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
@@ -235,9 +190,6 @@ int main(int argc, char ** argv) {
 
     if (raw_mode) {
         tokens = parse_raw_tokens(prompt_text);
-        if (tokens.empty()) {
-            return 1;
-        }
         fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
     } else {
         const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -249,6 +201,9 @@ int main(int argc, char ** argv) {
 
     if (tokens.empty()) {
         fprintf(stderr, "error: no tokens to process\n");
+        llama_free(ctx);
+        llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
@@ -256,24 +211,16 @@ int main(int argc, char ** argv) {
     int32_t decode_result = llama_decode(ctx, batch);
     if (decode_result != 0) {
         fprintf(stderr, "error: llama_decode failed with code %d\n", decode_result);
+        llama_free(ctx);
+        llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
-
-    // CRITICAL: synchronize before reading hidden states (CUDA async write race)
-    llama_synchronize(ctx);
 
     const int32_t n_tokens_out = llama_get_hidden_state_n_tokens(ctx);
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 
-    if (n_tokens_out == 0) {
-        fprintf(stderr, "error: no hidden states extracted (count=0)\n");
-        return 1;
-    }
-
     std::vector<int> layers = parse_layer_list(layer_str, n_layers);
-    if (layers.empty()) {
-        return 1;
-    }
 
     std::ostringstream json;
     json << "{\n";
@@ -290,19 +237,18 @@ int main(int argc, char ** argv) {
         json << "      \"layer\": " << layer << ",\n";
 
         if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
-            return 1;
-        }
-
-        json << "      \"values\": [";
-        for (size_t i = 0; i < (size_t)n_tokens_out * (size_t)n_embd; i++) {
-            if (i > 0) json << ", ";
-            if (i > 0 && (i % n_embd) == 0) {
-                json << "\n              ";
+            json << "      \"values\": null\n";
+        } else {
+            json << "      \"values\": [";
+            for (int32_t i = 0; i < n_tokens_out * n_embd; i++) {
+                if (i > 0) json << ", ";
+                if (i > 0 && (i % n_embd) == 0) {
+                    json << "\n              ";
+                }
+                json << format_float(hs[i]);
             }
-            json << format_float(hs[i]);
+            json << "]\n";
         }
-        json << "]\n";
 
         json << "    }";
         if (li + 1 < layers.size()) json << ",";
@@ -316,17 +262,20 @@ int main(int argc, char ** argv) {
         std::ofstream out(output_file);
         if (!out) {
             fprintf(stderr, "error: could not open output file '%s'\n", output_file);
+            llama_free(ctx);
+            llama_model_free(model);
+            llama_backend_free();
             return 1;
         }
         out << json.str();
-        if (!out) {
-            fprintf(stderr, "error: write to output file '%s' failed\n", output_file);
-            return 1;
-        }
         fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
     } else {
         printf("%s", json.str().c_str());
     }
+
+    llama_free(ctx);
+    llama_model_free(model);
+    llama_backend_free();
 
     return 0;
 }

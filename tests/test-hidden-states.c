@@ -3,10 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <math.h>
 
 // C smoke test for hidden states extraction API
-// Usage: test-hidden-states-c <model_path>
+// Usage: test-hidden-states <model_path>
 int main(int argc, char ** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <model.gguf>\n", argv[0]);
@@ -15,31 +14,28 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
 
-    struct llama_model_params model_params = llama_model_default_params();
-    struct llama_model * model = llama_model_load_from_file(argv[1], model_params);
+    llama_model_params model_params = llama_model_default_params();
+    llama_model * model = llama_model_load_from_file(argv[1], model_params);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
-        llama_backend_free();
         return 1;
     }
 
-    struct llama_context_params ctx_params = llama_context_default_params();
+    llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 64;
     ctx_params.extract_hidden_states = true;
 
-    struct llama_context * ctx = llama_init_from_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
         llama_model_free(model);
-        llama_backend_free();
         return 1;
     }
 
     // Tokenize "Hello world"
     const char * prompt = "Hello world";
-    const struct llama_vocab * vocab = llama_model_get_vocab(model);
     llama_token tokens[16];
-    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens, 16, true, true);
+    int n_tokens = llama_tokenize(model, prompt, strlen(prompt), tokens, 16, true, true);
     if (n_tokens < 0) {
         fprintf(stderr, "Failed to tokenize\n");
         llama_free(ctx);
@@ -48,7 +44,7 @@ int main(int argc, char ** argv) {
     }
 
     // Build batch
-    struct llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
     for (int i = 0; i < n_tokens; i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = i;
