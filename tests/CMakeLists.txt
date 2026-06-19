@@ -309,3 +309,6 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+# hidden states extraction test (needs a model file to run)
+llama_build(test-hidden-states.cpp)
