@@ -1,0 +1,41 @@
+name: Fork CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  compile-check:
+    runs-on: ubuntu-latest
+    name: Compile Check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Configure build
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_EXAMPLES=ON
+
+      - name: Compile modified files
+        run: |
+          cd build
+          make -j$(nproc) llama-server llama-cli
+
+      - name: Verify binaries
+        run: |
+          cd build
+          test -f bin/llama-server
+          test -f bin/llama-cli
+          echo "✓ Binaries compiled successfully"
