@@ -5039,7 +5039,7 @@ void server_routes::init_routes() {
         auto res = create_response();
         
         // Check if hidden states are supported
-        const int32_t n_layer = llama_model_n_layer(model_tgt);
+        const int32_t n_layer = llama_model_n_layer(ctx_server.model_tgt);
         if (n_layer <= 0) {
             res->error(format_error_response("Hidden states extraction not supported by this model", ERROR_TYPE_INVALID_REQUEST));
             return res;
@@ -5090,16 +5090,17 @@ void server_routes::init_routes() {
         }
 
         // Get input text
-        if (!body.contains("input")) {
+        json prompt;
+        if (body.contains("input")) {
+            prompt = body["input"];
+        } else {
             res->error(format_error_response("input field is required", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
 
-        std::string input_text = body["input"];
-        
-        // Tokenize the input
-        llama_tokens tokens = tokenize(ctx_server.vocab, input_text, true, true);
-        if (tokens.empty()) {
+        // Tokenize the input using the same pattern as embeddings
+        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+        if (tokenized_prompts.empty() || tokenized_prompts[0].empty()) {
             res->error(format_error_response("Failed to tokenize input", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
@@ -5108,14 +5109,17 @@ void server_routes::init_routes() {
         json responses = json::array();
         auto & rd = res->rd;
         {
-            server_task task = server_task(SERVER_TASK_TYPE_HIDDEN_STATES);
-            task.id = rd.get_new_id();
-            task.tokens = std::move(tokens);
-            task.params.hidden_layers = std::move(layers);
-            task.params.hidden_all_layers = all_layers;
-            task.params.hidden_normalize = normalize;
-            
-            rd.post_tasks(std::move(task));
+            std::vector<server_task> tasks;
+            for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+                server_task task = server_task(SERVER_TASK_TYPE_HIDDEN_STATES);
+                task.id = rd.get_new_id();
+                task.tokens = std::move(tokenized_prompts[i]);
+                task.params.hidden_layers = layers;
+                task.params.hidden_all_layers = all_layers;
+                task.params.hidden_normalize = normalize;
+                tasks.push_back(std::move(task));
+            }
+            rd.post_tasks(std::move(tasks));
         }
 
         // Wait for the results
