@@ -2363,9 +2363,27 @@ private:
                 continue;
             }
 
-            // return last token's hidden state (pooled-like behavior)
-            std::vector<float> vec(hs + (n_hs_tokens - 1) * n_embd,
-                                   hs + n_hs_tokens * n_embd);
+            std::vector<float> vec;
+
+            if (slot.task->params.hidden_pool == "skip_mean") {
+                // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
+                int32_t start = slot.task->params.hidden_skip_offset;
+                if (start < 0) start = 0;
+                if (start >= n_hs_tokens) start = 0; // too short, use all tokens
+                int32_t count = n_hs_tokens - start;
+                if (count <= 0) count = 1;
+                vec.resize(n_embd, 0.0f);
+                for (int32_t t = start; t < n_hs_tokens; t++) {
+                    const float * tok = hs + t * n_embd;
+                    for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
+                }
+                float inv = 1.0f / (float)count;
+                for (int d = 0; d < n_embd; d++) vec[d] *= inv;
+            } else {
+                // Default: last token's hidden state
+                vec.assign(hs + (n_hs_tokens - 1) * n_embd,
+                           hs + n_hs_tokens * n_embd);
+            }
 
             if (slot.task->params.hidden_normalize) {
                 float norm = 0.0f;
@@ -5063,6 +5081,34 @@ void server_routes::init_routes() {
             normalize = body["normalize"].get<bool>();
         }
 
+        // Parse pool parameter (default: "last" = last token, "skip_mean" = masked-mean)
+        std::string pool = "last";
+        if (body.contains("pool")) {
+            if (!body["pool"].is_string()) {
+                res->error(format_error_response("pool must be a string ('last' or 'skip_mean')", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            pool = body["pool"].get<std::string>();
+            if (pool != "last" && pool != "skip_mean") {
+                res->error(format_error_response("pool must be 'last' or 'skip_mean'", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+
+        // Parse skip_offset parameter (default: 50, used with pool="skip_mean")
+        int32_t skip_offset = 50;
+        if (body.contains("skip_offset")) {
+            if (!body["skip_offset"].is_number_integer()) {
+                res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            skip_offset = body["skip_offset"].get<int32_t>();
+            if (skip_offset < 0) {
+                res->error(format_error_response("skip_offset must be non-negative", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+
         // Get input text
         json prompt;
         if (body.contains("input")) {
@@ -5091,6 +5137,8 @@ void server_routes::init_routes() {
                 task.params.hidden_layers = layers;
                 task.params.hidden_all_layers = all_layers;
                 task.params.hidden_normalize = normalize;
+                task.params.hidden_pool = pool;
+                task.params.hidden_skip_offset = skip_offset;
                 tasks.push_back(std::move(task));
             }
             rd.post_tasks(std::move(tasks));
