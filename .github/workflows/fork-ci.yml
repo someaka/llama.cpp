@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ccache
 
       - name: Setup ccache
-        uses: hendrikmueller/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-core-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
@@ -117,7 +117,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ccache
 
       - name: Setup ccache
-        uses: hendrikmueller/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-hidden-states-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
@@ -207,7 +207,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ccache
 
       - name: Setup ccache
-        uses: hendrikmueller/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-tests-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
