@@ -28,6 +28,7 @@ int main(int argc, char ** argv) {
     if (!ctx) {
         fprintf(stderr, "%s: failed to create context\n", __func__);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
@@ -39,6 +40,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s: failed to tokenize\n", __func__);
         llama_free(ctx);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
     tokens.resize(n_tokens);
