@@ -342,3 +342,6 @@ endif()
 
 # hidden states extraction test (needs a model file to run)
 llama_build(test-hidden-states.cpp)
+set(LLAMA_TEST_NAME test-hidden-states-c)
+llama_build(test-hidden-states.c)
+unset(LLAMA_TEST_NAME)
