@@ -24,18 +24,21 @@ jobs:
 
       - name: Configure build
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_EXAMPLES=ON
+          cmake -B build -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_TOOLS=ON
 
-      - name: Compile modified files
+      - name: Compile all targets
         run: |
-          cd build
-          make -j$(nproc) llama-server llama-cli
+          cmake --build build -j$(nproc)
 
       - name: Verify binaries
         run: |
-          cd build
-          test -f bin/llama-server
-          test -f bin/llama-cli
-          echo "✓ Binaries compiled successfully"
+          test -f build/bin/llama-server
+          test -f build/bin/llama-hs-extract
+          test -f build/bin/llama-hs-extract-batch
+          test -f build/bin/test-hidden-states
+          test -f build/bin/test-hidden-states-c
+          echo "✓ All binaries compiled successfully"
+
+      - name: Run hidden states self-test
+        run: |
+          build/bin/llama-hs-extract-batch --self-test
