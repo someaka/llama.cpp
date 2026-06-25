@@ -16,6 +16,7 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_model_load_from_file(argv[1], model_params);
     if (!model) {
         fprintf(stderr, "%s: failed to load model '%s'\n", __func__, argv[1]);
+        llama_backend_free();
         return 1;
     }
 
@@ -60,8 +61,12 @@ int main(int argc, char ** argv) {
         llama_batch_free(batch);
         llama_free(ctx);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
+
+    // CRITICAL: synchronize before reading hidden states (CUDA async write race)
+    llama_synchronize(ctx);
 
     llama_batch_free(batch);
 
