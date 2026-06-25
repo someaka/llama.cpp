@@ -2338,8 +2338,8 @@ private:
         // determine which layers to extract
         std::vector<int> layers;
         if (slot.task->params.hidden_all_layers) {
-            layers.resize(n_layer + 1);
-            for (int i = 0; i <= n_layer; i++) {
+            layers.resize(n_layer);
+            for (int i = 0; i < n_layer; i++) {
                 layers[i] = i;
             }
         } else {
@@ -2352,13 +2352,13 @@ private:
         const int32_t n_hs_tokens = llama_get_hidden_state_n_tokens(slot.ctx_tgt);
 
         for (int layer : layers) {
-            if (layer < 0 || layer > n_layer) {
+            if (layer < 0 || layer >= n_layer) {
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
                 err->err_type = ERROR_TYPE_SERVER;
                 err->err_msg = "hidden state layer " + std::to_string(layer) +
-                               " out of range [0, " + std::to_string(n_layer) + "]";
+                               " out of range [0, " + std::to_string(n_layer) + ")";
                 queue_results.send(std::move(err));
                 return;
             }
@@ -5072,7 +5072,7 @@ void server_routes::init_routes() {
                         return res;
                     }
                     int layer_num = layer.get<int>();
-                    if (layer_num < 0 || layer_num > n_layer) {
+                    if (layer_num < 0 || layer_num >= n_layer) {
                         res->error(format_error_response(
                             "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",
                             ERROR_TYPE_INVALID_REQUEST));

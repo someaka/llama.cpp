@@ -2040,7 +2040,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         if (n_layers > 0) {
             const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
-            hidden_state_buf.resize(n_layers * n_tokens * n_embd_out);
+            const size_t total_size = (size_t)n_layers * n_tokens * n_embd_out;
+            hidden_state_buf.resize(total_size);
+            // Zero-initialize to prevent stale data from previous decode
+            std::fill(hidden_state_buf.begin(), hidden_state_buf.end(), 0.0f);
             n_hidden_tokens = n_tokens;
 
             for (int32_t il = 0; il < n_layers; il++) {

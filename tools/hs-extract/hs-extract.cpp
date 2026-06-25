@@ -35,7 +35,7 @@ static void print_usage(const char * prog) {
 static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::vector<int> layers;
     if (strcmp(str, "all") == 0) {
-        for (int i = 0; i <= n_layers; i++) {
+        for (int i = 0; i < n_layers; i++) {
             layers.push_back(i);
         }
         return layers;
@@ -44,8 +44,8 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::string item;
     while (std::getline(ss, item, ',')) {
         int val = std::stoi(item);
-        if (val < 0 || val > n_layers) {
-            fprintf(stderr, "error: layer %d out of range [0, %d]\n", val, n_layers);
+        if (val < 0 || val >= n_layers) {
+            fprintf(stderr, "error: layer %d out of range [0, %d)\n", val, n_layers);
             exit(1);
         }
         layers.push_back(val);

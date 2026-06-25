@@ -34,8 +34,9 @@ int main(int argc, char ** argv) {
 
     // Tokenize "Hello world"
     const char * prompt = "Hello world";
+    const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_token tokens[16];
-    int n_tokens = llama_tokenize(model, prompt, strlen(prompt), tokens, 16, true, true);
+    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens, 16, true, true);
     if (n_tokens < 0) {
         fprintf(stderr, "Failed to tokenize\n");
         llama_free(ctx);
