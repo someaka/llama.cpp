@@ -8,37 +8,518 @@ on:
     branches:
       - main
 
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: ${{ github.repository_owner == 'ggml-org' && '8' || '4' }}
+
 jobs:
-  compile-check:
+  # Job 1: Build and test core llama.cpp functionality
+  build-core:
     runs-on: ubuntu-latest
-    name: Compile Check
+    name: Build Core
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        run: |
+          echo "Build started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Runner: ${{ runner.os }}"
+          echo "CPU cores: $(nproc)"
+          free -h
+          df -h
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake ccache
+
+      - name: Setup ccache
+        uses: hendrikmueller/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-core-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-core-
+            ${{ runner.os }}-
 
       - name: Configure build
         run: |
-          cmake -B build -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_TOOLS=ON
+          echo "::group::CMake Configuration"
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON
+          echo "::endgroup::"
 
-      - name: Compile all targets
+      - name: Build core binaries
         run: |
-          cmake --build build -j$(nproc)
+          echo "::group::Building llama library"
+          cmake --build build --target llama -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
 
-      - name: Verify binaries
-        run: |
-          test -f build/bin/llama-server
-          test -f build/bin/llama-hs-extract
-          test -f build/bin/llama-hs-extract-batch
-          test -f build/bin/test-hidden-states
-          test -f build/bin/test-hidden-states-c
-          echo "✓ All binaries compiled successfully"
+          echo "::group::Building llama-server"
+          cmake --build build --target llama-server -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
 
-      - name: Run hidden states self-test
+          echo "::group::Building llama-cli"
+          cmake --build build --target llama-cli -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Verify core binaries
         run: |
-          build/bin/llama-hs-extract-batch --self-test
+          echo "::group::Binary verification"
+          for binary in llama-server llama-cli; do
+            if [ ! -f "build/bin/$binary" ]; then
+              echo "❌ Missing binary: $binary"
+              exit 1
+            fi
+            echo "✓ Found: $binary ($(du -h build/bin/$binary | cut -f1))"
+          done
+          echo "::endgroup::"
+
+      - name: Upload core binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-binaries
+          path: |
+            build/bin/llama-server
+            build/bin/llama-cli
+          retention-days: 7
+
+  # Job 2: Build and test custom hidden states tools
+  build-hidden-states:
+    runs-on: ubuntu-latest
+    name: Build Hidden States Tools
+    needs: build-core
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        run: |
+          echo "Build started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "CPU cores: $(nproc)"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake ccache
+
+      - name: Setup ccache
+        uses: hendrikmueller/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-hidden-states-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-hidden-states-
+            ${{ runner.os }}-
+
+      - name: Configure build
+        run: |
+          echo "::group::CMake Configuration"
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON
+          echo "::endgroup::"
+
+      - name: Build llama library
+        run: |
+          echo "::group::Building llama library"
+          cmake --build build --target llama -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Build hs-extract
+        run: |
+          echo "::group::Building hs-extract"
+          cmake --build build --target llama-hs-extract -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Build hs-extract-batch
+        run: |
+          echo "::group::Building hs-extract-batch"
+          cmake --build build --target llama-hs-extract-batch -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Build hidden-states example
+        run: |
+          echo "::group::Building hidden-states example"
+          cmake --build build --target llama-hidden-states -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Verify hidden states binaries
+        run: |
+          echo "::group::Binary verification"
+          for binary in llama-hs-extract llama-hs-extract-batch llama-hidden-states; do
+            if [ ! -f "build/bin/$binary" ]; then
+              echo "❌ Missing binary: $binary"
+              exit 1
+            fi
+            echo "✓ Found: $binary ($(du -h build/bin/$binary | cut -f1))"
+          done
+          echo "::endgroup::"
+
+      - name: Upload hidden states binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidden-states-binaries
+          path: |
+            build/bin/llama-hs-extract
+            build/bin/llama-hs-extract-batch
+            build/bin/llama-hidden-states
+          retention-days: 7
+
+  # Job 3: Build and run tests
+  build-tests:
+    runs-on: ubuntu-latest
+    name: Build and Run Tests
+    needs: build-core
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        run: |
+          echo "Build started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "CPU cores: $(nproc)"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake ccache
+
+      - name: Setup ccache
+        uses: hendrikmueller/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-tests-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-tests-
+            ${{ runner.os }}-
+
+      - name: Configure build
+        run: |
+          echo "::group::CMake Configuration"
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON
+          echo "::endgroup::"
+
+      - name: Build llama library
+        run: |
+          echo "::group::Building llama library"
+          cmake --build build --target llama -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Build test-hidden-states (C++)
+        run: |
+          echo "::group::Building test-hidden-states (C++)"
+          cmake --build build --target test-hidden-states -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Build test-hidden-states-c
+        run: |
+          echo "::group::Building test-hidden-states-c"
+          cmake --build build --target test-hidden-states-c -j${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+          echo "::endgroup::"
+
+      - name: Verify test binaries
+        run: |
+          echo "::group::Test binary verification"
+          for binary in test-hidden-states test-hidden-states-c; do
+            if [ ! -f "build/bin/$binary" ]; then
+              echo "❌ Missing test binary: $binary"
+              exit 1
+            fi
+            echo "✓ Found: $binary ($(du -h build/bin/$binary | cut -f1))"
+          done
+          echo "::endgroup::"
+
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries
+          path: |
+            build/bin/test-hidden-states
+            build/bin/test-hidden-states-c
+          retention-days: 7
+
+  # Job 4: Run self-tests and validation
+  run-tests:
+    runs-on: ubuntu-latest
+    name: Run Tests and Validation
+    needs: [build-hidden-states, build-tests]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download hidden states binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: hidden-states-binaries
+          path: build/bin/
+
+      - name: Download test binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: test-binaries
+          path: build/bin/
+
+      - name: Make binaries executable
+        run: |
+          chmod +x build/bin/*
+
+      - name: Verify binaries are executable
+        run: |
+          echo "::group::Binary verification"
+          for binary in llama-hs-extract llama-hs-extract-batch test-hidden-states test-hidden-states-c; do
+            if [ ! -x "build/bin/$binary" ]; then
+              echo "❌ Binary not executable: $binary"
+              exit 1
+            fi
+            echo "✓ Executable: $binary"
+          done
+          echo "::endgroup::"
+
+      - name: Run hs-extract-batch self-test
+        run: |
+          echo "::group::Running compute_masked_mean self-tests"
+          echo "Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          # Run self-test and capture output
+          if ! build/bin/llama-hs-extract-batch --self-test > self-test-output.txt 2>&1; then
+            echo "❌ Self-test failed"
+            echo "--- Output ---"
+            cat self-test-output.txt
+            exit 1
+          fi
+          
+          # Display output
+          cat self-test-output.txt
+          
+          # Verify all tests passed
+          if ! grep -q "All tests passed" self-test-output.txt; then
+            echo "❌ Not all self-tests passed"
+            exit 1
+          fi
+          
+          # Count passed tests
+          passed=$(grep -o "✓ Test [0-9]" self-test-output.txt | wc -l)
+          echo "✓ Self-test completed: $passed tests passed"
+          
+          echo "::endgroup::"
+
+      - name: Test hs-extract help
+        run: |
+          echo "::group::Testing hs-extract --help"
+          if ! build/bin/llama-hs-extract --help > hs-extract-help.txt 2>&1; then
+            echo "❌ hs-extract --help failed"
+            cat hs-extract-help.txt
+            exit 1
+          fi
+          
+          # Verify help contains expected sections
+          if ! grep -q "Usage:" hs-extract-help.txt; then
+            echo "❌ Help output missing Usage section"
+            cat hs-extract-help.txt
+            exit 1
+          fi
+          
+          if ! grep -q "\-\-model" hs-extract-help.txt; then
+            echo "❌ Help output missing --model option"
+            cat hs-extract-help.txt
+            exit 1
+          fi
+          
+          echo "✓ hs-extract --help works correctly"
+          echo "::endgroup::"
+
+      - name: Test hs-extract-batch help
+        run: |
+          echo "::group::Testing hs-extract-batch --help"
+          if ! build/bin/llama-hs-extract-batch --help > hs-extract-batch-help.txt 2>&1; then
+            echo "❌ hs-extract-batch --help failed"
+            cat hs-extract-batch-help.txt
+            exit 1
+          fi
+          
+          # Verify help contains expected sections
+          if ! grep -q "Usage:" hs-extract-batch-help.txt; then
+            echo "❌ Help output missing Usage section"
+            cat hs-extract-batch-help.txt
+            exit 1
+          fi
+          
+          if ! grep -q "\-\-batch" hs-extract-batch-help.txt; then
+            echo "❌ Help output missing --batch mode"
+            cat hs-extract-batch-help.txt
+            exit 1
+          fi
+          
+          if ! grep -q "\-\-raw" hs-extract-batch-help.txt; then
+            echo "❌ Help output missing --raw mode"
+            cat hs-extract-batch-help.txt
+            exit 1
+          fi
+          
+          echo "✓ hs-extract-batch --help works correctly"
+          echo "::endgroup::"
+
+      - name: Upload test outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-outputs
+          path: |
+            self-test-output.txt
+            hs-extract-help.txt
+            hs-extract-batch-help.txt
+          retention-days: 7
+
+  # Job 5: Verify audit fixes are still present
+  verify-audit-fixes:
+    runs-on: ubuntu-latest
+    name: Verify Audit Fixes
+    needs: build-core
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify resource leak fixes
+        run: |
+          echo "::group::Checking for llama_backend_free() calls"
+          
+          # Check hidden-states example
+          if ! grep -q "llama_backend_free()" examples/hidden-states/hidden-states.cpp; then
+            echo "❌ Missing llama_backend_free() in hidden-states.cpp"
+            exit 1
+          fi
+          
+          # Count occurrences (should be at least 2 - one for each error path)
+          count=$(grep -c "llama_backend_free()" examples/hidden-states/hidden-states.cpp)
+          if [ "$count" -lt 2 ]; then
+            echo "❌ Expected at least 2 llama_backend_free() calls, found $count"
+            exit 1
+          fi
+          
+          echo "✓ Found $count llama_backend_free() calls in hidden-states.cpp"
+          echo "::endgroup::"
+
+      - name: Verify CUDA synchronization
+        run: |
+          echo "::group::Checking for llama_synchronize() calls"
+          
+          # Check hs-extract
+          if ! grep -q "llama_synchronize(ctx)" tools/hs-extract/hs-extract.cpp; then
+            echo "❌ Missing llama_synchronize() in hs-extract.cpp"
+            exit 1
+          fi
+          echo "✓ Found llama_synchronize() in hs-extract.cpp"
+          
+          # Check hs-extract-batch
+          if ! grep -q "llama_synchronize(ctx)" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "❌ Missing llama_synchronize() in hs-extract-batch.cpp"
+            exit 1
+          fi
+          echo "✓ Found llama_synchronize() in hs-extract-batch.cpp"
+          
+          # Check hidden-states example
+          if ! grep -q "llama_synchronize(ctx)" examples/hidden-states/hidden-states.cpp; then
+            echo "❌ Missing llama_synchronize() in hidden-states.cpp"
+            exit 1
+          fi
+          echo "✓ Found llama_synchronize() in hidden-states.cpp"
+          
+          echo "::endgroup::"
+
+      - name: Verify off-by-one fixes
+        run: |
+          echo "::group::Checking layer boundary fixes"
+          
+          # Check for correct boundary condition (< instead of <=)
+          if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp; then
+            echo "❌ Found incorrect 'i <= n_layer' in hs-extract.cpp"
+            exit 1
+          fi
+          
+          if grep -q "i <= n_layer" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "❌ Found incorrect 'i <= n_layer' in hs-extract-batch.cpp"
+            exit 1
+          fi
+          
+          echo "✓ Layer boundary conditions are correct"
+          echo "::endgroup::"
+
+      - name: Verify CI version
+        run: |
+          echo "::group::Checking actions/checkout version"
+          
+          if ! grep -q "actions/checkout@v4" .github/workflows/fork-ci.yml; then
+            echo "❌ Not using actions/checkout@v4"
+            exit 1
+          fi
+          
+          echo "✓ Using actions/checkout@v4"
+          echo "::endgroup::"
+
+  # Summary job
+  summary:
+    runs-on: ubuntu-latest
+    name: CI Summary
+    needs: [build-core, build-hidden-states, build-tests, run-tests, verify-audit-fixes]
+    if: always()
+    timeout-minutes: 5
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Core | ${{ needs.build-core.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Hidden States | ${{ needs.build-hidden-states.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Tests | ${{ needs.build-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run Tests | ${{ needs.run-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verify Audit Fixes | ${{ needs.verify-audit-fixes.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if all jobs succeeded
+          if [[ "${{ needs.build-core.result }}" == "success" && \
+                "${{ needs.build-hidden-states.result }}" == "success" && \
+                "${{ needs.build-tests.result }}" == "success" && \
+                "${{ needs.run-tests.result }}" == "success" && \
+                "${{ needs.verify-audit-fixes.result }}" == "success" ]]; then
+            echo "✅ **All CI checks passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Some CI checks failed**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
