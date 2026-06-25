@@ -237,7 +237,11 @@ int main(int argc, char ** argv) {
         json << "      \"layer\": " << layer << ",\n";
 
         if (!hs) {
-            json << "      \"values\": null\n";
+            fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
+            llama_free(ctx);
+            llama_model_free(model);
+            llama_backend_free();
+            return 1;
         } else {
             json << "      \"values\": [";
             for (int32_t i = 0; i < n_tokens_out * n_embd; i++) {

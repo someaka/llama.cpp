@@ -2326,6 +2326,7 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
     void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
+        (void) batch;
         auto res = std::make_unique<server_task_result_hidden_states>();
         res->id       = slot.task->id;
         res->index    = slot.task->index;
@@ -2352,15 +2353,25 @@ private:
 
         for (int layer : layers) {
             if (layer < 0 || layer > n_layer) {
-                SLT_WRN(slot, "hidden state layer %d out of range [0, %d], skipping\n", layer, n_layer);
-                continue;
+                auto err = std::make_unique<server_task_result_error>();
+                err->id   = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_SERVER;
+                err->err_msg = "hidden state layer " + std::to_string(layer) +
+                               " out of range [0, " + std::to_string(n_layer) + "]";
+                queue_results.send(std::move(err));
+                return;
             }
 
             float * hs = llama_get_hidden_state(slot.ctx_tgt, layer);
             if (hs == nullptr) {
-                SLT_WRN(slot, "failed to get hidden state for layer %d\n", layer);
-                res->hidden_states[layer] = std::vector<float>(n_embd, 0.0f);
-                continue;
+                auto err = std::make_unique<server_task_result_error>();
+                err->id   = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_SERVER;
+                err->err_msg = "failed to get hidden state for layer " + std::to_string(layer);
+                queue_results.send(std::move(err));
+                return;
             }
 
             std::vector<float> vec;
@@ -2368,10 +2379,17 @@ private:
             if (slot.task->params.hidden_pool == "skip_mean") {
                 // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
                 int32_t start = slot.task->params.hidden_skip_offset;
-                if (start < 0) start = 0;
-                if (start >= n_hs_tokens) start = 0; // too short, use all tokens
+                if (start >= n_hs_tokens) {
+                    auto err = std::make_unique<server_task_result_error>();
+                    err->id   = slot.task->id;
+                    err->index = slot.task->index;
+                    err->err_type = ERROR_TYPE_INVALID_REQUEST;
+                    err->err_msg = "skip_offset (" + std::to_string(start) +
+                                   ") >= n_tokens (" + std::to_string(n_hs_tokens) + "): prompt too short";
+                    queue_results.send(std::move(err));
+                    return;
+                }
                 int32_t count = n_hs_tokens - start;
-                if (count <= 0) count = 1;
                 vec.resize(n_embd, 0.0f);
                 for (int32_t t = start; t < n_hs_tokens; t++) {
                     const float * tok = hs + t * n_embd;
@@ -2390,7 +2408,7 @@ private:
                 for (float v : vec) norm += v * v;
                 norm = std::sqrt(norm);
                 if (norm > 0.0f) {
-                    for (size_t j = 0; j < vec.size(); j++) vec[j] /= norm;
+                    for (float & v : vec) v /= norm;
                 }
             }
 
