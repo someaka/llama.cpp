@@ -540,7 +540,7 @@ private:
     }
 
     // Recompute cached min/max for a sequence by scanning the count table.
-    // Called only when a boundary position is removed — amortized O(n_cells)
+    // Called only when a boundary position is removed -- amortized O(n_cells)
     // but rare relative to the number of inc/dec calls.
     void recompute_min_max(llama_seq_id s) {
         assert(s >= 0 && s < LLAMA_MAX_SEQ);
