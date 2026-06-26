@@ -1501,7 +1501,6 @@ json server_task_result_hidden_states::to_json() {
     };
 }
 
-
 //
 // server_task_result_rerank
 //

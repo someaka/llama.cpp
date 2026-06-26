@@ -17,6 +17,7 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_model_load_from_file(argv[1], mparams);
     if (!model) {
         fprintf(stderr, "Failed to load model: %s\n", argv[1]);
+        llama_backend_free();
         return 1;
     }
 
@@ -138,9 +139,15 @@ int main(int argc, char ** argv) {
 
     if (non_zero > 0) {
         printf("PASS: Hidden states contain non-zero values.\n");
-        return 0;
     } else {
         fprintf(stderr, "FAIL: All hidden state values are zero.\n");
-        return 1;
     }
+
+    llama_batch_free(batch);
+    free(tokens);
+    llama_free(ctx);
+    llama_model_free(model);
+    llama_backend_free();
+
+    return non_zero > 0 ? 0 : 1;
 }

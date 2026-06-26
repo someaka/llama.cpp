@@ -2422,8 +2422,6 @@ private:
         queue_results.send(std::move(res));
     }
 
-
-
     void process_single_task(server_task && task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
