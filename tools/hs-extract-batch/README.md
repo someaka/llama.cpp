@@ -71,21 +71,41 @@ This is a test prompt for emotion extraction.
 
 ## Output Format
 
-**Binary output (.bin):**
+### Batch mode (production) — CRD2 format
 
+```
 Header:
+  magic:     int32 (0x43524432 = "CRD2")
+  n_groups:  int32
+  n_layers:  int32
+  n_embd:    int32
+
+Per group (sorted by group_id):
+  group_id:    int32
+  n_masks:     int32
+  Per mask (sorted by mask_id):
+    mask_id:        int32
+    n_layers_data:  int32
+    Per layer (sorted by layer_idx):
+      layer_idx: int32
+      count:     int32
+      mean:      float32[n_embd]  (sum / count)
 ```
-magic: uint32 (0x48534231 = "HSB1")
-version: uint32
-n_prompts: uint32
-n_layers: uint32
-layer_indices: uint32[n_layers]
+
+### Raw mode (debug) — per-prompt dump
+
 ```
+Header:
+  n_prompts_total: int32
 
 Per prompt:
-```
-n_tokens: uint32
-layers: float[n_layers][n_tokens][hidden_dim]
+  prompt_idx: int32
+  n_tokens:   int32
+  n_layers:   int32
+  layer_indices: int32[n_layers]
+  Per layer:
+    data: float32[n_tokens][hidden_dim]       (full mode)
+       OR float32[hidden_dim]                  (with --mean: mean over [token_skip, n_tokens))
 ```
 
 ## Checkpoint and Resume
