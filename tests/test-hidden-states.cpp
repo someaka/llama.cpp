@@ -139,15 +139,8 @@ int main(int argc, char ** argv) {
 
     if (non_zero > 0) {
         printf("PASS: Hidden states contain non-zero values.\n");
-    } else {
-        fprintf(stderr, "FAIL: All hidden state values are zero.\n");
+        return 0;
     }
-
-    llama_batch_free(batch);
-    free(tokens);
-    llama_free(ctx);
-    llama_model_free(model);
-    llama_backend_free();
-
-    return non_zero > 0 ? 0 : 1;
+    fprintf(stderr, "FAIL: All hidden state values are zero.\n");
+    return 1;
 }
