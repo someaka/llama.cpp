@@ -2327,6 +2327,12 @@ private:
     }
     void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
         (void) batch;
+
+        // CRITICAL: CUDA operations are async. llama_decode() submits work to the
+        // GPU and returns immediately. Reading hidden state memory without this
+        // barrier returns garbage or stale data (CUDA race condition).
+        llama_synchronize(slot.ctx_tgt);
+
         auto res = std::make_unique<server_task_result_hidden_states>();
         res->id       = slot.task->id;
         res->index    = slot.task->index;
@@ -2345,9 +2351,6 @@ private:
         } else {
             layers = slot.task->params.hidden_layers;
         }
-
-        // hidden states were already extracted during decode
-        // (flag set in update_slots before llama_decode call)
 
         const int32_t n_hs_tokens = llama_get_hidden_state_n_tokens(slot.ctx_tgt);
 
