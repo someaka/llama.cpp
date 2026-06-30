@@ -35,6 +35,20 @@ struct LlamaBackend {
     LlamaBackend & operator=(const LlamaBackend &) = delete;
 };
 
+struct LlamaBatch {
+    llama_batch batch;
+    bool initialized;
+    LlamaBatch() : batch{}, initialized(false) {}
+    void init(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
+        batch = llama_batch_init(n_tokens, embd, n_seq_max);
+        initialized = true;
+    }
+    ~LlamaBatch() { if (initialized) llama_batch_free(batch); }
+    LlamaBatch(const LlamaBatch &) = delete;
+    LlamaBatch & operator=(const LlamaBatch &) = delete;
+    operator llama_batch *() { return &batch; }
+};
+
 int main(int argc, char ** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <model.gguf>\n", argv[0]);
@@ -73,7 +87,9 @@ int main(int argc, char ** argv) {
     printf("Prompt: %s\n", prompt);
     printf("Tokens: %d\n", n_tokens);
 
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    LlamaBatch batch_wrapper;
+    batch_wrapper.init(tokens.size(), 0, 1);
+    llama_batch & batch = batch_wrapper.batch;
     for (size_t i = 0; i < tokens.size(); i++) {
         batch.token[i] = tokens[i];
         batch.pos[i] = (llama_pos) i;
@@ -85,14 +101,11 @@ int main(int argc, char ** argv) {
 
     if (llama_decode(ctx, batch) != 0) {
         fprintf(stderr, "%s: failed to decode\n", __func__);
-        llama_batch_free(batch);
         return 1;
     }
 
-    // CRITICAL: synchronize before reading hidden states (CUDA async write race)
+    // synchronize before reading hidden states (CUDA async write race)
     llama_synchronize(ctx);
-
-    llama_batch_free(batch);
 
     int n_layers = llama_model_n_layer(model);
     int32_t n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);
