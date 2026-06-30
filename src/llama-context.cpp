@@ -2054,6 +2054,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 float * dst = hidden_state_buf.data() + il * n_tokens * n_embd_out;
                 ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
             }
+        } else {
+            // extract_hidden_states is enabled but the model's graph function did
+            // not populate t_hidden_layers. This means the model architecture is
+            // not patched for hidden state extraction.
+            LLAMA_LOG_WARN("%s: extract_hidden_states is enabled but this model architecture "
+                           "does not support it (t_hidden_layers is empty)\n", __func__);
         }
     }
 

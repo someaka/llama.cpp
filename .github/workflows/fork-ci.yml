@@ -19,12 +19,25 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake
+          sudo apt-get install -y build-essential cmake ccache
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: fork-ci-${{ runner.os }}
+          max-size: 512M
+
+      - name: Configure compiler to use ccache
+        run: |
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
 
       - name: Print environment info
         run: |
@@ -47,7 +60,9 @@ jobs:
             -DLLAMA_BUILD_SERVER=ON \
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=ON
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       # ---------------------------------------------------------------- #
       # Build - core library + server                                    #
@@ -141,12 +156,29 @@ jobs:
       # ---------------------------------------------------------------- #
       - name: Verify resource leak fixes
         run: |
-          count=$(grep -c "llama_backend_free" examples/hidden-states/hidden-states.cpp)
-          if [ "$count" -lt 3 ]; then
-            echo "Expected >= 3 llama_backend_free calls, found $count"
+          # examples/hidden-states.cpp uses RAII wrappers (LlamaBackend destructor)
+          # instead of raw llama_backend_free calls.
+          if grep -q "llama_backend_init()" examples/hidden-states/hidden-states.cpp && \
+             ! grep -q "LlamaBackend" examples/hidden-states/hidden-states.cpp; then
+            echo "Expected RAII LlamaBackend in examples/hidden-states.cpp"
             exit 1
           fi
-          echo "  OK: $count llama_backend_free calls"
+          echo "  OK: examples/hidden-states.cpp uses RAII wrappers"
+          # hs-extract.cpp also uses RAII wrappers
+          if ! grep -q "LlamaBackend" tools/hs-extract/hs-extract.cpp; then
+            echo "Expected RAII LlamaBackend in tools/hs-extract/hs-extract.cpp"
+            exit 1
+          fi
+          echo "  OK: tools/hs-extract/hs-extract.cpp uses RAII wrappers"
+          # hs-extract-batch.cpp uses FilePtr for checkpoint I/O.
+          # The only fclose allowed is inside the FilePtr destructor.
+          raw_fcloses=$(grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr" | wc -l)
+          if [ "$raw_fcloses" -gt 0 ]; then
+            echo "Found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp - should use FilePtr"
+            grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr"
+            exit 1
+          fi
+          echo "  OK: hs-extract-batch.cpp uses FilePtr (no raw fclose outside destructor)"
 
       - name: Verify CUDA sync fixes
         run: |

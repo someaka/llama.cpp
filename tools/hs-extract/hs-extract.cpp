@@ -12,6 +12,37 @@
 #include <iostream>
 #include <fstream>
 
+// -- RAII Wrappers for Automatic Resource Cleanup -----------------------
+
+struct LlamaModel {
+    llama_model * model;
+    LlamaModel() : model(nullptr) {}
+    LlamaModel(llama_model * m) : model(m) {}
+    ~LlamaModel() { if (model) llama_model_free(model); }
+    LlamaModel(const LlamaModel &) = delete;
+    LlamaModel & operator=(const LlamaModel &) = delete;
+    operator llama_model *() const { return model; }
+    explicit operator bool() const { return model != nullptr; }
+};
+
+struct LlamaContext {
+    llama_context * ctx;
+    LlamaContext() : ctx(nullptr) {}
+    LlamaContext(llama_context * c) : ctx(c) {}
+    ~LlamaContext() { if (ctx) llama_free(ctx); }
+    LlamaContext(const LlamaContext &) = delete;
+    LlamaContext & operator=(const LlamaContext &) = delete;
+    operator llama_context *() const { return ctx; }
+    explicit operator bool() const { return ctx != nullptr; }
+};
+
+struct LlamaBackend {
+    LlamaBackend() { llama_backend_init(); }
+    ~LlamaBackend() { llama_backend_free(); }
+    LlamaBackend(const LlamaBackend &) = delete;
+    LlamaBackend & operator=(const LlamaBackend &) = delete;
+};
+
 static void print_usage(const char * prog) {
     printf("usage: %s [options]\n\n", prog);
     printf("Extract per-layer hidden states from a model for a given prompt.\n\n");
@@ -153,15 +184,14 @@ int main(int argc, char ** argv) {
         prompt_text = prompt_str.c_str();
     }
 
-    llama_backend_init();
+    LlamaBackend backend;
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
 
-    llama_model * model = llama_model_load_from_file(model_path, model_params);
+    LlamaModel model(llama_model_load_from_file(model_path, model_params));
     if (!model) {
         fprintf(stderr, "error: failed to load model '%s'\n", model_path);
-        llama_backend_free();
         return 1;
     }
 
@@ -178,11 +208,9 @@ int main(int argc, char ** argv) {
     ctx_params.extract_hidden_states = true;
     ctx_params.no_perf = true;
 
-    llama_context * ctx = llama_init_from_model(model, ctx_params);
+    LlamaContext ctx(llama_init_from_model(model, ctx_params));
     if (!ctx) {
         fprintf(stderr, "error: failed to create context\n");
-        llama_model_free(model);
-        llama_backend_free();
         return 1;
     }
 
@@ -201,9 +229,6 @@ int main(int argc, char ** argv) {
 
     if (tokens.empty()) {
         fprintf(stderr, "error: no tokens to process\n");
-        llama_free(ctx);
-        llama_model_free(model);
-        llama_backend_free();
         return 1;
     }
 
@@ -211,9 +236,6 @@ int main(int argc, char ** argv) {
     int32_t decode_result = llama_decode(ctx, batch);
     if (decode_result != 0) {
         fprintf(stderr, "error: llama_decode failed with code %d\n", decode_result);
-        llama_free(ctx);
-        llama_model_free(model);
-        llama_backend_free();
         return 1;
     }
 
@@ -241,21 +263,18 @@ int main(int argc, char ** argv) {
 
         if (!hs) {
             fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
-            llama_free(ctx);
-            llama_model_free(model);
-            llama_backend_free();
             return 1;
-        } else {
-            json << "      \"values\": [";
-            for (int32_t i = 0; i < n_tokens_out * n_embd; i++) {
-                if (i > 0) json << ", ";
-                if (i > 0 && (i % n_embd) == 0) {
-                    json << "\n              ";
-                }
-                json << format_float(hs[i]);
-            }
-            json << "]\n";
         }
+
+        json << "      \"values\": [";
+        for (int32_t i = 0; i < n_tokens_out * n_embd; i++) {
+            if (i > 0) json << ", ";
+            if (i > 0 && (i % n_embd) == 0) {
+                json << "\n              ";
+            }
+            json << format_float(hs[i]);
+        }
+        json << "]\n";
 
         json << "    }";
         if (li + 1 < layers.size()) json << ",";
@@ -269,9 +288,6 @@ int main(int argc, char ** argv) {
         std::ofstream out(output_file);
         if (!out) {
             fprintf(stderr, "error: could not open output file '%s'\n", output_file);
-            llama_free(ctx);
-            llama_model_free(model);
-            llama_backend_free();
             return 1;
         }
         out << json.str();
@@ -279,10 +295,6 @@ int main(int argc, char ** argv) {
     } else {
         printf("%s", json.str().c_str());
     }
-
-    llama_free(ctx);
-    llama_model_free(model);
-    llama_backend_free();
 
     return 0;
 }
