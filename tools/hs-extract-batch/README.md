@@ -71,7 +71,7 @@ This is a test prompt for emotion extraction.
 
 ## Output Format
 
-### Batch mode (production) — CRD2 format
+### Batch mode (production) - CRD2 format
 
 ```
 Header:
@@ -92,7 +92,7 @@ Per group (sorted by group_id):
       mean:      float32[n_embd]  (sum / count)
 ```
 
-### Raw mode (debug) — per-prompt dump
+### Raw mode (debug) - per-prompt dump
 
 ```
 Header:

@@ -152,6 +152,97 @@ jobs:
           echo "::endgroup::"
 
       # ---------------------------------------------------------------- #
+      # Download a small model and run the hidden-states API tests       #
+      # ---------------------------------------------------------------- #
+      - name: Download test model
+        run: |
+          echo "::group::Downloading Qwen3.5-2B-Q4_K_M for API tests"
+          mkdir -p models
+          wget -q -O models/test-model.gguf \
+            "https://huggingface.co/Qwen/Qwen3.5-2B-GGUF/resolve/main/qwen3.5-2b-q4_k_m.gguf" \
+            || wget -q -O models/test-model.gguf \
+              "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
+            || { echo "Failed to download test model"; exit 1; }
+          ls -lh models/test-model.gguf
+          echo "::endgroup::"
+
+      - name: Run hidden-states test binaries with model
+        run: |
+          echo "::group::test-hidden-states (C++)"
+          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states models/test-model.gguf
+          echo "::endgroup::"
+          echo "::group::test-hidden-states-c (C)"
+          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states-c models/test-model.gguf
+          echo "::endgroup::"
+
+      - name: Smoke test /hidden-states server endpoint
+        run: |
+          echo "::group::Starting llama-server for endpoint test"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-server \
+            -m models/test-model.gguf \
+            --host 127.0.0.1 --port 8097 \
+            -ngl 0 -c 512 -np 1 \
+            --cache-ram 0 --no-jinja --chat-template chatml &
+          SERVER_PID=$!
+          # Wait for server to be ready (max 30 seconds)
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8097/health > /dev/null 2>&1; then
+              echo "Server is ready"
+              break
+            fi
+            sleep 1
+          done
+          # Run endpoint tests
+          echo "--- Test: last_token pool ---"
+          RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"Hello world","layers":[0,5,10],"normalize":false,"pool":"last"}')
+          echo "$RESP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert len(d) == 1, 'expected 1 result'
+          assert d[0]['tokens_evaluated'] >= 2, 'expected >= 2 tokens'
+          layers = sorted(int(k) for k in d[0]['hidden_states'])
+          assert layers == [0,5,10], f'unexpected layers: {layers}'
+          print(f'PASS: last_token pool, tokens={d[0][\"tokens_evaluated\"]}, layers={layers}')
+          "
+          echo "--- Test: skip_mean pool ---"
+          RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"I am feeling very happy and excited today","layers":[0,5],"normalize":false,"pool":"skip_mean","skip_offset":3}')
+          echo "$RESP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert len(d[0]['hidden_states']) == 2, 'expected 2 layers'
+          print(f'PASS: skip_mean pool, tokens={d[0][\"tokens_evaluated\"]}')
+          "
+          echo "--- Test: normalize=true ---"
+          RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"Hello","layers":[0],"normalize":true,"pool":"last"}')
+          echo "$RESP" | python3 -c "
+          import sys, json, math
+          d = json.load(sys.stdin)
+          v = d[0]['hidden_states']['0']
+          norm = math.sqrt(sum(x*x for x in v))
+          assert abs(norm - 1.0) < 0.01, f'expected unit norm, got {norm}'
+          print(f'PASS: normalize=true, norm={norm:.4f}')
+          "
+          echo "--- Test: short text error (skip_mean) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"Hi","layers":[0],"normalize":false,"pool":"skip_mean","skip_offset":50}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for short text, got $HTTP_CODE"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+          echo "PASS: short text skip_mean returns 400"
+          echo "--- All endpoint tests passed ---"
+          kill $SERVER_PID 2>/dev/null || true
+          echo "::endgroup::"
+
+      # ---------------------------------------------------------------- #
       # Verify audit fixes are intact                                    #
       # ---------------------------------------------------------------- #
       - name: Verify resource leak fixes
@@ -213,6 +304,7 @@ jobs:
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Core (server + cli) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Hidden States Tools | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Binaries | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Binaries (executed with model) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Server Endpoint (/hidden-states) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Self-Tests | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Audit Fix Verification | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
