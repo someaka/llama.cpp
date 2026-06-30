@@ -74,12 +74,17 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::stringstream ss(str);
     std::string item;
     while (std::getline(ss, item, ',')) {
-        int val = std::stoi(item);
-        if (val < 0 || val >= n_layers) {
-            fprintf(stderr, "error: layer %d out of range [0, %d)\n", val, n_layers);
+        char *endp = nullptr;
+        long val = strtol(item.c_str(), &endp, 10);
+        if (endp == item.c_str() || *endp != '\0') {
+            fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
             exit(1);
         }
-        layers.push_back(val);
+        if (val < 0 || val >= n_layers) {
+            fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_layers);
+            exit(1);
+        }
+        layers.push_back((int)val);
     }
     return layers;
 }
@@ -93,7 +98,13 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
         size_t end = item.find_last_not_of(" \t");
         if (start == std::string::npos) continue;
         item = item.substr(start, end - start + 1);
-        tokens.push_back((llama_token) std::stoi(item));
+        char *endp = nullptr;
+        long val = strtol(item.c_str(), &endp, 10);
+        if (endp == item.c_str() || *endp != '\0') {
+            fprintf(stderr, "error: invalid token '%s' (not a number)\n", item.c_str());
+            exit(1);
+        }
+        tokens.push_back((llama_token) val);
     }
     return tokens;
 }
@@ -140,10 +151,12 @@ int main(int argc, char ** argv) {
             no_bos = true;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
-            n_threads = std::stoi(argv[i]);
+            n_threads = (int) strtol(argv[i], nullptr, 10);
+            if (n_threads < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
-            n_gpu_layers = std::stoi(argv[i]);
+            n_gpu_layers = (int) strtol(argv[i], nullptr, 10);
+            if (n_gpu_layers < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
         } else if (arg == "--output") {
             if (++i >= argc) { fprintf(stderr, "error: --output requires an argument\n"); return 1; }
             output_file = argv[i];
