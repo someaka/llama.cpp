@@ -280,7 +280,7 @@ int main(int argc, char ** argv) {
         }
 
         json << "      \"values\": [";
-        for (int32_t i = 0; i < n_tokens_out * n_embd; i++) {
+        for (size_t i = 0; i < (size_t)n_tokens_out * (size_t)n_embd; i++) {
             if (i > 0) json << ", ";
             if (i > 0 && (i % n_embd) == 0) {
                 json << "\n              ";
