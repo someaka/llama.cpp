@@ -104,6 +104,10 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
             fprintf(stderr, "error: invalid token '%s' (not a number)\n", item.c_str());
             exit(1);
         }
+        if (val < 0) {
+            fprintf(stderr, "error: invalid token id %ld (must be non-negative)\n", val);
+            exit(1);
+        }
         tokens.push_back((llama_token) val);
     }
     return tokens;
@@ -304,6 +308,10 @@ int main(int argc, char ** argv) {
             return 1;
         }
         out << json.str();
+        if (!out) {
+            fprintf(stderr, "error: write to output file '%s' failed\n", output_file);
+            return 1;
+        }
         fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
     } else {
         printf("%s", json.str().c_str());
