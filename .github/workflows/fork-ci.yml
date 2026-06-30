@@ -159,12 +159,12 @@ jobs:
           echo "::group::Downloading test model for API tests"
           mkdir -p models
           # The test model MUST have a patched architecture (gemma, gemma4, llama, qwen35).
-          # Gemma 2 2B IT uses the "gemma" architecture which IS patched.
-          # Fallback: bartowski's Qwen3.5-2B uses "qwen35" which is also patched.
+          # Primary: Gemma 4 E2B (gemma4 architecture, patched, small ~1.5GB).
+          # Fallback: Qwen3.5-2B (qwen35 architecture, also patched).
           wget -q -O models/test-model.gguf \
-            "https://huggingface.co/google/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-q4_k_m.gguf" \
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" \
             || wget -q -O models/test-model.gguf \
-              "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf" \
+              "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf" \
             || { echo "Failed to download test model"; exit 1; }
           ls -lh models/test-model.gguf
           echo "::endgroup::"
