@@ -49,17 +49,18 @@ llama-hs-extract -m model.gguf -p "Test" -ngl 99 --output output.json
 JSON output structure:
 ```json
 {
-  "prompt": "Hello, world!",
-  "tokens": [15496, 11, 995, 0],
   "n_tokens": 4,
-  "hidden_states": [
-    {"layer": 0, "data": [[0.123, -0.456, ...], ...]},
-    {"layer": 1, "data": [[0.234, -0.567, ...], ...]}
+  "n_embd": 2048,
+  "n_layers": 2,
+  "layers": [
+    {"layer": 0, "values": [0.123, -0.456, ...]},
+    {"layer": 5, "values": [0.234, -0.567, ...]}
   ]
 }
 ```
 
-Each layer contains `n_tokens` vectors of dimension `hidden_dim` (typically 4096).
+Each layer entry contains a flat array of `n_tokens * n_embd` float values
+(row-major: token 0 dims 0..n_embd-1, then token 1, etc.).
 
 ## Notes
 
