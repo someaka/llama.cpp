@@ -985,13 +985,25 @@ float * llama_context::get_hidden_state(int32_t layer) {
         return nullptr;
     }
 
-    const int32_t n_layers = (int32_t) hidden_state_buf.size() / (n_hidden_tokens * model.hparams.n_embd_out());
+    // P1.2 + P4.1: Use explicit n_hidden_layers instead of computing from buffer size.
+    // If n_hidden_layers was not set (legacy), fall back to the old computation.
+    const int32_t n_layers = (n_hidden_layers > 0)
+        ? n_hidden_layers
+        : (int32_t)(hidden_state_buf.size() / ((size_t)n_hidden_tokens * model.hparams.n_embd_out()));
 
     if (layer < 0 || layer >= n_layers) {
         return nullptr;
     }
 
-    return hidden_state_buf.data() + layer * n_hidden_tokens * model.hparams.n_embd_out();
+    // P1.2: Defense-in-depth - verify computed offset is within buffer before dereferencing
+    const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
+    if (offset >= hidden_state_buf.size()) {
+        LLAMA_LOG_WARN("%s: layer %d offset %zu >= buffer size %zu\n",
+                       __func__, layer, offset, hidden_state_buf.size());
+        return nullptr;
+    }
+
+    return hidden_state_buf.data() + offset;
 }
 
 float * llama_context::get_hidden_state_ith(int32_t layer, int32_t i) {
@@ -2028,39 +2040,50 @@ int llama_context::decode(const llama_batch & batch_inp) {
             copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
         }
 
+        // Extract per-layer hidden states for this ubatch (accumulate across all ubatches)
+        if (cparams.extract_hidden_states) {
+            auto * hres = gf_res_prev.get();
+            const uint32_t n_embd_out = hparams.n_embd_out();
+            const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
+
+            if (n_layers > 0) {
+                const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
+                
+                // Accumulate token count across ubatches
+                n_hidden_tokens += n_tokens;
+                
+                // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
+                for (int32_t il = 0; il < n_layers; il++) {
+                    auto * t = hres->t_hidden_layers[il];
+                    if (t == nullptr) continue;
+                    ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
+                    GGML_ASSERT(backend_res != nullptr);
+                    
+                    // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
+                    float * dst = hidden_state_buf.data() + il * n_tokens_all * n_embd_out + n_tokens_prev * n_embd_out;
+                    ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
+                }
+                
+                // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
+                // The async copies above (cudaMemcpyAsync) are non-blocking. Without this barrier,
+                // the next mctx->next() call starts computing on the same GPU buffers that the
+                // previous iteration's async copies are still reading from, causing CUDA illegal
+                // memory access errors (especially on E4B with larger tensor footprints).
+                ggml_backend_sched_synchronize(sched.get());
+            } else {
+                LLAMA_LOG_WARN("%s: extract_hidden_states is enabled but this model architecture "
+                               "does not support it (t_hidden_layers is empty)\n", __func__);
+            }
+        }
+
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
 
-    // extract per-layer hidden states if enabled
-    if (cparams.extract_hidden_states) {
-        auto * hres = gf_res_prev.get();
-        const uint32_t n_embd_out = hparams.n_embd_out();
-        const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
-
-        if (n_layers > 0) {
-            const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
-            const size_t total_size = (size_t)n_layers * n_tokens * n_embd_out;
-            hidden_state_buf.resize(total_size);
-            // Zero-initialize to prevent stale data from previous decode
-            std::fill(hidden_state_buf.begin(), hidden_state_buf.end(), 0.0f);
-            n_hidden_tokens = n_tokens;
-
-            for (int32_t il = 0; il < n_layers; il++) {
-                auto * t = hres->t_hidden_layers[il];
-                if (t == nullptr) continue;
-                ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
-                GGML_ASSERT(backend_res != nullptr);
-                float * dst = hidden_state_buf.data() + il * n_tokens * n_embd_out;
-                ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
-            }
-        } else {
-            // extract_hidden_states is enabled but the model's graph function did
-            // not populate t_hidden_layers. This means the model architecture is
-            // not patched for hidden state extraction.
-            LLAMA_LOG_WARN("%s: extract_hidden_states is enabled but this model architecture "
-                           "does not support it (t_hidden_layers is empty)\n", __func__);
-        }
+    // P1.1: Validate multi-ubatch hidden state accumulation captured all tokens
+    if (cparams.extract_hidden_states && n_hidden_tokens != 0) {
+        GGML_ASSERT((uint32_t)n_hidden_tokens == n_tokens_all &&
+                    "hidden state token count mismatch after multi-ubatch accumulation");
     }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
