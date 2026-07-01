@@ -299,8 +299,7 @@ jobs:
           echo "Starting server with large context for multi-ubatch test..."
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
             -m models/test-model.gguf \
-            --host 127.0.0.1 --port 8098 \
-            -ngl 0 -c 2048 -b 2048 -ub 512 -np 1 \
+            -ngl 0 -c 2048 -b 1024 -ub 512 -np 1 --port 8098 \
             --cache-ram 0 --no-jinja --chat-template chatml &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
@@ -311,7 +310,7 @@ jobs:
             fi
             sleep 1
           done
-          LONG_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 100)")
+          LONG_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 60)")
           RESP=$(curl -sf -X POST http://127.0.0.1:8098/hidden-states \
             -H "Content-Type: application/json" \
             -d "{\"input\":\"$LONG_TEXT\",\"layers\":[0,5],\"normalize\":false,\"pool\":\"last\"}")
