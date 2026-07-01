@@ -299,7 +299,7 @@ jobs:
           echo "Starting server with large context for multi-ubatch test..."
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
             -m models/test-model.gguf \
-            -ngl 0 -c 2048 -b 1024 -ub 512 -np 1 --port 8098 \
+            -ngl 0 -c 2048 -b 2048 -ub 2048 -np 1 --port 8098 \
             --cache-ram 0 --no-jinja --chat-template chatml &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
