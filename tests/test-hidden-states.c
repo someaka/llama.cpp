@@ -19,6 +19,7 @@ int main(int argc, char ** argv) {
     struct llama_model * model = llama_model_load_from_file(argv[1], model_params);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
+        llama_backend_free();
         return 1;
     }
 
@@ -30,6 +31,7 @@ int main(int argc, char ** argv) {
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
