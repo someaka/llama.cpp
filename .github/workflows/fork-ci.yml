@@ -253,15 +253,15 @@ jobs:
           assert abs(norm - 1.0) > 0.01, f'unnormalized vector should not have unit norm, got {norm}'
           print(f'PASS: normalize=false, norm={norm:.4f}')
           "
-          echo "--- Test: empty string input (400) ---"
+          echo "--- Test: missing input field (400) ---"
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
-            -d '{"input":"","layers":[0],"normalize":false,"pool":"last"}')
+            -d '{"layers":[0],"normalize":false,"pool":"last"}')
           if [ "$HTTP_CODE" != "400" ]; then
-            echo "FAIL: expected 400 for empty input, got $HTTP_CODE"
+            echo "FAIL: expected 400 for missing input field, got $HTTP_CODE"
             exit 1
           fi
-          echo "PASS: empty string returns 400"
+          echo "PASS: missing input field returns 400"
           echo "--- Test: out-of-range layer (400) ---"
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
