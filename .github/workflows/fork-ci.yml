@@ -328,26 +328,27 @@ jobs:
       - name: Quick audit fix integrity check
         run: |
           set -euo pipefail
-          # Key fix patterns that must remain in place after upstream sync
-          grep -q "uint32_t key" tools/hs-extract-batch/hs-extract-batch.cpp || {
-            echo "FAIL: signed overflow fix (uint32_t key) missing"; exit 1
-          }
-          grep -q "output_all.*extract_hidden_states" src/llama-context.cpp || grep -q "extract_hidden_states.*output_all" src/llama-context.cpp || {
-            echo "FAIL: multi-ubatch output_all invariant missing"; exit 1
-          }
+          echo "=== Check 1: uint32_t key ==="
+          grep -q "uint32_t key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint32_t key missing"; exit 1; }
+          echo "=== Check 2: output_all invariant ==="
+          (grep -q "output_all.*extract_hidden_states" src/llama-context.cpp || grep -q "extract_hidden_states.*output_all" src/llama-context.cpp) && echo "PASS" || { echo "FAIL: output_all invariant missing"; exit 1; }
+          echo "=== Check 3: RAII LlamaBackend ==="
           for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
-            grep -q "LlamaBackend" "$f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
-            grep -q "llama_synchronize" "$f" || { echo "FAIL: missing llama_synchronize in $f"; exit 1; }
+            grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
+            grep -q "llama_synchronize" "$f" && echo "PASS: sync $f" || { echo "FAIL: missing llama_synchronize in $f"; exit 1; }
           done
-          grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp || {
-            echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1
-          }
+          echo "=== Check 4: llama_synchronize in batch tool ==="
+          grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1; }
+          echo "=== Check 5: No raw fclose ==="
           raw_fcloses=$(grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr" | wc -l)
           if [ "$raw_fcloses" -gt 0 ]; then
             echo "FAIL: found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp"
             exit 1
           fi
+          echo "PASS"
+          echo "=== Check 6: No off-by-one ==="
           if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
             echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
           fi
-          echo "PASS: all audit fix patterns verified"
+          echo "PASS"
+          echo "✓ All audit fix patterns verified"
