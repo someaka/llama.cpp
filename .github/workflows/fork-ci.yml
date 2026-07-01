@@ -8,8 +8,9 @@ on:
     branches:
       - main
 
-env:
-  BUILD_PARALLEL: 4
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -23,8 +24,9 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake ccache
+          sudo apt-get install -y build-essential cmake ccache curl
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -34,13 +36,20 @@ jobs:
 
       - name: Configure compiler to use ccache
         run: |
-          echo "CC=gcc" >> $GITHUB_ENV
-          echo "CXX=g++" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          set -euo pipefail
+          echo "CC=gcc" >> "$GITHUB_ENV"
+          echo "CXX=g++" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+
+      - name: Set build parallelism
+        run: |
+          set -euo pipefail
+          echo "BUILD_PARALLEL=$(nproc)" >> "$GITHUB_ENV"
 
       - name: Print environment info
         run: |
+          set -euo pipefail
           echo "=== Build Environment ==="
           echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "CPU cores: $(nproc)"
@@ -49,11 +58,9 @@ jobs:
           cmake --version | head -1
           g++ --version | head -1
 
-      # ---------------------------------------------------------------- #
-      # Configure                                                        #
-      # ---------------------------------------------------------------- #
       - name: Configure CMake
         run: |
+          set -euo pipefail
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
@@ -64,113 +71,115 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-      # ---------------------------------------------------------------- #
-      # Build - core library + server                                    #
-      # ---------------------------------------------------------------- #
       - name: Build core (llama lib + server + cli)
+        timeout-minutes: 15
         run: |
+          set -euo pipefail
           echo "::group::Building llama library"
-          cmake --build build --target llama llama-common -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama llama-common -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::Building llama-server"
-          cmake --build build --target llama-server -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama-server -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::Building llama-cli"
-          cmake --build build --target llama-cli -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama-cli -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
 
       - name: Verify core binaries
         run: |
+          set -euo pipefail
           for b in llama-server llama-cli; do
             test -f "build/bin/$b" || { echo "Missing: $b"; exit 1; }
             echo "  OK: $b ($(du -h build/bin/$b | cut -f1))"
           done
 
-      # ---------------------------------------------------------------- #
-      # Build - custom hidden states tools                               #
-      # ---------------------------------------------------------------- #
       - name: Build hidden states tools
         run: |
+          set -euo pipefail
           echo "::group::Building hs-extract"
-          cmake --build build --target llama-hs-extract -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama-hs-extract -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::Building hs-extract-batch"
-          cmake --build build --target llama-hs-extract-batch -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama-hs-extract-batch -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::Building hidden-states example"
-          cmake --build build --target llama-hidden-states -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target llama-hidden-states -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
 
       - name: Verify hidden states binaries
         run: |
+          set -euo pipefail
           for b in llama-hs-extract llama-hs-extract-batch llama-hidden-states; do
             test -f "build/bin/$b" || { echo "Missing: $b"; exit 1; }
             echo "  OK: $b ($(du -h build/bin/$b | cut -f1))"
           done
 
-      # ---------------------------------------------------------------- #
-      # Build - tests                                                    #
-      # ---------------------------------------------------------------- #
       - name: Build test binaries
         run: |
+          set -euo pipefail
           echo "::group::Building test-hidden-states (C++)"
-          cmake --build build --target test-hidden-states -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target test-hidden-states -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::Building test-hidden-states-c (C)"
-          cmake --build build --target test-hidden-states-c -j${{ env.BUILD_PARALLEL }}
+          cmake --build build --target test-hidden-states-c -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
 
       - name: Verify test binaries
         run: |
+          set -euo pipefail
           for b in test-hidden-states test-hidden-states-c; do
             test -f "build/bin/$b" || { echo "Missing: $b"; exit 1; }
             echo "  OK: $b ($(du -h build/bin/$b | cut -f1))"
           done
 
-      # ---------------------------------------------------------------- #
-      # Run tests                                                        #
-      # ---------------------------------------------------------------- #
+      - name: Report ccache stats
+        run: ccache -s
+
       - name: Set library path
-        run: echo "LD_LIBRARY_PATH=build/bin" >> $GITHUB_ENV
+        run: |
+          set -euo pipefail
+          echo "LD_LIBRARY_PATH=build/bin" >> "$GITHUB_ENV"
 
       - name: Run compute_masked_mean self-tests
         run: |
+          set -euo pipefail
           echo "::group::Self-test output"
           build/bin/llama-hs-extract-batch --self-test
           echo "::endgroup::"
 
       - name: Verify hs-extract --help
         run: |
-          echo "::group::hs-extract --help"
+          set -euo pipefail
           build/bin/llama-hs-extract --help
-          echo "::endgroup::"
 
       - name: Verify hs-extract-batch --help
         run: |
-          echo "::group::hs-extract-batch --help"
+          set -euo pipefail
           build/bin/llama-hs-extract-batch --help
-          echo "::endgroup::"
 
-      # ---------------------------------------------------------------- #
-      # Download a small model and run the hidden-states API tests       #
-      # ---------------------------------------------------------------- #
+      - name: Cache test model
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: models/test-model.gguf
+          key: test-model-gemma4-e2b-q4km-v1
+
       - name: Download test model
+        timeout-minutes: 5
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          echo "::group::Downloading test model for API tests"
+          set -euo pipefail
           mkdir -p models
-          # The test model MUST have a patched architecture (gemma, gemma4, llama, qwen35).
-          # Primary: Gemma 4 E2B (gemma4 architecture, patched, small ~1.5GB).
-          # Fallback: Qwen3.5-2B (qwen35 architecture, also patched).
-          wget -q -O models/test-model.gguf \
+          wget --continue --timeout=120 -O models/test-model.gguf \
             "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" \
-            || wget -q -O models/test-model.gguf \
+            || wget --continue --timeout=120 -O models/test-model.gguf \
               "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf" \
             || { echo "Failed to download test model"; exit 1; }
           ls -lh models/test-model.gguf
-          echo "::endgroup::"
 
       - name: Run hidden-states test binaries with model
         run: |
+          set -euo pipefail
           echo "::group::test-hidden-states (C++)"
           LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states models/test-model.gguf
           echo "::endgroup::"
@@ -179,7 +188,9 @@ jobs:
           echo "::endgroup::"
 
       - name: Smoke test /hidden-states server endpoint
+        timeout-minutes: 15
         run: |
+          set -euo pipefail
           echo "::group::Starting llama-server for endpoint test"
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
             -m models/test-model.gguf \
@@ -187,7 +198,7 @@ jobs:
             -ngl 0 -c 512 -np 1 \
             --cache-ram 0 --no-jinja --chat-template chatml &
           SERVER_PID=$!
-          # Wait for server to be ready (max 30 seconds)
+          trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8097/health > /dev/null 2>&1; then
               echo "Server is ready"
@@ -195,7 +206,6 @@ jobs:
             fi
             sleep 1
           done
-          # Run endpoint tests
           echo "--- Test: last_token pool ---"
           RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
@@ -231,83 +241,114 @@ jobs:
           assert abs(norm - 1.0) < 0.01, f'expected unit norm, got {norm}'
           print(f'PASS: normalize=true, norm={norm:.4f}')
           "
-          echo "--- Test: short text error (skip_mean) ---"
+          echo "--- Test: normalize=false inverse ---"
+          RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"test","layers":[0],"normalize":false,"pool":"last"}')
+          echo "$RESP" | python3 -c "
+          import sys, json, math
+          d = json.load(sys.stdin)
+          v = d[0]['hidden_states']['0']
+          norm = math.sqrt(sum(x*x for x in v))
+          assert abs(norm - 1.0) > 0.01, f'unnormalized vector should not have unit norm, got {norm}'
+          print(f'PASS: normalize=false, norm={norm:.4f}')
+          "
+          echo "--- Test: empty string input (400) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"","layers":[0],"normalize":false,"pool":"last"}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for empty input, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: empty string returns 400"
+          echo "--- Test: out-of-range layer (400) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"test","layers":[999999],"normalize":false,"pool":"last"}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for out-of-range layer, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: out-of-range layer returns 400"
+          echo "--- Test: negative skip_offset (400) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"test","layers":[0],"normalize":false,"pool":"skip_mean","skip_offset":-5}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for negative skip_offset, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: negative skip_offset returns 400"
+          echo "--- Test: short text skip_mean (400) ---"
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
             -d '{"input":"Hi","layers":[0],"normalize":false,"pool":"skip_mean","skip_offset":50}')
           if [ "$HTTP_CODE" != "400" ]; then
             echo "FAIL: expected 400 for short text, got $HTTP_CODE"
-            kill $SERVER_PID 2>/dev/null || true
             exit 1
           fi
           echo "PASS: short text skip_mean returns 400"
           echo "--- All endpoint tests passed ---"
-          kill $SERVER_PID 2>/dev/null || true
           echo "::endgroup::"
 
-      # ---------------------------------------------------------------- #
-      # Verify audit fixes are intact                                    #
-      # ---------------------------------------------------------------- #
-      - name: Verify resource leak fixes
+      - name: Test multi-ubatch extraction (>512 tokens)
+        timeout-minutes: 15
         run: |
-          # examples/hidden-states.cpp uses RAII wrappers (LlamaBackend destructor)
-          # instead of raw llama_backend_free calls.
-          if grep -q "llama_backend_init()" examples/hidden-states/hidden-states.cpp && \
-             ! grep -q "LlamaBackend" examples/hidden-states/hidden-states.cpp; then
-            echo "Expected RAII LlamaBackend in examples/hidden-states.cpp"
-            exit 1
-          fi
-          echo "  OK: examples/hidden-states.cpp uses RAII wrappers"
-          # hs-extract.cpp also uses RAII wrappers
-          if ! grep -q "LlamaBackend" tools/hs-extract/hs-extract.cpp; then
-            echo "Expected RAII LlamaBackend in tools/hs-extract/hs-extract.cpp"
-            exit 1
-          fi
-          echo "  OK: tools/hs-extract/hs-extract.cpp uses RAII wrappers"
-          # hs-extract-batch.cpp uses FilePtr for checkpoint I/O.
-          # The only fclose allowed is inside the FilePtr destructor.
+          set -euo pipefail
+          echo "Starting server with large context for multi-ubatch test..."
+          LD_LIBRARY_PATH=build/bin build/bin/llama-server \
+            -m models/test-model.gguf \
+            --host 127.0.0.1 --port 8098 \
+            -ngl 0 -c 2048 -ub 512 -np 1 \
+            --cache-ram 0 --no-jinja --chat-template chatml &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8098/health > /dev/null 2>&1; then
+              echo "Server is ready"
+              break
+            fi
+            sleep 1
+          done
+          LONG_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 200)")
+          RESP=$(curl -sf -X POST http://127.0.0.1:8098/hidden-states \
+            -H "Content-Type: application/json" \
+            -d "{\"input\":\"$LONG_TEXT\",\"layers\":[0,5],\"normalize\":false,\"pool\":\"last\"}")
+          echo "$RESP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          tokens = d[0]['tokens_evaluated']
+          assert tokens > 512, f'expected >512 tokens, got {tokens}'
+          states = d[0]['hidden_states']
+          for layer_key, vec in states.items():
+              assert any(v != 0.0 for v in vec), f'layer {layer_key} has all-zero hidden states'
+          print(f'PASS: multi-ubatch extraction, {tokens} tokens, layers={list(states.keys())}')
+          "
+
+      - name: Quick audit fix integrity check
+        run: |
+          set -euo pipefail
+          # Key fix patterns that must remain in place after upstream sync
+          grep -q "uint32_t key" tools/hs-extract-batch/hs-extract-batch.cpp || {
+            echo "FAIL: signed overflow fix (uint32_t key) missing"; exit 1
+          }
+          grep -q "output_all.*extract_hidden_states" src/llama-context.cpp || grep -q "extract_hidden_states.*output_all" src/llama-context.cpp || {
+            echo "FAIL: multi-ubatch output_all invariant missing"; exit 1
+          }
+          for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
+            grep -q "LlamaBackend" "$f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
+            grep -q "llama_synchronize" "$f" || { echo "FAIL: missing llama_synchronize in $f"; exit 1; }
+          done
+          grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp || {
+            echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1
+          }
           raw_fcloses=$(grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr" | wc -l)
           if [ "$raw_fcloses" -gt 0 ]; then
-            echo "Found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp - should use FilePtr"
-            grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr"
+            echo "FAIL: found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp"
             exit 1
           fi
-          echo "  OK: hs-extract-batch.cpp uses FilePtr (no raw fclose outside destructor)"
-
-      - name: Verify CUDA sync fixes
-        run: |
-          for f in tools/hs-extract/hs-extract.cpp \
-                   tools/hs-extract-batch/hs-extract-batch.cpp \
-                   examples/hidden-states/hidden-states.cpp; do
-            grep -q "llama_synchronize" "$f" || {
-              echo "Missing llama_synchronize in $f"
-              exit 1
-            }
-            echo "  OK: llama_synchronize in $f"
-          done
-
-      - name: Verify off-by-one fixes
-        run: |
-          if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp \
-                          tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
-            echo "Found incorrect i <= n_layer (should be < n_layer)"
-            exit 1
+          if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
+            echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
           fi
-          echo "  OK: layer boundaries use < not <="
-
-      # ---------------------------------------------------------------- #
-      # Summary                                                          #
-      # ---------------------------------------------------------------- #
-      - name: CI Summary
-        if: always()
-        run: |
-          echo "## Build and Test Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Core (server + cli) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Hidden States Tools | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Binaries (executed with model) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Server Endpoint (/hidden-states) | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Self-Tests | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Audit Fix Verification | ${{ job.status == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "PASS: all audit fix patterns verified"

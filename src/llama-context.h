@@ -312,6 +312,7 @@ private:
     // per-layer hidden state buffer (flat: n_hidden_tokens * n_embd per layer), only when extract_hidden_states
     std::vector<float> hidden_state_buf;
     int32_t n_hidden_tokens = 0;
+    int32_t n_hidden_layers = 0;  // P4.1: explicit layer count, set during first extract
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active

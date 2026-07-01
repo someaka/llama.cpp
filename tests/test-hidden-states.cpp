@@ -32,6 +32,7 @@ int main(int argc, char ** argv) {
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
@@ -81,6 +82,8 @@ int main(int argc, char ** argv) {
     }
 
     printf("Decode succeeded.\n");
+    
+    llama_synchronize(ctx);
 
     // Test hidden state extraction for layer 0
     int32_t n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);

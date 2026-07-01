@@ -265,6 +265,11 @@ int main(int argc, char ** argv) {
     const int32_t n_tokens_out = llama_get_hidden_state_n_tokens(ctx);
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 
+    if (n_tokens_out == 0) {
+        fprintf(stderr, "error: no hidden states extracted (count=0)\n");
+        return 1;
+    }
+
     std::vector<int> layers = parse_layer_list(layer_str, n_layers);
     if (layers.empty()) {
         return 1;
