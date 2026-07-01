@@ -78,11 +78,11 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
         long val = strtol(item.c_str(), &endp, 10);
         if (endp == item.c_str() || *endp != '\0') {
             fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
-            exit(1);
+            return {};
         }
         if (val < 0 || val >= n_layers) {
             fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_layers);
-            exit(1);
+            return {};
         }
         layers.push_back((int)val);
     }
@@ -102,11 +102,11 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
         long val = strtol(item.c_str(), &endp, 10);
         if (endp == item.c_str() || *endp != '\0') {
             fprintf(stderr, "error: invalid token '%s' (not a number)\n", item.c_str());
-            exit(1);
+            return {};
         }
         if (val < 0) {
             fprintf(stderr, "error: invalid token id %ld (must be non-negative)\n", val);
-            exit(1);
+            return {};
         }
         tokens.push_back((llama_token) val);
     }
@@ -235,6 +235,9 @@ int main(int argc, char ** argv) {
 
     if (raw_mode) {
         tokens = parse_raw_tokens(prompt_text);
+        if (tokens.empty()) {
+            return 1;
+        }
         fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
     } else {
         const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -263,6 +266,9 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 
     std::vector<int> layers = parse_layer_list(layer_str, n_layers);
+    if (layers.empty()) {
+        return 1;
+    }
 
     std::ostringstream json;
     json << "{\n";
