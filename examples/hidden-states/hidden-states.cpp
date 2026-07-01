@@ -110,6 +110,11 @@ int main(int argc, char ** argv) {
     int n_layers = llama_model_n_layer(model);
     int32_t n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);
 
+    if (n_hidden_tokens == 0) {
+        fprintf(stderr, "Error: no hidden states extracted (count=0)\n");
+        return 1;
+    }
+
     printf("Hidden states: %d tokens, %d layers\n", n_hidden_tokens, n_layers);
 
     for (int il = 0; il < n_layers && il < 5; il++) {
