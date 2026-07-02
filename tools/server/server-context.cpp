@@ -371,6 +371,14 @@ struct server_slot {
     bool can_split() const {
         GGML_ASSERT(task);
 
+        // CrimsonRed fork: hidden-state extraction captures each ubatch into a
+        // preallocated full-prompt buffer and pools after decode, so it can
+        // split safely across ubatches. The upstream embedding restriction
+        // does not apply here.
+        if (task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+            return true;
+        }
+
         return
             !task->need_embd() ||
             (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
