@@ -1235,6 +1235,15 @@ void llama_context::set_extract_hidden_states(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     cparams.extract_hidden_states = value;
+
+    // Clear stale data when extraction is disabled. Without this, a subsequent
+    // call to llama_get_hidden_state() would return stale data from the
+    // previous extraction instead of nullptr.
+    if (!value) {
+        hidden_state_buf.clear();
+        n_hidden_tokens = 0;
+        n_hidden_layers = 0;
+    }
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -2060,7 +2069,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     GGML_ASSERT(backend_res != nullptr);
                     
                     // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
-                    float * dst = hidden_state_buf.data() + il * n_tokens_all * n_embd_out + n_tokens_prev * n_embd_out;
+                    // Cast to size_t to prevent integer overflow when il * n_tokens_all * n_embd_out > 2^31
+                    float * dst = hidden_state_buf.data()
+                                + (size_t)il * n_tokens_all * n_embd_out
+                                + (size_t)n_tokens_prev * n_embd_out;
                     ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
                 }
                 
