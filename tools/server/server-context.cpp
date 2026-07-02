@@ -26,6 +26,12 @@
 #include <utility>
 #include <fstream>
 
+#if defined(_OPENMP)
+#define CR_SIMD _Pragma("omp simd")
+#else
+#define CR_SIMD
+#endif
+
 // fix problem with std::min and std::max
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -2410,9 +2416,11 @@ private:
                 vec.resize(n_embd, 0.0f);
                 for (int32_t t = start; t < n_hs_tokens; t++) {
                     const float * tok = hs + t * n_embd;
+                    CR_SIMD
                     for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
                 }
                 float inv = 1.0f / (float)count;
+                CR_SIMD
                 for (int d = 0; d < n_embd; d++) vec[d] *= inv;
             } else {
                 // Default: last token's hidden state
