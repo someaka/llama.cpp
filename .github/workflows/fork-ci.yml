@@ -340,7 +340,7 @@ jobs:
           echo "=== Check 4: llama_synchronize in batch tool ==="
           grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1; }
           echo "=== Check 5: No raw fclose ==="
-          raw_fcloses=$(grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp | grep -v "~FilePtr" | wc -l)
+          raw_fcloses=$( (grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp || true) | (grep -v "~FilePtr" || true) | wc -l)
           if [ "$raw_fcloses" -gt 0 ]; then
             echo "FAIL: found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp"
             exit 1
