@@ -2389,7 +2389,11 @@ private:
 
             std::vector<float> vec;
 
-            if (slot.task->params.hidden_pool == "skip_mean") {
+            if (slot.task->params.hidden_pool == "none") {
+                // Per-token: return all n_hs_tokens vectors (flattened)
+                size_t total = (size_t)n_hs_tokens * (size_t)n_embd;
+                vec.assign(hs, hs + total);
+            } else if (slot.task->params.hidden_pool == "skip_mean") {
                 // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
                 int32_t start = slot.task->params.hidden_skip_offset;
                 if (start >= n_hs_tokens) {
@@ -5118,8 +5122,8 @@ void server_routes::init_routes() {
                 return res;
             }
             pool = body["pool"].get<std::string>();
-            if (pool != "last" && pool != "skip_mean") {
-                res->error(format_error_response("pool must be 'last' or 'skip_mean'", ERROR_TYPE_INVALID_REQUEST));
+            if (pool != "last" && pool != "skip_mean" && pool != "none") {
+                res->error(format_error_response("pool must be 'last', 'skip_mean', or 'none'", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
         }
