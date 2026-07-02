@@ -196,7 +196,7 @@ jobs:
             -m models/test-model.gguf \
             --host 127.0.0.1 --port 8097 \
             -ngl 0 -c 512 -np 1 \
-            --cache-ram 0 --no-jinja --chat-template chatml &
+            --cache-ram 0 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
           for i in $(seq 1 30); do
@@ -300,7 +300,7 @@ jobs:
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
             -m models/test-model.gguf \
             -ngl 0 -c 2048 -b 2048 -ub 2048 -np 1 --port 8098 \
-            --cache-ram 0 --no-jinja --chat-template chatml &
+            --cache-ram 0 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
           for i in $(seq 1 30); do
