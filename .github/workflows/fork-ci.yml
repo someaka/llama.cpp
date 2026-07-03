@@ -329,8 +329,9 @@ jobs:
       - name: Quick audit fix integrity check
         run: |
           set -euo pipefail
-          echo "=== Check 1: uint32_t key ==="
-          grep -q "uint32_t key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint32_t key missing"; exit 1; }
+          echo "=== Check 1: 64-bit flat accum key (collision-free group/mask/layer lookup) ==="
+          grep -q "make_accum_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS: make_accum_key present" || { echo "FAIL: make_accum_key missing"; exit 1; }
+          grep -q "decode_accum_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS: decode_accum_key present" || { echo "FAIL: decode_accum_key missing"; exit 1; }
           echo "=== Check 2: output_all invariant ==="
           (grep -q "output_all.*extract_hidden_states" src/llama-context.cpp || grep -q "extract_hidden_states.*output_all" src/llama-context.cpp) && echo "PASS" || { echo "FAIL: output_all invariant missing"; exit 1; }
           echo "=== Check 3: RAII LlamaBackend ==="
