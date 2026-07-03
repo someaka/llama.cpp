@@ -1243,6 +1243,10 @@ void llama_context::set_extract_hidden_states(bool value) {
         hidden_state_buf.clear();
         n_hidden_tokens = 0;
         n_hidden_layers = 0;
+        _hs_synced = false;
+    } else {
+        // Mark dirty before new extraction (async copies will set synced=true after completion)
+        _hs_synced = false;
     }
 }
 
@@ -2082,6 +2086,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // previous iteration's async copies are still reading from, causing CUDA illegal
                 // memory access errors (especially on E4B with larger tensor footprints).
                 ggml_backend_sched_synchronize(sched.get());
+                _hs_synced = true;
             } else {
                 LLAMA_LOG_WARN("%s: extract_hidden_states is enabled but this model architecture "
                                "does not support it (t_hidden_layers is empty)\n", __func__);
@@ -3942,13 +3947,17 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
 }
 
 float * llama_get_hidden_state(llama_context * ctx, int32_t layer) {
-    ctx->synchronize();
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
 
     return ctx->get_hidden_state(layer);
 }
 
 float * llama_get_hidden_state_ith(llama_context * ctx, int32_t layer, int32_t i) {
-    ctx->synchronize();
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
 
     return ctx->get_hidden_state_ith(layer, i);
 }

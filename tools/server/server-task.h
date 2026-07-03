@@ -102,7 +102,7 @@ struct task_params {
     std::vector<int> hidden_layers; // specific layers to extract
     bool hidden_all_layers = false; // extract all layers
     bool hidden_normalize = false; // normalize hidden state vectors
-    // Pooling: "last" (default) = last token only, "skip_mean" = mean over [skip_offset, n_tokens)
+    // Pooling: "last" (default) = last token only, "skip_mean" = mean over [skip_offset, n_tokens), "none" = all per-token vectors
     std::string hidden_pool = "last";
     int32_t hidden_skip_offset = 50; // tokens to skip for skip_mean pooling
 

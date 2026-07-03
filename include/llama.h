@@ -1062,13 +1062,16 @@ extern "C" {
     //
 
     // Get the per-layer hidden states for all tokens in the last decode.
-    // Returns a pointer to a flat float array of size n_tokens * n_embd,
+    // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
     // or NULL if extract_hidden_states was not set in context params.
+    // The stride per token is n_embd_out (not n_embd) -- most models have
+    // n_embd == n_embd_out but this is not guaranteed (e.g. models with
+    // a separate output projection dimension).
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     LLAMA_API float * llama_get_hidden_state(struct llama_context * ctx, int32_t layer);
 
     // Get the hidden state for a specific token at the given layer.
-    // Returns float[n_embd] for the i-th token.
+    // Returns float[n_embd_out] for the i-th token.
     // i can be negative to index from the end (-1 = last token).
     // Returns NULL if extract_hidden_states was not set or i is out of range.
     LLAMA_API float * llama_get_hidden_state_ith(struct llama_context * ctx, int32_t layer, int32_t i);

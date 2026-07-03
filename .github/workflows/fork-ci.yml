@@ -171,10 +171,7 @@ jobs:
           set -euo pipefail
           mkdir -p models
           wget --continue --timeout=120 -O models/test-model.gguf \
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" \
-            || wget --continue --timeout=120 -O models/test-model.gguf \
-              "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf" \
-            || { echo "Failed to download test model"; exit 1; }
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
           ls -lh models/test-model.gguf
 
       - name: Run hidden-states test binaries with model
@@ -350,9 +347,35 @@ jobs:
             exit 1
           fi
           echo "PASS"
-          echo "=== Check 6: No off-by-one ==="
+          echo "=== Check 6: No CHECKED_WRITE in int-returning run functions ==="
+          python3 - <<'PY'
+          from pathlib import Path
+
+          lines = Path('tools/hs-extract-batch/hs-extract-batch.cpp').read_text().splitlines()
+          active = None
+          bad = []
+          for lineno, line in enumerate(lines, 1):
+              if line.startswith(('static int run_raw', 'static int run_batch', 'static int run_self_test')):
+                  active = line.strip()
+              elif line.startswith(('static bool ', 'int main')):
+                  active = None
+              if active and 'CHECKED_WRITE' in line:
+                  bad.append(f'{lineno}: {active}: {line.strip()}')
+          if bad:
+              print('\n'.join(bad))
+              raise SystemExit(1)
+          print('PASS')
+          PY
+          echo "=== Check 7: assignment reader uses explicit status ==="
+          grep -q "enum class AssignmentReadStatus" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
+          echo "=== Check 8: auto_size_ctx does not call exit ==="
+          if sed -n '/static bool auto_size_ctx/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then
+            echo "FAIL: auto_size_ctx still calls exit()"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 9: No off-by-one ==="
           if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
             echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
           fi
           echo "PASS"
-          echo "✓ All audit fix patterns verified"
+          echo "OK: All audit fix patterns verified"
