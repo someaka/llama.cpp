@@ -378,4 +378,17 @@ jobs:
             echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
           fi
           echo "PASS"
+          echo "=== Check 10: checkpoint n_masks/n_layers_data bounds validation ==="
+          if ! grep -q "n_masks.*out of range" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: checkpoint n_masks bounds check missing"; exit 1
+          fi
+          if ! grep -q "n_layers_data.*out of range" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: checkpoint n_layers_data bounds check missing"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 11: output writer uses pre-built index (not O(K^2) rescan) ==="
+          if ! { grep -q "group_index\|gm_pairs" tools/hs-extract-batch/hs-extract-batch.cpp; }; then
+            echo "FAIL: output writer pre-built index missing"; exit 1
+          fi
+          echo "PASS"
           echo "OK: All audit fix patterns verified"
