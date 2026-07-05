@@ -31,7 +31,7 @@ jobs:
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: fork-ci-${{ runner.os }}
+          key: fork-ci-${{ runner.os }}-no-native
           max-size: 512M
 
       - name: Configure compiler to use ccache
@@ -68,6 +68,7 @@ jobs:
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_TESTS=ON \
+            -DGGML_NATIVE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -175,7 +176,6 @@ jobs:
           ls -lh models/test-model.gguf
 
       - name: Run hidden-states test binaries with model
-        continue-on-error: true
         run: |
           set -euo pipefail
           echo "::group::test-hidden-states (C++)"
@@ -186,7 +186,6 @@ jobs:
           echo "::endgroup::"
 
       - name: Smoke test /hidden-states server endpoint
-        continue-on-error: true
         timeout-minutes: 15
         run: |
           set -euo pipefail
@@ -292,7 +291,6 @@ jobs:
           echo "::endgroup::"
 
       - name: Test multi-ubatch extraction (>512 tokens)
-        continue-on-error: true
         timeout-minutes: 15
         run: |
           set -euo pipefail
