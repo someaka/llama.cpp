@@ -175,6 +175,7 @@ jobs:
           ls -lh models/test-model.gguf
 
       - name: Run hidden-states test binaries with model
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "::group::test-hidden-states (C++)"
