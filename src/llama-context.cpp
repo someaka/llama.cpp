@@ -3966,6 +3966,31 @@ int32_t llama_get_hidden_state_n_tokens(llama_context * ctx) {
     return ctx->get_hidden_state_n_tokens();
 }
 
+int32_t llama_get_hidden_states_batch(
+        llama_context * ctx,
+        const int32_t * layers,
+        int32_t         n_layers,
+        float        ** out_ptrs) {
+    // Single sync point instead of one per layer
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
+
+    if (n_layers <= 0 || !layers || !out_ptrs) {
+        return -1;
+    }
+
+    if (ctx->get_hidden_state_n_tokens() == 0) {
+        return -1;
+    }
+
+    for (int32_t i = 0; i < n_layers; i++) {
+        out_ptrs[i] = ctx->get_hidden_state(layers[i]);
+    }
+
+    return 0;
+}
+
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
 }
