@@ -1334,7 +1334,14 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
-    if (t_logits != nullptr) {
+    // Skip lm_head output projection when only extracting hidden states.
+    // Hidden states are captured per-layer before the output norm and lm_head,
+    // so they don't depend on t_logits being computed.
+    const bool skip_logits = params.cparams.extract_hidden_states
+                          && !params.cparams.embeddings
+                          && params.samplers.empty();
+
+    if (t_logits != nullptr && !skip_logits) {
         ggml_set_output(t_logits);
     }
     if (t_embd != nullptr) {
