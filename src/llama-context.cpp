@@ -985,23 +985,14 @@ float * llama_context::get_hidden_state(int32_t layer) {
         return nullptr;
     }
 
-    // P1.2 + P4.1: Use explicit n_hidden_layers instead of computing from buffer size.
-    // If n_hidden_layers was not set (legacy), fall back to the old computation.
-    const int32_t n_layers = (n_hidden_layers > 0)
-        ? n_hidden_layers
-        : (int32_t)(hidden_state_buf.size() / ((size_t)n_hidden_tokens * model.hparams.n_embd_out()));
+    GGML_ASSERT(n_hidden_layers > 0 && "n_hidden_layers not set — hidden state extraction was not initialized");
 
-    if (layer < 0 || layer >= n_layers) {
+    if (layer < 0 || layer >= n_hidden_layers) {
         return nullptr;
     }
 
-    // P1.2: Defense-in-depth - verify computed offset is within buffer before dereferencing
     const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
-    if (offset >= hidden_state_buf.size()) {
-        LLAMA_LOG_WARN("%s: layer %d offset %zu >= buffer size %zu\n",
-                       __func__, layer, offset, hidden_state_buf.size());
-        return nullptr;
-    }
+    GGML_ASSERT(offset < hidden_state_buf.size() && "hidden state offset exceeds buffer — internal state corruption");
 
     return hidden_state_buf.data() + offset;
 }
@@ -2090,8 +2081,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 ggml_backend_sched_synchronize(sched.get());
                 _hs_synced = true;
             } else {
-                LLAMA_LOG_WARN("%s: extract_hidden_states is enabled but this model architecture "
-                               "does not support it (t_hidden_layers is empty)\n", __func__);
+                GGML_ABORT("extract_hidden_states is enabled but this model architecture "
+                           "does not support it (t_hidden_layers is empty)");
             }
         }
 
@@ -2156,7 +2147,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
-    //synchronize();
 
     return 0;
 }
