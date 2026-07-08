@@ -1,5 +1,21 @@
 name: Fork CI
 
+# NOTE: This CI runs on CPU-only runners (ubuntu-latest, -ngl 0).
+# GPU verification (CUDA + Vulkan) is NOT automated — it must be done
+# manually on the respective machines after merging:
+#
+#   CUDA (A's machine, RTX 3090):
+#     cmake -B build-cuda -DGGML_CUDA=ON -DGGML_NATIVE=ON ...
+#     cmake --build build-cuda --target llama-hs-extract-batch test-hidden-states
+#     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/llama-hs-extract-batch --self-test
+#     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/test-hidden-states <model.gguf>
+#     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/llama-hs-extract-batch <model> <prompts> all <out> --batch --assignments <file> -ngl 99
+#
+#   Vulkan (D's machine):
+#     cmake -B build-vulkan -DGGML_VULKAN=ON -DGGML_NATIVE=ON ...
+#     cmake --build build-vulkan --target llama-hs-extract-batch test-hidden-states
+#     (same self-test + extraction commands with build-vulkan/bin/)
+
 on:
   push:
     branches:
@@ -68,7 +84,7 @@ jobs:
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_TESTS=ON \
-            -DGGML_NATIVE=OFF \
+            -DGGML_NATIVE=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 

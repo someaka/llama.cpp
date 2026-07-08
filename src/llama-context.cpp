@@ -2081,8 +2081,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 ggml_backend_sched_synchronize(sched.get());
                 _hs_synced = true;
             } else {
-                GGML_ABORT("extract_hidden_states is enabled but this model architecture "
-                           "does not support it (t_hidden_layers is empty)");
+                // This model architecture does not populate t_hidden_layers.
+                // Log the error and set n_hidden_tokens=0 so get_hidden_state()
+                // returns nullptr. The calling tool checks for nullptr and exits.
+                LLAMA_LOG_ERROR("%s: extract_hidden_states is enabled but this model architecture "
+                                "does not support it (t_hidden_layers is empty)\n", __func__);
+                n_hidden_tokens = 0;
             }
         }
 
