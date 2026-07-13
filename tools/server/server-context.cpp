@@ -48,10 +48,31 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
 
-    // CrimsonRed fork: always allocate n_batch for outputs so the
-    // /hidden-states endpoint can capture per-token activations
-    // without requiring --embedding mode (which disables generation)
-    return n_batch;
+    // CrimsonRed fork: the /hidden-states endpoint processes tasks that need
+    // per-token output buffers (like embedding/pooling mode). When hidden-states
+    // is active, the server must allocate n_batch outputs. For pure-generation
+    // workloads, fall through to upstream's optimized calculation to save memory.
+    //
+    // Since hidden-states tasks arrive dynamically and n_outputs_max is computed
+    // once at startup, we must be conservative: if this server might receive
+    // hidden-states requests, allocate full n_batch. The --no-hidden-states flag
+    // explicitly disables the endpoint and allows the upstream optimization.
+    if (!params.no_hidden_states) {
+        return n_batch;
+    }
+
+    // Upstream optimization: for pure generation (no embedding/pooling), allocate
+    // only 1 + speculative_n_max outputs per sequence.
+    if (params.embedding ||
+            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPEC && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+        return n_batch;
+    }
+
+    const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
+
+    const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
+
+    return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
 }
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
@@ -5078,7 +5099,13 @@ void server_routes::init_routes() {
     };
     this->post_hidden_states = [this](const server_http_req & req) {
         auto res = create_response();
-        
+
+        // Check if hidden-states endpoint is disabled via --no-hidden-states
+        if (params.no_hidden_states) {
+            res->error(format_error_response("Hidden states endpoint disabled by --no-hidden-states flag", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
         // Check if hidden states are supported
         const int32_t n_layer = llama_model_n_layer(ctx_server.model_tgt);
         if (n_layer <= 0) {
