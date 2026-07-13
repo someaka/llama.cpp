@@ -408,4 +408,17 @@ jobs:
             echo "FAIL: output writer pre-built index missing"; exit 1
           fi
           echo "PASS"
+          echo "=== Check 12: checkpoint count/layer_idx validation ==="
+          if ! grep -q "count.*negative.*corrupt checkpoint" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: checkpoint count validation missing"; exit 1
+          fi
+          if ! grep -q "layer_idx.*out of range.*corrupt checkpoint" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: checkpoint layer_idx validation missing"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 13: CPU worker error paths notify GPU thread ==="
+          if ! grep -c "cv_gpu.notify_one" tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "[8-9]"; then
+            echo "FAIL: not enough cv_gpu.notify_one() calls (expected >=8)"; exit 1
+          fi
+          echo "PASS"
           echo "OK: All audit fix patterns verified"
