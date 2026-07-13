@@ -47,7 +47,7 @@ jobs:
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: fork-ci-${{ runner.os }}-no-native
+          key: fork-ci-${{ runner.os }}-native
           max-size: 512M
 
       - name: Configure compiler to use ccache
