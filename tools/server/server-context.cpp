@@ -64,7 +64,7 @@ static uint32_t server_n_outputs_max(const common_params & params) {
     // Upstream optimization: for pure generation (no embedding/pooling), allocate
     // only 1 + speculative_n_max outputs per sequence.
     if (params.embedding ||
-            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPEC && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
         return n_batch;
     }
 
