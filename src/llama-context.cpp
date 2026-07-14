@@ -1234,10 +1234,10 @@ void llama_context::set_extract_hidden_states(bool value) {
         hidden_state_buf.clear();
         n_hidden_tokens = 0;
         n_hidden_layers = 0;
-        _hs_synced = false;
+        _hs_synced.store(false, std::memory_order_release);
     } else {
         // Mark dirty before new extraction (async copies will set synced=true after completion)
-        _hs_synced = false;
+        _hs_synced.store(false, std::memory_order_release);
     }
 }
 
@@ -2079,7 +2079,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // previous iteration's async copies are still reading from, causing CUDA illegal
                 // memory access errors (especially on E4B with larger tensor footprints).
                 ggml_backend_sched_synchronize(sched.get());
-                _hs_synced = true;
+                _hs_synced.store(true, std::memory_order_release);
             } else {
                 // This model architecture does not populate t_hidden_layers.
                 // Log the error and set n_hidden_tokens=0 so get_hidden_state()

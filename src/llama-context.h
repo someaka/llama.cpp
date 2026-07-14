@@ -313,10 +313,10 @@ private:
     std::vector<float> hidden_state_buf;
     int32_t n_hidden_tokens = 0;
     int32_t n_hidden_layers = 0;  // P4.1: explicit layer count, set during first extract
-    bool    _hs_synced      = false;  // true when hidden_state_buf is up-to-date (no pending async copies)
+    std::atomic<bool> _hs_synced{false};  // true when hidden_state_buf is up-to-date (no pending async copies)
 
 public:
-    bool hs_synced() const { return _hs_synced; }
+    bool hs_synced() const { return _hs_synced.load(std::memory_order_acquire); }
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
