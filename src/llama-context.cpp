@@ -2079,7 +2079,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // previous iteration's async copies are still reading from, causing CUDA illegal
                 // memory access errors (especially on E4B with larger tensor footprints).
                 ggml_backend_sched_synchronize(sched.get());
-                _hs_synced.store(true, std::memory_order_release);
             } else {
                 // This model architecture does not populate t_hidden_layers.
                 // Log the error and set n_hidden_tokens=0 so get_hidden_state()
@@ -2098,6 +2097,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     if (cparams.extract_hidden_states && n_hidden_tokens != 0) {
         GGML_ASSERT((uint32_t)n_hidden_tokens == n_tokens_all &&
                     "hidden state token count mismatch after multi-ubatch accumulation");
+        // C7: Only signal synced AFTER the entire multi-ubatch loop is complete.
+        // Previously this was set inside the loop, creating a race window where
+        // callers could read partially-filled buffers.
+        _hs_synced.store(true, std::memory_order_release);
     }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
