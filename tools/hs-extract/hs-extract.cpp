@@ -295,14 +295,13 @@ int main(int argc, char ** argv) {
         int layer = layers[li];
         float * hs = llama_get_hidden_state(ctx, layer);
 
-        json << "    {\n";
-        json << "      \"layer\": " << layer << ",\n";
-
         if (!hs) {
             fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
             return 1;
         }
 
+        json << "    {\n";
+        json << "      \"layer\": " << layer << ",\n";
         json << "      \"values\": [";
         for (size_t i = 0; i < (size_t)n_tokens_out * (size_t)n_embd; i++) {
             if (i > 0) json << ", ";

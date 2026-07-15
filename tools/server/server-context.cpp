@@ -2431,6 +2431,8 @@ private:
             } else if (slot.task->params.hidden_pool == "skip_mean") {
                 // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
                 int32_t start = slot.task->params.hidden_skip_offset;
+                // Defense-in-depth: clamp negative skip_offset (should be caught by HTTP validation)
+                if (start < 0) start = 0;
                 if (start >= n_hs_tokens) {
                     auto err = std::make_unique<server_task_result_error>();
                     err->id   = slot.task->id;

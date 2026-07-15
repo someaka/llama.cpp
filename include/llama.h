@@ -1070,7 +1070,8 @@ extern "C" {
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.
-    // The pointer remains valid until the next llama_decode() call or llama_free().
+    // The pointer remains valid until the next llama_decode() call,
+    // llama_set_extract_hidden_states(ctx, false), or llama_free().
     LLAMA_API float * llama_get_hidden_state(struct llama_context * ctx, int32_t layer);
 
     // Get the hidden state for a specific token at the given layer.

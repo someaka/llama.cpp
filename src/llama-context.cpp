@@ -2059,10 +2059,24 @@ int llama_context::decode(const llama_batch & batch_inp) {
             const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
 
             if (n_layers > 0) {
-                const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
+                // Validate layer count matches what was declared at init
+                GGML_ASSERT(n_layers == n_hidden_layers && "hidden state layer count mismatch");
+
+                // Find first non-null layer to get token count (t_hidden_layers[0] may be null
+                // if the model patches layers conditionally)
+                uint32_t n_tokens = 0;
+                bool found = false;
+                for (int32_t il = 0; il < n_layers; il++) {
+                    if (hres->t_hidden_layers[il]) {
+                        n_tokens = (uint32_t) hres->t_hidden_layers[il]->ne[1];
+                        found = true;
+                        break;
+                    }
+                }
+                GGML_ASSERT(found && "all t_hidden_layers entries are null despite n_layers > 0");
 
                 // Assert all layers have matching token counts (prevent silent corruption)
-                for (int32_t il = 1; il < n_layers; il++) {
+                for (int32_t il = 0; il < n_layers; il++) {
                     if (hres->t_hidden_layers[il]) {
                         GGML_ASSERT((uint32_t) hres->t_hidden_layers[il]->ne[1] == n_tokens &&
                                     "hidden state layer token count mismatch");
@@ -2100,6 +2114,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 LLAMA_LOG_ERROR("%s: extract_hidden_states is enabled but this model architecture "
                                 "does not support it (t_hidden_layers is empty)\n", __func__);
                 n_hidden_tokens = 0;
+                // Mark as synced to prevent redundant synchronize() calls on every API access
+                _hs_synced.store(true, std::memory_order_release);
             }
         }
 

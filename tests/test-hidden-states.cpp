@@ -3,6 +3,51 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <vector>
+
+// -- RAII Wrappers (same pattern as hs-extract tools) -------------------
+
+struct LlamaBackend {
+    LlamaBackend() { llama_backend_init(); }
+    ~LlamaBackend() { llama_backend_free(); }
+    LlamaBackend(const LlamaBackend &) = delete;
+    LlamaBackend & operator=(const LlamaBackend &) = delete;
+};
+
+struct LlamaModel {
+    llama_model * model;
+    LlamaModel() : model(nullptr) {}
+    LlamaModel(llama_model * m) : model(m) {}
+    ~LlamaModel() { if (model) llama_model_free(model); }
+    LlamaModel(const LlamaModel &) = delete;
+    LlamaModel & operator=(const LlamaModel &) = delete;
+    operator llama_model *() const { return model; }
+    explicit operator bool() const { return model != nullptr; }
+};
+
+struct LlamaContext {
+    llama_context * ctx;
+    LlamaContext() : ctx(nullptr) {}
+    LlamaContext(llama_context * c) : ctx(c) {}
+    ~LlamaContext() { if (ctx) llama_free(ctx); }
+    LlamaContext(const LlamaContext &) = delete;
+    LlamaContext & operator=(const LlamaContext &) = delete;
+    operator llama_context *() const { return ctx; }
+    explicit operator bool() const { return ctx != nullptr; }
+};
+
+struct LlamaBatchRAII {
+    llama_batch batch;
+    bool initialized;
+    LlamaBatchRAII() : batch{}, initialized(false) {}
+    void init(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
+        batch = llama_batch_init(n_tokens, embd, n_seq_max);
+        initialized = true;
+    }
+    ~LlamaBatchRAII() { if (initialized) llama_batch_free(batch); }
+    LlamaBatchRAII(const LlamaBatchRAII &) = delete;
+    LlamaBatchRAII & operator=(const LlamaBatchRAII &) = delete;
+};
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
@@ -10,14 +55,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    llama_backend_init();
+    LlamaBackend backend;
 
     // Load model
     llama_model_params mparams = llama_model_default_params();
-    llama_model * model = llama_model_load_from_file(argv[1], mparams);
+    LlamaModel model(llama_model_load_from_file(argv[1], mparams));
     if (!model) {
         fprintf(stderr, "Failed to load model: %s\n", argv[1]);
-        llama_backend_free();
         return 1;
     }
 
@@ -28,11 +72,9 @@ int main(int argc, char ** argv) {
     cparams.n_ubatch = 512;
     cparams.extract_hidden_states = true;
 
-    llama_context * ctx = llama_init_from_model(model, cparams);
+    LlamaContext ctx(llama_init_from_model(model, cparams));
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
-        llama_model_free(model);
-        llama_backend_free();
         return 1;
     }
 
@@ -50,18 +92,18 @@ int main(int argc, char ** argv) {
     }
     if (n_tokens <= 0) {
         fprintf(stderr, "Tokenization error: %d\n", n_tokens);
-        llama_free(ctx);
-        llama_model_free(model);
         return 1;
     }
 
-    llama_token * tokens = (llama_token *) malloc(n_tokens * sizeof(llama_token));
-    n_tokens = llama_tokenize(llama_model_get_vocab(model), prompt, strlen(prompt), tokens, n_tokens, true, true);
+    std::vector<llama_token> tokens(n_tokens);
+    n_tokens = llama_tokenize(llama_model_get_vocab(model), prompt, strlen(prompt), tokens.data(), n_tokens, true, true);
 
     printf("Tokenized '%s' -> %d tokens\n", prompt, n_tokens);
 
     // Decode using llama_batch_init (modern API)
-    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    LlamaBatchRAII batch_wrapper;
+    batch_wrapper.init(n_tokens, 0, 1);
+    llama_batch & batch = batch_wrapper.batch;
     for (int i = 0; i < n_tokens; i++) {
         batch.token[i]    = tokens[i];
         batch.pos[i]      = i;
@@ -74,10 +116,6 @@ int main(int argc, char ** argv) {
     int ret = llama_decode(ctx, batch);
     if (ret != 0) {
         fprintf(stderr, "llama_decode failed with %d\n", ret);
-        llama_batch_free(batch);
-        free(tokens);
-        llama_free(ctx);
-        llama_model_free(model);
         return 1;
     }
 
@@ -91,10 +129,6 @@ int main(int argc, char ** argv) {
 
     if (n_hidden_tokens <= 0) {
         fprintf(stderr, "FAIL: n_hidden_tokens is %d (expected > 0)\n", (int)n_hidden_tokens);
-        llama_batch_free(batch);
-        free(tokens);
-        llama_free(ctx);
-        llama_model_free(model);
         return 1;
     }
 
@@ -107,10 +141,6 @@ int main(int argc, char ** argv) {
         float * hs = llama_get_hidden_state(ctx, il);
         if (!hs) {
             fprintf(stderr, "FAIL: llama_get_hidden_state(ctx, %d) returned NULL\n", il);
-            llama_batch_free(batch);
-            free(tokens);
-            llama_free(ctx);
-            llama_model_free(model);
             return 1;
         }
 
@@ -131,14 +161,13 @@ int main(int argc, char ** argv) {
     }
     printf("\n");
 
-    printf("Non-zero / total (first %d layers): %d / %d (%.1f%%)\n", check_layers, non_zero, total, 100.0f * non_zero / total);
+    if (total > 0) {
+        printf("Non-zero / total (first %d layers): %d / %d (%.1f%%)\n", check_layers, non_zero, total, 100.0f * non_zero / total);
+    } else {
+        printf("Non-zero / total (first %d layers): no data (total=0)\n", check_layers);
+    }
 
-    // Cleanup
-    llama_batch_free(batch);
-    free(tokens);
-    llama_free(ctx);
-    llama_model_free(model);
-    llama_backend_free();
+    // RAII destructors handle all cleanup automatically
 
     if (non_zero > 0) {
         printf("PASS: Hidden states contain non-zero values.\n");
