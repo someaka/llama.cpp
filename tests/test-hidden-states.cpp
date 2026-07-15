@@ -37,7 +37,7 @@ int main(int argc, char ** argv) {
     }
 
     const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const int n_embd = llama_model_n_embd(model);
+    const int n_embd = llama_model_n_embd_out(model);
     const int n_layer = llama_model_n_layer(model);
 
     printf("Model loaded: n_vocab=%d, n_embd=%d, n_layer=%d\n", n_vocab, n_embd, n_layer);
@@ -82,7 +82,7 @@ int main(int argc, char ** argv) {
     }
 
     printf("Decode succeeded.\n");
-    
+
     llama_synchronize(ctx);
 
     // Test hidden state extraction for layer 0

@@ -2060,7 +2060,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             if (n_layers > 0) {
                 const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
-                
+
                 // Assert all layers have matching token counts (prevent silent corruption)
                 for (int32_t il = 1; il < n_layers; il++) {
                     if (hres->t_hidden_layers[il]) {
@@ -2068,17 +2068,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
                                     "hidden state layer token count mismatch");
                     }
                 }
-                
+
                 // Accumulate token count across ubatches
                 n_hidden_tokens += n_tokens;
-                
+
                 // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
                     if (t == nullptr) continue;
                     ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
                     GGML_ASSERT(backend_res != nullptr);
-                    
+
                     // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
                     // Cast to size_t to prevent integer overflow when il * n_tokens_all * n_embd_out > 2^31
                     float * dst = hidden_state_buf.data()
@@ -2086,7 +2086,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                                 + (size_t)n_tokens_prev * n_embd_out;
                     ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
                 }
-                
+
                 // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
                 // The async copies above (cudaMemcpyAsync) are non-blocking. Without this barrier,
                 // the next mctx->next() call starts computing on the same GPU buffers that the

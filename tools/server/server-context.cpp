@@ -5114,11 +5114,11 @@ void server_routes::init_routes() {
         }
 
         const json body = json::parse(req.body);
-        
+
         // Parse layers parameter
         std::vector<int> layers;
         bool all_layers = false;
-        
+
         if (body.contains("layers")) {
             const json & layers_json = body["layers"];
             if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
@@ -5230,9 +5230,9 @@ void server_routes::init_routes() {
             res->error(all_results.error->to_json());
             return res;
         } else {
-            for (auto & res : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(res.get()) != nullptr);
-                responses.push_back(res->to_json());
+            for (auto & result : all_results.results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(result.get()) != nullptr);
+                responses.push_back(result->to_json());
             }
         }
 
