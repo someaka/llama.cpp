@@ -2373,7 +2373,7 @@ private:
         res->index    = slot.task->index;
         res->n_tokens = slot.task->n_tokens();
 
-        const int32_t n_embd = llama_model_n_embd(model_tgt);
+        const int32_t n_embd = llama_model_n_embd_out(model_tgt);
         const int32_t n_layer = llama_model_n_layer(model_tgt);
 
         // determine which layers to extract
@@ -2388,6 +2388,16 @@ private:
         }
 
         const int32_t n_hs_tokens = llama_get_hidden_state_n_tokens(slot.ctx_tgt);
+
+        if (n_hs_tokens == 0) {
+            auto err = std::make_unique<server_task_result_error>();
+            err->id    = slot.task->id;
+            err->index = slot.task->index;
+            err->err_type = ERROR_TYPE_SERVER;
+            err->err_msg = "no hidden states available (decode may have failed)";
+            queue_results.send(std::move(err));
+            return;
+        }
 
         for (int layer : layers) {
             if (layer < 0 || layer >= n_layer) {
@@ -2408,16 +2418,6 @@ private:
                 err->index = slot.task->index;
                 err->err_type = ERROR_TYPE_SERVER;
                 err->err_msg = "failed to get hidden state for layer " + std::to_string(layer);
-                queue_results.send(std::move(err));
-                return;
-            }
-
-            if (n_hs_tokens == 0) {
-                auto err = std::make_unique<server_task_result_error>();
-                err->id   = slot.task->id;
-                err->index = slot.task->index;
-                err->err_type = ERROR_TYPE_SERVER;
-                err->err_msg = "no hidden states available for layer " + std::to_string(layer) + " (decode may have failed)";
                 queue_results.send(std::move(err));
                 return;
             }

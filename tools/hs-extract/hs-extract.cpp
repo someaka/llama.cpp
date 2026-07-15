@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -115,6 +116,8 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
 
 static std::string format_float(float v) {
     char buf[64];
+    if (std::isinf(v)) { return "null"; }  // JSON has no Inf/NaN
+    if (std::isnan(v)) { return "null"; }
     snprintf(buf, sizeof(buf), "%.8g", v);
     return std::string(buf);
 }
@@ -155,12 +158,18 @@ int main(int argc, char ** argv) {
             no_bos = true;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
-            n_threads = (int) strtol(argv[i], nullptr, 10);
-            if (n_threads < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
+            char *endptr;
+            long val = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0') { fprintf(stderr, "error: --threads value must be a number\n"); return 1; }
+            if (val < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
+            n_threads = (int) val;
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
-            n_gpu_layers = (int) strtol(argv[i], nullptr, 10);
-            if (n_gpu_layers < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
+            char *endptr;
+            long val = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0') { fprintf(stderr, "error: --n-gpu-layers value must be a number\n"); return 1; }
+            if (val < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
+            n_gpu_layers = (int) val;
         } else if (arg == "--output") {
             if (++i >= argc) { fprintf(stderr, "error: --output requires an argument\n"); return 1; }
             output_file = argv[i];
@@ -213,7 +222,7 @@ int main(int argc, char ** argv) {
     }
 
     const int n_layers = llama_model_n_layer(model);
-    const int n_embd = llama_model_n_embd(model);
+    const int n_embd = llama_model_n_embd_out(model);
 
     fprintf(stderr, "%s: model loaded, n_layers=%d, n_embd=%d\n", __func__, n_layers, n_embd);
 
