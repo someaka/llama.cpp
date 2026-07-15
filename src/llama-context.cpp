@@ -735,6 +735,12 @@ void llama_context::synchronize() {
 
     n_queued_tokens = 0;
     t_compute_start_us = 0;
+
+    // After synchronization, if hidden state extraction is enabled and data exists,
+    // mark it as synced so subsequent API calls don't redundantly re-sync.
+    if (cparams.extract_hidden_states && n_hidden_tokens > 0) {
+        _hs_synced.store(true, std::memory_order_release);
+    }
 }
 
 const llama_model & llama_context::get_model() const {
@@ -2054,6 +2060,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             if (n_layers > 0) {
                 const uint32_t n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
+                
+                // Assert all layers have matching token counts (prevent silent corruption)
+                for (int32_t il = 1; il < n_layers; il++) {
+                    if (hres->t_hidden_layers[il]) {
+                        GGML_ASSERT((uint32_t) hres->t_hidden_layers[il]->ne[1] == n_tokens &&
+                                    "hidden state layer token count mismatch");
+                    }
+                }
                 
                 // Accumulate token count across ubatches
                 n_hidden_tokens += n_tokens;
@@ -3962,6 +3976,9 @@ float * llama_get_hidden_state_ith(llama_context * ctx, int32_t layer, int32_t i
 }
 
 int32_t llama_get_hidden_state_n_tokens(llama_context * ctx) {
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
     return ctx->get_hidden_state_n_tokens();
 }
 
