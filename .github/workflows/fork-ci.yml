@@ -357,13 +357,30 @@ jobs:
           done
           echo "=== Check 4: llama_synchronize in batch tool ==="
           grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1; }
-          echo "=== Check 5: No raw fclose ==="
-          raw_fcloses=$( (grep -n "fclose" tools/hs-extract-batch/hs-extract-batch.cpp || true) | (grep -v "~FilePtr" || true) | wc -l)
-          if [ "$raw_fcloses" -gt 0 ]; then
-            echo "FAIL: found $raw_fcloses raw fclose() calls in hs-extract-batch.cpp"
-            exit 1
-          fi
-          echo "PASS"
+          echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('tools/hs-extract-batch/hs-extract-batch.cpp').read_text().splitlines()
+          in_fileptr = False
+          brace_depth = 0
+          outside = []
+          for lineno, line in enumerate(lines, 1):
+              stripped = line.strip()
+              if stripped.startswith('struct FilePtr'):
+                  in_fileptr = True
+                  brace_depth = 0
+              if in_fileptr:
+                  brace_depth += line.count('{') - line.count('}')
+                  if brace_depth <= 0 and '{' in line:
+                      in_fileptr = False
+              elif 'fclose' in line and not stripped.startswith(('//', '*', '/*')):
+                  outside.append(f'{lineno}: {line.strip()}')
+          if outside:
+              print(f'FAIL: {len(outside)} fclose calls outside FilePtr:')
+              for o in outside: print(f'  {o}')
+              raise SystemExit(1)
+          print('PASS: all fclose calls inside FilePtr RAII wrapper')
+          PY
           echo "=== Check 6: No CHECKED_WRITE in int-returning run functions ==="
           python3 - <<'PY'
           from pathlib import Path
@@ -416,9 +433,16 @@ jobs:
             echo "FAIL: checkpoint layer_idx validation missing"; exit 1
           fi
           echo "PASS"
-          echo "=== Check 13: CPU worker error paths notify GPU thread ==="
-          if ! grep -c "cv_gpu.notify_one" tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "[8-9]"; then
-            echo "FAIL: not enough cv_gpu.notify_one() calls (expected >=8)"; exit 1
+          echo "=== Check 13: producer-consumer pipeline error notification ==="
+          # The batch tool uses a producer-consumer pipeline where a prefetch
+          # thread (producer) reads prompts + assignments while the main thread
+          # (consumer) does GPU decode. Error paths must notify the consumer via
+          # the condition variable to avoid deadlock.
+          if ! grep -q "pfq.cv.notify" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: producer-consumer cv notification missing"; exit 1
+          fi
+          if ! grep -q "pfq.producer_done" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: producer_done flag missing"; exit 1
           fi
           echo "PASS"
           echo "OK: All audit fix patterns verified"
