@@ -371,7 +371,7 @@ jobs:
                   brace_depth = 0
               if in_fileptr:
                   brace_depth += line.count('{') - line.count('}')
-                  if brace_depth <= 0 and '{' in line:
+                  if brace_depth <= 0:
                       in_fileptr = False
               elif 'fclose' in line and not stripped.startswith(('//', '*', '/*')):
                   outside.append(f'{lineno}: {line.strip()}')
