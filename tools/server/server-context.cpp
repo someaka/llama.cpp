@@ -2399,6 +2399,29 @@ private:
             return;
         }
 
+        // Response size guard for pool=none: returns n_tokens * n_embd * n_layers
+        // floats as JSON. Without a cap, a single request with long input + all
+        // layers can exhaust server memory (DoS vector).
+        // 100 MB float data limit (~1.5 GB JSON after serialization).
+        // Hoisted before the layer loop since it doesn't depend on individual layer.
+        if (slot.task->params.hidden_pool == "none") {
+            const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
+            size_t total_all_layers = (size_t)n_hs_tokens * (size_t)n_embd * (size_t)layers.size();
+            if (total_all_layers > MAX_POOL_NONE_FLOATS) {
+                auto err = std::make_unique<server_task_result_error>();
+                err->id    = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_INVALID_REQUEST;
+                err->err_msg = "pool=none response too large: " +
+                               std::to_string(total_all_layers) + " floats across " +
+                               std::to_string(layers.size()) + " layers (limit: " +
+                               std::to_string(MAX_POOL_NONE_FLOATS) +
+                               "). Reduce input length or number of layers.";
+                queue_results.send(std::move(err));
+                return;
+            }
+        }
+
         for (int layer : layers) {
             if (layer < 0 || layer >= n_layer) {
                 auto err = std::make_unique<server_task_result_error>();
@@ -2426,28 +2449,8 @@ private:
 
             if (slot.task->params.hidden_pool == "none") {
                 // Per-token: return all n_hs_tokens vectors (flattened)
+                // Size guard is hoisted before the layer loop (above).
                 size_t total = (size_t)n_hs_tokens * (size_t)n_embd;
-
-                // Response size guard: pool=none returns n_tokens * n_embd * layers
-                // floats as JSON. Without a cap, a single request with long input +
-                // all layers can exhaust server memory (DoS vector).
-                // 100 MB float data limit (~1.5 GB JSON after serialization).
-                const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
-                size_t total_all_layers = total * (size_t)layers.size();
-                if (total_all_layers > MAX_POOL_NONE_FLOATS) {
-                    auto err = std::make_unique<server_task_result_error>();
-                    err->id    = slot.task->id;
-                    err->index = slot.task->index;
-                    err->err_type = ERROR_TYPE_INVALID_REQUEST;
-                    err->err_msg = "pool=none response too large: " +
-                                   std::to_string(total_all_layers) + " floats across " +
-                                   std::to_string(layers.size()) + " layers (limit: " +
-                                   std::to_string(MAX_POOL_NONE_FLOATS) +
-                                   "). Reduce input length or number of layers.";
-                    queue_results.send(std::move(err));
-                    return;
-                }
-
                 vec.assign(hs, hs + total);
             } else if (slot.task->params.hidden_pool == "skip_mean") {
                 // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
