@@ -53,6 +53,9 @@ llama-hs-extract-batch --self-test
 - `--checkpoint-every N` - Save checkpoint every N prompts (default: 10000)
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
+- `--save-per-story` - Also write per-story vectors to `<output>.stories.bin` (STR1 format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record)
+- `--batch-size N` - Pack N prompts per decode call (default: 1, no batching)
+- `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
 
 **Layer specification:**
 - `all` - Extract from all layers (default)

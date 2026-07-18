@@ -991,14 +991,14 @@ float * llama_context::get_hidden_state(int32_t layer) {
         return nullptr;
     }
 
-    GGML_ASSERT(n_hidden_layers > 0 && "n_hidden_layers not set — hidden state extraction was not initialized");
+    GGML_ASSERT(n_hidden_layers > 0 && "n_hidden_layers not set  -  hidden state extraction was not initialized");
 
     if (layer < 0 || layer >= n_hidden_layers) {
         return nullptr;
     }
 
     const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
-    GGML_ASSERT(offset < hidden_state_buf.size() && "hidden state offset exceeds buffer — internal state corruption");
+    GGML_ASSERT(offset < hidden_state_buf.size() && "hidden state offset exceeds buffer  -  internal state corruption");
 
     return hidden_state_buf.data() + offset;
 }

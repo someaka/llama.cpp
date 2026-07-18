@@ -7,8 +7,8 @@ hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
 
 - **Branch:** `main` (work directly on main, no feature branches)
 - **Upstream tracking:** 0 commits behind upstream `master`
-- **Unique commits:** 159 (including merges)
-- **Modified files:** 27 (3,679 insertions, 36 deletions)
+- **Unique commits:** 107 (excluding merges)
+- **Modified files:** 49 (5,310 insertions, 163 deletions)
 
 ## Features
 
@@ -16,12 +16,12 @@ hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
 
 Adds per-layer residual stream activation extraction to the llama.cpp compute graph:
 
-- **`llama_context_params.extract_hidden_states`** — flag to enable extraction
-- **`llama_set_extract_hidden_states()`** — runtime toggle
-- **`llama_get_hidden_state(ctx, layer)`** — get all tokens for a layer
-- **`llama_get_hidden_state_ith(ctx, layer, i)`** — get specific token (supports negative indexing)
-- **`llama_get_hidden_state_n_tokens(ctx)`** — token count
-- **`llama_get_hidden_states_batch()`** — batch-get multiple layers in one call
+- **`llama_context_params.extract_hidden_states`**  -  flag to enable extraction
+- **`llama_set_extract_hidden_states()`**  -  runtime toggle
+- **`llama_get_hidden_state(ctx, layer)`**  -  get all tokens for a layer
+- **`llama_get_hidden_state_ith(ctx, layer, i)`**  -  get specific token (supports negative indexing)
+- **`llama_get_hidden_state_n_tokens(ctx)`**  -  token count
+- **`llama_get_hidden_states_batch()`**  -  batch-get multiple layers in one call
 
 Model patches push the residual stream output of each decoder layer into
 `t_hidden_layers` when extraction is enabled. Supported architectures:
@@ -34,7 +34,7 @@ Model patches push the residual stream output of each decoder layer into
 
 When `extract_hidden_states` is true and no samplers/embeddings are needed,
 the lm_head output projection is pruned from the compute graph via
-`ggml_set_output(t_logits)` skipping. This gives ~1.89× speedup for
+`ggml_set_output(t_logits)` skipping. This gives ~1.89x speedup for
 extraction-only workloads.
 
 ### 3. `/hidden-states` HTTP Endpoint (Server)
@@ -59,9 +59,9 @@ Production tool for processing thousands of prompts:
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
 - Binary I/O format (CRD2)
-- Self-test mode (9 tests, no model required)
+- Self-test mode (17 tests, no model required)
 - `--profile` flag for per-step timing analysis
-- Three-tier error severity (hard error / visible clamp / silent skip)
+- Hard-error semantics on all range violations (no silent clamping, no graceful degradation)
 
 ### 5. Single-Prompt CLI (`hs-extract`)
 
@@ -74,16 +74,16 @@ Flat position-count table replacing `std::map` for O(1) lookup.
 ## CI
 
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
-- Builds with `GGML_NATIVE=ON` (required — CI runners have AVX)
-- Runs self-test (9/9)
+- Builds with `GGML_NATIVE=ON` (required - CI runners have AVX)
+- Runs self-test (17/17)
 - Runs multi-ubatch pool=none integration test
-- 11 structural integrity checks (RAII wrappers, no raw fclose, checkpoint bounds)
+- 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2, no raw fclose, checkpoint bounds, producer-consumer pipeline)
 
-GPU verification (CUDA + Vulkan) is manual — see CI header comments for commands.
+GPU verification (CUDA + Vulkan) is manual  -  see CI header comments for commands.
 
 ## Documentation
 
-- `tools/hs-extract-batch/README.md` — batch extraction tool
-- `tools/hs-extract/README.md` — single-prompt tool
-- `tools/server/README.md` — `/hidden-states` endpoint (section 901+)
-- `docs/history/` — historical audit reports
+- `tools/hs-extract-batch/README.md`  -  batch extraction tool
+- `tools/hs-extract/README.md`  -  single-prompt tool
+- `tools/server/README.md`  -  `/hidden-states` endpoint (section 901+)
+- `docs/history/`  -  historical audit reports

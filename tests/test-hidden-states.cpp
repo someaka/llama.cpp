@@ -5,49 +5,12 @@
 #include <cmath>
 #include <vector>
 
-// -- RAII Wrappers (same pattern as hs-extract tools) -------------------
+// RAII wrappers (LlamaBackend, LlamaModel, LlamaContext, LlamaBatch) are in
+// common/llama-raii.h (shared with hs-extract tools and examples).
+#include "llama-raii.h"
 
-struct LlamaBackend {
-    LlamaBackend() { llama_backend_init(); }
-    ~LlamaBackend() { llama_backend_free(); }
-    LlamaBackend(const LlamaBackend &) = delete;
-    LlamaBackend & operator=(const LlamaBackend &) = delete;
-};
-
-struct LlamaModel {
-    llama_model * model;
-    LlamaModel() : model(nullptr) {}
-    LlamaModel(llama_model * m) : model(m) {}
-    ~LlamaModel() { if (model) llama_model_free(model); }
-    LlamaModel(const LlamaModel &) = delete;
-    LlamaModel & operator=(const LlamaModel &) = delete;
-    operator llama_model *() const { return model; }
-    explicit operator bool() const { return model != nullptr; }
-};
-
-struct LlamaContext {
-    llama_context * ctx;
-    LlamaContext() : ctx(nullptr) {}
-    LlamaContext(llama_context * c) : ctx(c) {}
-    ~LlamaContext() { if (ctx) llama_free(ctx); }
-    LlamaContext(const LlamaContext &) = delete;
-    LlamaContext & operator=(const LlamaContext &) = delete;
-    operator llama_context *() const { return ctx; }
-    explicit operator bool() const { return ctx != nullptr; }
-};
-
-struct LlamaBatchRAII {
-    llama_batch batch;
-    bool initialized;
-    LlamaBatchRAII() : batch{}, initialized(false) {}
-    void init(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
-        batch = llama_batch_init(n_tokens, embd, n_seq_max);
-        initialized = true;
-    }
-    ~LlamaBatchRAII() { if (initialized) llama_batch_free(batch); }
-    LlamaBatchRAII(const LlamaBatchRAII &) = delete;
-    LlamaBatchRAII & operator=(const LlamaBatchRAII &) = delete;
-};
+// Backward compat alias: this test uses LlamaBatchRAII instead of LlamaBatch.
+using LlamaBatchRAII = LlamaBatch;
 
 int main(int argc, char ** argv) {
     if (argc < 2) {

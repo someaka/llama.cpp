@@ -1,9 +1,25 @@
 # NEXT-PASS-PLAN: llama.cpp Fork
 
-**Date:** 2026-06-30 (last updated 2026-07-16)  
+**Date:** 2026-06-30 (last updated 2026-07-18)  
 **Session:** Full architectural audit + fixes
 
-## Items Resolved
+## Items Resolved (2026-07-18 session)
+
+| ID | Description | Verification |
+|----|-------------|-------------|
+| M1 | Raw mode empty-line counting inconsistency (skip in both passes) | Self-test 15/15 -> 17/17 PASS |
+| M2 | Async pipeline backpressure (bounded queue, MAX_PREFETCH=64) | Compiles, self-test PASS |
+| M3 | Server pool=none response size limit (100MB cap, DoS prevention) | Compiles (server build in progress) |
+| L1 | Checkpoint float precision loss (v2: write sum directly, no mean roundtrip) | Self-test 17 (checkpoint roundtrip) PASS |
+| L2 | Upfront prompt count validation (assignments vs prompts.txt) | Compiles, syntax check PASS |
+| L4 | RAII wrappers extracted to common/llama-raii.h (shared by 3 files) | All 3 files compile, self-test PASS |
+| I1 | Self-test coverage: added key roundtrip (test 16) + checkpoint roundtrip (test 17) | 17/17 PASS |
+| NA1 | Non-ASCII: 134 em-dash/box-drawing chars removed from fork files | grep -cP '[^\x00-\x7F]' = 0 for all fork files |
+| NA2 | Trailing whitespace removed from hs-extract-batch.cpp | grep -cP ' $' = 0 |
+| NA3 | FORK_CHANGES.md updated: 9->17 tests, 11->13 CI checks, 107 commits, 49 files | Verified against actual |
+| NA4 | README.md: added --save-per-story, --batch-size, --profile flags | Matches print_usage |
+
+## Items Resolved (prior sessions)
 
 | ID | Description | Verification |
 |----|-------------|-------------|

@@ -13,36 +13,8 @@
 #include <iostream>
 #include <fstream>
 
-// -- RAII Wrappers for Automatic Resource Cleanup -----------------------
-
-struct LlamaModel {
-    llama_model * model;
-    LlamaModel() : model(nullptr) {}
-    LlamaModel(llama_model * m) : model(m) {}
-    ~LlamaModel() { if (model) llama_model_free(model); }
-    LlamaModel(const LlamaModel &) = delete;
-    LlamaModel & operator=(const LlamaModel &) = delete;
-    operator llama_model *() const { return model; }
-    explicit operator bool() const { return model != nullptr; }
-};
-
-struct LlamaContext {
-    llama_context * ctx;
-    LlamaContext() : ctx(nullptr) {}
-    LlamaContext(llama_context * c) : ctx(c) {}
-    ~LlamaContext() { if (ctx) llama_free(ctx); }
-    LlamaContext(const LlamaContext &) = delete;
-    LlamaContext & operator=(const LlamaContext &) = delete;
-    operator llama_context *() const { return ctx; }
-    explicit operator bool() const { return ctx != nullptr; }
-};
-
-struct LlamaBackend {
-    LlamaBackend() { llama_backend_init(); }
-    ~LlamaBackend() { llama_backend_free(); }
-    LlamaBackend(const LlamaBackend &) = delete;
-    LlamaBackend & operator=(const LlamaBackend &) = delete;
-};
+// RAII wrappers are in common/llama-raii.h (shared with hs-extract-batch, tests)
+#include "llama-raii.h"
 
 static void print_usage(const char * prog) {
     printf("usage: %s [options]\n\n", prog);

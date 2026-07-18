@@ -1,7 +1,7 @@
 name: Fork CI
 
 # NOTE: This CI runs on CPU-only runners (ubuntu-latest, -ngl 0).
-# GPU verification (CUDA + Vulkan) is NOT automated — it must be done
+# GPU verification (CUDA + Vulkan) is NOT automated  -  it must be done
 # manually on the respective machines after merging:
 #
 #   CUDA (A's machine, RTX 3090):
@@ -443,6 +443,47 @@ jobs:
           fi
           if ! grep -q "pfq.producer_done" tools/hs-extract-batch/hs-extract-batch.cpp; then
             echo "FAIL: producer_done flag missing"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 14: shared RAII header used by all fork tools ==="
+          # RAII wrappers (LlamaBackend, LlamaModel, LlamaContext, LlamaBatch)
+          # are extracted to common/llama-raii.h. All fork tools must include it
+          # instead of defining their own copies.
+          if [ ! -f common/llama-raii.h ]; then
+            echo "FAIL: common/llama-raii.h missing"; exit 1
+          fi
+          for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp tests/test-hidden-states.cpp; do
+            if ! grep -q 'llama-raii.h' "$f"; then
+              echo "FAIL: $f does not include llama-raii.h"; exit 1
+            fi
+          done
+          echo "PASS"
+          echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
+          # The producer-consumer queue must have backpressure to prevent
+          # unbounded memory growth on 200K-prompt runs.
+          if ! grep -q "cv_space" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: backpressure cv_space missing"; exit 1
+          fi
+          if ! grep -q "MAX_PREFETCH" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: MAX_PREFETCH bound missing"; exit 1
+          fi
+          if ! grep -q "STOP_PRODUCER_AND_JOIN" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: STOP_PRODUCER_AND_JOIN macro missing"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 16: server pool=none response size limit ==="
+          # The /hidden-states endpoint must cap pool=none response size to
+          # prevent DoS via enormous JSON responses.
+          if ! grep -q "MAX_POOL_NONE_FLOATS" tools/server/server-context.cpp; then
+            echo "FAIL: pool=none response size limit missing"; exit 1
+          fi
+          echo "PASS"
+          echo "=== Check 17: checkpoint version 2 (sum-based, no precision loss) ==="
+          if ! grep -q "CHECKPOINT_VERSION = 2" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: checkpoint version not bumped to 2"; exit 1
+          fi
+          if ! grep -q "write_sum" tools/hs-extract-batch/hs-extract-batch.cpp; then
+            echo "FAIL: write_sum parameter missing from _write_accumulator_to_file"; exit 1
           fi
           echo "PASS"
           echo "OK: All audit fix patterns verified"
