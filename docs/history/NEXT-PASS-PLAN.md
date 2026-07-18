@@ -19,6 +19,14 @@
 | NA3 | FORK_CHANGES.md updated: 9->17 tests, 11->13 CI checks, 107 commits, 49 files | Verified against actual |
 | NA4 | README.md: added --save-per-story, --batch-size, --profile flags | Matches print_usage |
 
+## Items Resolved (2026-07-18 second pass)
+
+| ID | Description | Verification |
+|----|-------------|-------------|
+| SP1 | Checkpoint v1 backward compatibility (v1 checkpoints accepted, reader branches on version) | Code review, v1 checkpoint file created and verified |
+| SP2 | Server pool=none guard hoisted before layer loop (was checked redundantly per-layer) | Compiles, self-test PASS |
+| SP3 | Redundant producer_done double-set in pp.error handler removed (macro handles it) | Code review, compiles clean |
+
 ## Items Resolved (prior sessions)
 
 | ID | Description | Verification |
