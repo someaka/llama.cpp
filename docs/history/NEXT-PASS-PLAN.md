@@ -76,7 +76,7 @@
 
 Commands run:
 - `cmake --build build-vulkan --target llama-hs-extract-batch test-hidden-states test-hidden-states-c` -> SUCCESS (0 warnings)
-- `build-vulkan/bin/llama-hs-extract-batch --self-test` -> 15/15 PASS
+- `build-vulkan/bin/llama-hs-extract-batch --self-test` -> 17/17 PASS
 - `build-vulkan/bin/llama-hs-extract --help` -> Correct output
 - CI verification checks (13/13) -> ALL PASS
 
