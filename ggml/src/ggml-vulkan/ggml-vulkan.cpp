@@ -8499,7 +8499,7 @@ static void ggml_vk_buffer_write(vk_buffer& dst, size_t offset, const void * src
 }
 
 static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
-    VK_LOG_DEBUG("ggml_vk_buffer_read_2d_async(offset=" << offset << ", width=" << width << ", height=" << height << ")");
+    VK_LOG_DEBUG("ggml_vk_buffer_read_2d_async(offset=" << offset << ", width=" << width << ", height=" << height << ", sync_staging=" << sync_staging << ")");
     GGML_ASSERT(width > 0);
     GGML_ASSERT(height > 0);
     GGML_ASSERT(src != nullptr);

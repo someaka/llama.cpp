@@ -2103,9 +2103,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     GGML_ASSERT(backend_res != nullptr);
 
                     // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
+                    // All quantities in bytes for consistency with copy_size and the overflow check.
                     // Cast to size_t to prevent integer overflow when il * n_tokens_all * n_embd_out > 2^31
-                    const size_t dst_offset = (size_t)il * n_tokens_all * n_embd_out
-                                            + (size_t)n_tokens_prev * n_embd_out;
+                    const size_t dst_offset = (size_t)il * n_tokens_all * n_embd_out * sizeof(float)
+                                            + (size_t)n_tokens_prev * n_embd_out * sizeof(float);
                     const size_t copy_size = (size_t)n_tokens * n_embd_out * sizeof(float);
                     if (dst_offset + copy_size > hidden_state_buf.size() * sizeof(float)) {
                         LLAMA_LOG_ERROR("%s: hidden state copy would overflow buffer "
@@ -2116,7 +2117,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         return -1;
                     }
                     float * dst = hidden_state_buf.data() + dst_offset / sizeof(float);
-                    ggml_backend_tensor_get_async(backend_res, t, dst, 0, copy_size);
+                    ggml_backend_tensor_get(t, dst, 0, copy_size);
                 }
 
                 // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
