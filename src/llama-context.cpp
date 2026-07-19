@@ -2132,10 +2132,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 }
 
                 // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
-                // The async copies above (cudaMemcpyAsync) are non-blocking. Without this barrier,
-                // the next mctx->next() call starts computing on the same GPU buffers that the
-                // previous iteration's async copies are still reading from, causing CUDA illegal
-                // memory access errors (especially on E4B with larger tensor footprints).
+                // Although ggml_backend_tensor_get is synchronous, the underlying compute graph
+                // may have pending operations on the same GPU buffers. Without this barrier,
+                // the next mctx->next() call starts computing on buffers that the previous
+                // iteration's tensor_get is still reading from, causing illegal memory access
+                // errors (especially on E4B with larger tensor footprints).
                 ggml_backend_sched_synchronize(sched.get());
             } else {
                 // This model architecture does not populate t_hidden_layers.
@@ -4044,6 +4045,16 @@ int32_t llama_get_hidden_states_batch(
 
     if (ctx->get_hidden_state_n_tokens() == 0) {
         return -1;
+    }
+
+    // Pre-validate all layer indices before filling to avoid partial-success
+    const int32_t n_model_layers = llama_model_n_layer(&ctx->get_model());
+    for (int32_t i = 0; i < n_layers; i++) {
+        if (layers[i] < 0 || layers[i] >= n_model_layers) {
+            LLAMA_LOG_ERROR("%s: layer %d out of range [0, %d)\n",
+                            __func__, layers[i], n_model_layers);
+            return -1;
+        }
     }
 
     for (int32_t i = 0; i < n_layers; i++) {
