@@ -1,210 +1,105 @@
+// Test if warmup + dynamic extract_hidden_states toggle causes value differences
+// Reproduces the server's exact initialization path
+
 #include "common.h"
 #include "llama.h"
-#include "build-info.h"
-#include "llama-raii.h"
-
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <cmath>
+#include <cstdlib>
 #include <vector>
 
-// Diagnostic tool: test if batch construction method affects hidden state values
-// Compares llama_batch_get_one() (CLI path) vs explicit batch.add() (server path)
-
 int main(int argc, char ** argv) {
-    const char * model_path = nullptr;
-    const char * prompt_text = "hello";
-    int n_gpu_layers = 0;
-
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "-m" || arg == "--model") {
-            if (++i >= argc) { fprintf(stderr, "error: --model requires an argument\n"); return 1; }
-            model_path = argv[i];
-        } else if (arg == "-p" || arg == "--prompt") {
-            if (++i >= argc) { fprintf(stderr, "error: --prompt requires an argument\n"); return 1; }
-            prompt_text = argv[i];
-        } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
-            if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
-            char *endptr;
-            long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "error: --n-gpu-layers value must be a number\n"); return 1; }
-            n_gpu_layers = (int) val;
-        }
-    }
-
-    if (!model_path) {
-        fprintf(stderr, "usage: %s -m model.gguf [-p prompt] [-ngl N]\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model> <prompt> [mode]\n", argv[0]);
+        fprintf(stderr, "  mode=0: No warmup, extract_hidden_states=true from start (CLI style)\n");
+        fprintf(stderr, "  mode=1: Warmup first, then toggle extract_hidden_states (server style)\n");
         return 1;
     }
 
-    LlamaBackend backend;
+    const char * model_path = argv[1];
+    const char * prompt = argv[2];
+    int mode = argc > 3 ? atoi(argv[3]) : 0;
 
-    llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = n_gpu_layers;
+    llama_backend_init();
 
-    LlamaModel model(llama_model_load_from_file(model_path, model_params));
-    if (!model) {
-        fprintf(stderr, "error: failed to load model '%s'\n", model_path);
-        return 1;
-    }
-
-    const int n_layers = llama_model_n_layer(model);
-    const int n_embd = llama_model_n_embd_out(model);
-
-    llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 2048;
-    ctx_params.n_batch = 2048;
-    ctx_params.extract_hidden_states = true;
-    ctx_params.no_perf = true;
+    llama_model_params mparams = llama_model_default_params();
+    mparams.n_gpu_layers = 100;
+    llama_model * model = llama_model_load_from_file(model_path, mparams);
+    if (!model) { fprintf(stderr, "Failed to load model\n"); return 1; }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    const bool add_bos = llama_vocab_get_add_bos(vocab);
-    std::string prompt(prompt_text);
-    std::vector<llama_token> tokens = common_tokenize(vocab, prompt, add_bos, true);
+    std::vector<llama_token> tokens;
+    tokens.resize(strlen(prompt) + 16);
+    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), tokens.size(), true, true);
+    tokens.resize(n_tokens);
 
-    fprintf(stderr, "Tokenized '%s' into %zu tokens\n", prompt_text, tokens.size());
+    llama_context_params cparams = llama_context_default_params();
+    cparams.n_ctx = 2048;
+    cparams.n_batch = 2048;
+    cparams.n_ubatch = 512;
 
-    // Test 1: CLI-style batch (llama_batch_get_one)
-    fprintf(stderr, "\n=== Test 1: CLI-style batch (llama_batch_get_one) ===\n");
-    {
-        LlamaContext ctx(llama_init_from_model(model, ctx_params));
-        if (!ctx) {
-            fprintf(stderr, "error: failed to create context\n");
-            return 1;
-        }
+    if (mode == 0) {
+        // CLI style: extract_hidden_states=true from creation
+        cparams.extract_hidden_states = true;
+        cparams.no_perf = true;
+        llama_context * ctx = llama_init_from_model(model, cparams);
+        if (!ctx) { fprintf(stderr, "Failed to init context\n"); return 1; }
 
-        llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
-        int32_t ret = llama_decode(ctx, batch);
-        if (ret != 0) {
-            fprintf(stderr, "error: llama_decode failed with code %d\n", ret);
-            return 1;
-        }
-
+        llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
+        if (llama_decode(ctx, batch) != 0) { fprintf(stderr, "Decode failed\n"); return 1; }
         llama_synchronize(ctx);
 
-        int layer = (n_layers > 10) ? 10 : 0;
-        float * hs = llama_get_hidden_state(ctx, layer);
-        if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL\n");
-            return 1;
+        float * hs = llama_get_hidden_state(ctx, 10);
+        printf("Mode 0 (CLI) - Layer 10, first 5 values:\n");
+        for (int i = 0; i < 5; i++) printf("  [%d]: %.8f\n", i, hs[i]);
+
+        llama_free(ctx);
+    } else {
+        // Server style: extract_hidden_states=false at creation, warmup, then toggle
+        cparams.extract_hidden_states = false;
+        cparams.no_perf = true;
+        llama_context * ctx = llama_init_from_model(model, cparams);
+        if (!ctx) { fprintf(stderr, "Failed to init context\n"); return 1; }
+
+        // Warmup (server does this in common_init_from_params)
+        llama_token bos = llama_vocab_bos(vocab);
+        llama_token eos = llama_vocab_eos(vocab);
+        std::vector<llama_token> warmup_tokens;
+        if (bos != LLAMA_TOKEN_NULL) warmup_tokens.push_back(bos);
+        if (eos != LLAMA_TOKEN_NULL) warmup_tokens.push_back(eos);
+        if (!warmup_tokens.empty()) {
+            llama_batch wb = llama_batch_get_one(warmup_tokens.data(), warmup_tokens.size());
+            llama_decode(ctx, wb);
+            llama_synchronize(ctx);
+            fprintf(stderr, "Warmup done with %zu tokens\n", warmup_tokens.size());
         }
 
-        fprintf(stderr, "Layer %d, first 5 values: ", layer);
-        for (int i = 0; i < 5; i++) {
-            fprintf(stderr, "%.6f ", hs[i]);
-        }
-        fprintf(stderr, "\n");
-    }
+        // Toggle extract_hidden_states ON (server does this per-request)
+        llama_set_extract_hidden_states(ctx, true);
 
-    // Test 2: Server-style batch (explicit positions, seq_id=0, logits=false except last)
-    fprintf(stderr, "\n=== Test 2: Server-style batch (explicit pos, seq_id=0) ===\n");
-    {
-        LlamaContext ctx(llama_init_from_model(model, ctx_params));
-        if (!ctx) {
-            fprintf(stderr, "error: failed to create context\n");
-            return 1;
-        }
+        // Clear memory (our fix)
+        llama_memory_clear(llama_get_memory(ctx), true);
 
-        llama_batch batch = llama_batch_init((int32_t) tokens.size(), 0, 1);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            common_batch_add(batch, tokens[i], (llama_pos) i, {0}, (i == tokens.size() - 1));
-        }
-
-        int32_t ret = llama_decode(ctx, batch);
-        if (ret != 0) {
-            fprintf(stderr, "error: llama_decode failed with code %d\n", ret);
-            return 1;
-        }
-
+        // Decode the actual prompt
+        llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
+        if (llama_decode(ctx, batch) != 0) { fprintf(stderr, "Decode failed\n"); return 1; }
         llama_synchronize(ctx);
 
-        int layer = (n_layers > 10) ? 10 : 0;
-        float * hs = llama_get_hidden_state(ctx, layer);
+        float * hs = llama_get_hidden_state(ctx, 10);
         if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL\n");
-            return 1;
+            fprintf(stderr, "No hidden states available!\n");
+            // Try to diagnose
+            int32_t n_ht = llama_get_hidden_state_n_tokens(ctx);
+            fprintf(stderr, "n_hidden_tokens = %d\n", n_ht);
+        } else {
+            printf("Mode 1 (Server-style) - Layer 10, first 5 values:\n");
+            for (int i = 0; i < 5; i++) printf("  [%d]: %.8f\n", i, hs[i]);
         }
 
-        fprintf(stderr, "Layer %d, first 5 values: ", layer);
-        for (int i = 0; i < 5; i++) {
-            fprintf(stderr, "%.6f ", hs[i]);
-        }
-        fprintf(stderr, "\n");
+        llama_free(ctx);
     }
 
-    // Test 3: Server-style with seq_id=1 (simulate slot 1)
-    fprintf(stderr, "\n=== Test 3: Server-style batch (seq_id=1) ===\n");
-    {
-        LlamaContext ctx(llama_init_from_model(model, ctx_params));
-        if (!ctx) {
-            fprintf(stderr, "error: failed to create context\n");
-            return 1;
-        }
-
-        llama_batch batch = llama_batch_init((int32_t) tokens.size(), 0, 1);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            common_batch_add(batch, tokens[i], (llama_pos) i, {1}, (i == tokens.size() - 1));
-        }
-
-        int32_t ret = llama_decode(ctx, batch);
-        if (ret != 0) {
-            fprintf(stderr, "error: llama_decode failed with code %d\n", ret);
-            return 1;
-        }
-
-        llama_synchronize(ctx);
-
-        int layer = (n_layers > 10) ? 10 : 0;
-        float * hs = llama_get_hidden_state(ctx, layer);
-        if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL\n");
-            return 1;
-        }
-
-        fprintf(stderr, "Layer %d, first 5 values: ", layer);
-        for (int i = 0; i < 5; i++) {
-            fprintf(stderr, "%.6f ", hs[i]);
-        }
-        fprintf(stderr, "\n");
-    }
-
-    // Test 4: Server-style with seq_id=0, all tokens output (logits=true for all)
-    fprintf(stderr, "\n=== Test 4: Server-style batch (seq_id=0, all tokens output) ===\n");
-    {
-        LlamaContext ctx(llama_init_from_model(model, ctx_params));
-        if (!ctx) {
-            fprintf(stderr, "error: failed to create context\n");
-            return 1;
-        }
-
-        llama_batch batch = llama_batch_init((int32_t) tokens.size(), 0, 1);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            common_batch_add(batch, tokens[i], (llama_pos) i, {0}, true);
-        }
-
-        int32_t ret = llama_decode(ctx, batch);
-        if (ret != 0) {
-            fprintf(stderr, "error: llama_decode failed with code %d\n", ret);
-            return 1;
-        }
-
-        llama_synchronize(ctx);
-
-        int layer = (n_layers > 10) ? 10 : 0;
-        float * hs = llama_get_hidden_state(ctx, layer);
-        if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL\n");
-            return 1;
-        }
-
-        fprintf(stderr, "Layer %d, first 5 values: ", layer);
-        for (int i = 0; i < 5; i++) {
-            fprintf(stderr, "%.6f ", hs[i]);
-        }
-        fprintf(stderr, "\n");
-    }
-
+    llama_model_free(model);
+    llama_backend_free();
     return 0;
 }
