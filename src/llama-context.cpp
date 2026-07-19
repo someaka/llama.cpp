@@ -1231,7 +1231,18 @@ void llama_context::set_nextn_layer_offset(int32_t offset) {
 void llama_context::set_extract_hidden_states(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    if (cparams.extract_hidden_states == value) {
+        return;
+    }
+
     cparams.extract_hidden_states = value;
+
+    // Toggling extract_hidden_states changes the graph topology (adds/removes
+    // t_hidden_layers output tensors). The scheduler must re-reserve compute
+    // buffers to allocate space for these tensors. Without this, the graph
+    // compiled during warmup (with extract_hidden_states=false) is reused,
+    // and hidden state reads hit unallocated memory, producing incorrect values.
+    sched_need_reserve = true;
 
     // Clear stale data when extraction is disabled. Without this, a subsequent
     // call to llama_get_hidden_state() would return stale data from the
