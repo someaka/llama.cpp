@@ -1565,7 +1565,11 @@ private:
         }
 
         // find the slot that has at least n% prompt similarity
-        if (slot_prompt_similarity != 0.0f) {
+        // HIDDEN_STATES tasks must bypass LCP similarity: they require a fresh
+        // full forward pass to populate t_hidden_layers[], and reusing a slot
+        // with cached KV state skips the decode for matched tokens, producing
+        // stale/partial hidden states. Force LRU selection for these tasks.
+        if (slot_prompt_similarity != 0.0f && task.type != SERVER_TASK_TYPE_HIDDEN_STATES) {
             float sim_best = 0;
 
             for (server_slot & slot : slots) {
@@ -1815,6 +1819,16 @@ private:
         }
 
         slot.task = std::make_unique<const server_task>(std::move(task));
+
+        // For HIDDEN_STATES tasks, clear any leftover prompt tokens and KV cache
+        // from previous tasks on this slot. Hidden state extraction requires the
+        // forward pass to decode every token fresh. If the slot retains tokens
+        // from a prior request, the new tokens are decoded at wrong positions
+        // (pos_next() returns the old count), producing incorrect activations.
+        // This ensures position 0 start, matching the llama-hs-extract CLI path.
+        if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES && !slot.task->is_child()) {
+            slot.prompt_clear();
+        }
 
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
@@ -5236,6 +5250,13 @@ void server_routes::init_routes() {
                 server_task task = server_task(SERVER_TASK_TYPE_HIDDEN_STATES);
                 task.id = rd.get_new_id();
                 task.tokens = std::move(tokenized_prompts[i]);
+                // Disable prompt caching for hidden-states extraction. Cached tokens
+                // skip the forward pass, but t_hidden_layers[] is only populated for
+                // decoded tokens. With cache_prompt=true, repeated requests for the
+                // same text return stale/partial hidden states because the matched
+                // tokens are not re-decoded. Hidden-states requires a fresh full
+                // forward pass every time to produce correct, deterministic results.
+                task.params.cache_prompt = false;
                 task.params.hidden_layers = layers;
                 task.params.hidden_all_layers = all_layers;
                 task.params.hidden_normalize = normalize;

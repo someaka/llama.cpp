@@ -196,8 +196,16 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
-            case SERVER_TASK_TYPE_HIDDEN_STATES:
                 return true;
+            // SERVER_TASK_TYPE_HIDDEN_STATES does NOT need embeddings output.
+            // Hidden states are captured per-layer from t_hidden_layers[] tensors
+            // during the forward pass, independent of the embedding/logit output
+            // path. Setting need_embd()=true forces output_all=true in the batch
+            // allocator, which changes the graph structure (inp_out_ids row
+            // selection) and produces different hidden state values than the
+            // CLI path (llama-hs-extract). For consistency with the offline
+            // extraction pipeline, hidden-states must use the same graph shape
+            // as generation: output_all=false, last-token logits only.
             default:
                 return false;
         }
