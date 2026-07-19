@@ -2138,6 +2138,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // iteration's tensor_get is still reading from, causing illegal memory access
                 // errors (especially on E4B with larger tensor footprints).
                 ggml_backend_sched_synchronize(sched.get());
+                // Memory ordering contract: the release store on _hs_synced
+                // (below) publishes all buffer writes performed by this thread.
+                // Acquire-load readers in hs_synced() see the buffer contents.
             } else {
                 // This model architecture does not populate t_hidden_layers.
                 // Log the error and set n_hidden_tokens=0 so get_hidden_state()

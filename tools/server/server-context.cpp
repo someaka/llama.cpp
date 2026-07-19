@@ -1835,6 +1835,13 @@ private:
             // Synchronize first to ensure all GPU operations are complete, then clear
             // the entire memory to zero all recurrence state and match the CLI's
             // fresh-context behavior.
+            //
+            // Scope assumption: llama_memory_clear(true) zeros ALL sequences in this
+            // context's memory module. This is safe because HIDDEN_STATES tasks decode
+            // exclusively (the server processes one slot at a time for this task type),
+            // and each slot has its own llama_context with independent memory. If future
+            // changes introduce shared memory across slots, this must be replaced with
+            // per-sequence clearing.
             llama_synchronize(slot.ctx_tgt);
             slot.prompt_clear();
             llama_memory_clear(llama_get_memory(slot.ctx_tgt), true);
