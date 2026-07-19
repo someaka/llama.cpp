@@ -2083,8 +2083,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     }
                 }
 
-                // Accumulate token count across ubatches
-                n_hidden_tokens += n_tokens;
+                // Accumulate token count across ubatches with overflow check
+                {
+                    int64_t total_hidden = (int64_t)n_hidden_tokens + (int64_t)n_tokens;
+                    if (total_hidden > (int64_t)INT32_MAX) {
+                        LLAMA_LOG_ERROR("%s: hidden token count overflow (%lld tokens exceeds INT32_MAX)\n",
+                                        __func__, (long long)total_hidden);
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    n_hidden_tokens = (int32_t)total_hidden;
+                }
 
                 // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
                 for (int32_t il = 0; il < n_layers; il++) {
@@ -2095,10 +2104,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                     // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
                     // Cast to size_t to prevent integer overflow when il * n_tokens_all * n_embd_out > 2^31
-                    float * dst = hidden_state_buf.data()
-                                + (size_t)il * n_tokens_all * n_embd_out
-                                + (size_t)n_tokens_prev * n_embd_out;
-                    ggml_backend_tensor_get_async(backend_res, t, dst, 0, n_tokens * n_embd_out * sizeof(float));
+                    const size_t dst_offset = (size_t)il * n_tokens_all * n_embd_out
+                                            + (size_t)n_tokens_prev * n_embd_out;
+                    const size_t copy_size = (size_t)n_tokens * n_embd_out * sizeof(float);
+                    if (dst_offset + copy_size > hidden_state_buf.size() * sizeof(float)) {
+                        LLAMA_LOG_ERROR("%s: hidden state copy would overflow buffer "
+                                        "(offset=%zu, size=%zu, buf_size=%zu)\n",
+                                        __func__, dst_offset, copy_size,
+                                        hidden_state_buf.size() * sizeof(float));
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    float * dst = hidden_state_buf.data() + dst_offset / sizeof(float);
+                    ggml_backend_tensor_get_async(backend_res, t, dst, 0, copy_size);
                 }
 
                 // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
