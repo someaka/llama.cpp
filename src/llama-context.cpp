@@ -2106,6 +2106,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     n_hidden_tokens = (int32_t)total_hidden;
                 }
 
+                // CRITICAL: Synchronize the compute backend BEFORE reading hidden states.
+                // The compute graph runs on the backend's internal stream (cuda_ctx->stream()),
+                // but ggml_backend_tensor_get() uses the buffer interface which dispatches on
+                // cudaStreamPerThread — a different CUDA stream. Without this sync, the memcpy
+                // reads stale/zero data before the compute stream finishes writing.
+                // (Vulkan uses a single queue so this race is Vulkan-immune.)
+                ggml_backend_sched_synchronize(sched.get());
+
                 // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
