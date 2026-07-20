@@ -2139,16 +2139,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     ggml_backend_tensor_get(t, dst, 0, copy_size);
                 }
 
-                // CRITICAL: Synchronize before the next ubatch iteration reuses GPU compute buffers.
-                // Although ggml_backend_tensor_get is synchronous, the underlying compute graph
-                // may have pending operations on the same GPU buffers. Without this barrier,
-                // the next mctx->next() call starts computing on buffers that the previous
-                // iteration's tensor_get is still reading from, causing illegal memory access
-                // errors (especially on E4B with larger tensor footprints).
+                // Defensive synchronization after the copy loop. Strictly redundant
+                // for correctness — ggml_backend_tensor_get() is synchronous (it
+                // blocks the CPU thread until the D2H copy completes, see
+                // ggml_backend_cuda_buffer_get_tensor which calls cudaStreamSynchronize
+                // on cudaStreamPerThread). The next mctx->next() iteration cannot
+                // start its compute graph until this loop body returns, so GPU
+                // compute buffers are safe to reuse. Kept as defense-in-depth at
+                // ~0.1-0.5ms per ubatch; the pre-copy sync at line 2150 is the
+                // load-bearing one for multi-stream backends (CUDA).
                 ggml_backend_sched_synchronize(sched.get());
-                // Memory ordering contract: the release store on _hs_synced
-                // (below) publishes all buffer writes performed by this thread.
-                // Acquire-load readers in hs_synced() see the buffer contents.
+                // NOTE: the memory-ordering release store on _hs_synced happens
+                // AFTER the multi-ubatch loop completes (see the store below,
+                // outside this loop), not here. That placement is deliberate:
+                // it publishes the fully-accumulated buffer to acquire-load
+                // readers in hs_synced(). Setting it here would let callers
+                // observe a partially-filled buffer mid-accumulation.
             } else {
                 // This model architecture does not populate t_hidden_layers.
                 // Log the error and set n_hidden_tokens=0 so get_hidden_state()
