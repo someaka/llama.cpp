@@ -1789,6 +1789,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
         llama_sampler_backend_begin(entry.second);
     }
 
+    // Pre-allocate hidden state buffer for all tokens if extraction enabled
+    if (cparams.extract_hidden_states) {
+        const uint32_t n_embd_out = hparams.n_embd_out();
+        const int32_t n_layers = (int32_t) hparams.n_layer();
+        n_hidden_layers = n_layers;  // P4.1: Store explicit layer count
+        const size_t total_size = (size_t)n_layers * n_tokens_all * n_embd_out;
+        hidden_state_buf.resize(total_size);
+        std::fill(hidden_state_buf.begin(), hidden_state_buf.end(), 0.0f);
+        n_hidden_tokens = 0;  // Will accumulate across ubatches
+        // Mark not-synced for this decode pass. Symmetric with
+        // set_extract_hidden_states(): without this, _hs_synced retains its
+        // stale `true` from the previous decode until the ubatch loop completes
+        // (store at the end of decode()), so an async reader of hs_synced()
+        // could observe "synced" while the buffer is mid-refill. The release
+        // store at the end of decode() republishes it once accumulation is done.
+        _hs_synced.store(false, std::memory_order_release);
+    }
+
+
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
