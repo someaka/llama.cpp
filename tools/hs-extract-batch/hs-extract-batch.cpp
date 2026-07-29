@@ -38,6 +38,9 @@
 #include <unordered_map>
 #include <mutex>
 #include <condition_variable>
+#ifndef _WIN32
+#include <unistd.h>  // fsync — durability before rename (POSIX)
+#endif
 #include <queue>
 #include <atomic>
 
@@ -83,6 +86,15 @@ struct FilePtr {
     operator FILE*() const { return fp; }
     explicit operator bool() const { return fp != nullptr; }
     void reset() { if (fp) { fclose(fp); fp = nullptr; } }
+#ifndef _WIN32
+    // Flush + fsync to guarantee data reaches durable storage before a rename.
+    // fflush alone only pushes libc buffers to the kernel; fsync forces the
+    // kernel to write them to disk. Without this, a power loss between rename()
+    // and kernel writeback can leave the renamed file containing zeros.
+    void sync() { if (fp) { fflush(fp); fsync(fileno(fp)); } }
+#else
+    void sync() { if (fp) { fflush(fp); _commit(_fileno(fp)); } }
+#endif
 };
 
 // RAII wrappers (LlamaModel, LlamaContext, LlamaBackend, LlamaBatch) are in
@@ -334,6 +346,14 @@ static Args parse_args(int argc, char** argv) {
     // --self-test needs no model or prompts -- skip positional validation
     if (args.self_test) {
         return args;
+    }
+
+    // --mean is only consumed in --raw mode; run_batch ignores it. Reject the
+    // combination so the user gets a clear error instead of silently receiving
+    // batch output without mean pooling.
+    if (args.batch_mode && args.mean_mode) {
+        fprintf(stderr, "Error: --mean is not supported with --batch (it only applies to --raw mode)\n");
+        exit(1);
     }
 
     // --batch mode has its own positional layout: [model] [prompts] [layers] [output]
@@ -1166,7 +1186,7 @@ static bool write_batch_output(
     }
     bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
     if (ok) {
-        fflush(out);
+        out.sync();  // flush + fsync to durable storage before rename
         out.reset();  // close file before rename
         if (rename(temp_path.c_str(), output_path) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
@@ -1205,7 +1225,7 @@ static bool write_checkpoint(
     CHECKED_WRITE(&n_iterated, sizeof(int32_t), 1, f);
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (ok) {
-        fflush(f);  // ensure data is written
+        f.sync();  // flush + fsync to durable storage before rename
         f.reset();  // close file before rename
         // Atomic rename: temp -> final
         if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
@@ -2104,7 +2124,7 @@ static int run_batch(const Args& args) {
     // Per-story sidecar: close the temp file and atomically rename to the final
     // path now that the run fully succeeded.
     if (stories_closer) {
-        fflush(stories_closer.fp);
+        stories_closer.sync();  // flush + fsync to durable storage before rename
         stories_closer.reset();  // close before rename
         if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",
