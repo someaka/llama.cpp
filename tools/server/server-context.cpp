@@ -2501,7 +2501,10 @@ private:
                 int32_t count = n_hs_tokens - start;
                 vec.resize(n_embd, 0.0f);
                 for (int32_t t = start; t < n_hs_tokens; t++) {
-                    const float * tok = hs + t * n_embd;
+                    // size_t cast: t*n_embd is computed in int32 and overflows for
+                    // large ctx·embd (the pool=none path at :2492 already casts;
+                    // this path must match or it reads from a wrapped pointer).
+                    const float * tok = hs + (size_t)t * n_embd;
                     CR_SIMD
                     for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
                 }
@@ -2510,8 +2513,8 @@ private:
                 for (int d = 0; d < n_embd; d++) vec[d] *= inv;
             } else {
                 // Default: last token's hidden state
-                vec.assign(hs + (n_hs_tokens - 1) * n_embd,
-                           hs + n_hs_tokens * n_embd);
+                vec.assign(hs + (size_t)(n_hs_tokens - 1) * n_embd,
+                           hs + (size_t)n_hs_tokens * n_embd);
             }
 
             if (slot.task->params.hidden_normalize) {

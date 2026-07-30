@@ -356,6 +356,18 @@ static Args parse_args(int argc, char** argv) {
         exit(1);
     }
 
+    // --token-skip >= --generate silently produces empty output: the gate
+    // `gen_step >= token_skip` never passes, every layer's gen_count stays 0,
+    // every layer is skipped, and output.bin gets a header with no data while
+    // the run exits 0. Reject it loudly rather than waste a 239K-prompt run.
+    if (args.generate_tokens > 0 && args.token_skip >= args.generate_tokens) {
+        fprintf(stderr,
+                "Error: --token-skip (%d) must be < --generate (%d); otherwise every "
+                "generated token is skipped and the output is empty.\n",
+                args.token_skip, args.generate_tokens);
+        exit(1);
+    }
+
     // --batch mode has its own positional layout: [model] [prompts] [layers] [output]
     if (args.batch_mode) {
         if (positional.empty()) {
@@ -1810,6 +1822,7 @@ static int run_batch(const Args& args) {
                         float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
                         if (!token_logits) {
                             fprintf(stderr, "Error: no logits available for generation sampling\n");
+                            if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                             STOP_PRODUCER_AND_JOIN();
                             return 1;
                         }
@@ -1841,6 +1854,7 @@ static int run_batch(const Args& args) {
                 if (ret != 0) {
                     fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
                             gen_step, prompt_idx, ret);
+                    if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                     STOP_PRODUCER_AND_JOIN();
                     return 1;
                 }
@@ -1850,6 +1864,7 @@ static int run_batch(const Args& args) {
                 // Extract hidden states from this generated token
                 if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
                     fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
+                    if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                     STOP_PRODUCER_AND_JOIN();
                     return 1;
                 }
