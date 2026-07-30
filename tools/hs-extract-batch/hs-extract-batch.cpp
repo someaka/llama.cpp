@@ -971,10 +971,15 @@ static int run_raw(const Args& args) {
         return 1;
     }
 
-    // Open output file
-    FilePtr out(fopen(args.output_path, "wb"));
+    // Open output file. Write to a temp path and atomically rename at the end
+    // (P2-2 fix), matching the batch/checkpoint/stories atomicity guarantees.
+    // A crash mid-run previously left a truncated raw dump at the final path,
+    // which the Python parser would misread. Now a crash leaves only a .tmp
+    // file that is unlinked on the error paths below.
+    std::string tmp_path = std::string(args.output_path) + ".tmp";
+    FilePtr out(fopen(tmp_path.c_str(), "wb"));
     if (!out) {
-        fprintf(stderr, "Error: cannot open output file %s\n", args.output_path);
+        fprintf(stderr, "Error: cannot open output file %s\n", tmp_path.c_str());
         return 1;
     }
     fprintf(stderr, "Writing output to %s\n", args.output_path);
@@ -993,6 +998,8 @@ static int run_raw(const Args& args) {
     // Global header
     if (fwrite(&n_prompts_total, sizeof(int32_t), 1, out) != 1) {
         fprintf(stderr, "Error: failed to write raw output header\n");
+        out.reset();
+        std::remove(tmp_path.c_str());
         return 1;
     }
 
@@ -1017,11 +1024,15 @@ static int run_raw(const Args& args) {
         auto tokens = tokenize(vocab, line, /*add_bos=*/!args.no_bos);
         if (tokens.empty()) {
             fprintf(stderr, "Error: prompt %d tokenized to empty\n", prompt_idx);
+            out.reset();
+            std::remove(tmp_path.c_str());
             return 1;
         }
         if ((int)tokens.size() > n_ctx) {
             fprintf(stderr, "Error: prompt %d has %zu tokens, exceeds n_ctx=%d\n",
                     prompt_idx, tokens.size(), n_ctx);
+            out.reset();
+            std::remove(tmp_path.c_str());
             return 1;
         }
 
@@ -1029,6 +1040,8 @@ static int run_raw(const Args& args) {
                             tokens, target_layers, n_embd, prompt_idx, out,
                             args.mean_mode, args.token_skip)) {
             fprintf(stderr, "Error: process_prompt failed at prompt %d\n", prompt_idx);
+            out.reset();
+            std::remove(tmp_path.c_str());
             return 1;  // fatal I/O error
         }
 
@@ -1048,6 +1061,17 @@ static int run_raw(const Args& args) {
     fprintf(stderr, "Done. Processed %d prompts in %.2f seconds (%.2f prompts/sec)\n",
             prompt_idx, total_ms / 1000.0,
             prompt_idx * 1000.0 / (total_ms > 0 ? total_ms : 1));
+
+    // Atomic finalize: sync to durable storage, close, then rename into place.
+    // The final path appears only when the write is complete (rename is atomic
+    // on POSIX), so a kill mid-write can never leave a truncated raw dump.
+    out.sync();   // fflush + fsync(fileno)
+    out.reset();  // fclose before rename
+    if (rename(tmp_path.c_str(), args.output_path) != 0) {
+        fprintf(stderr, "Error: cannot rename %s to %s\n", tmp_path.c_str(), args.output_path);
+        std::remove(tmp_path.c_str());
+        return 1;
+    }
 
     return 0;
 }
@@ -1770,8 +1794,14 @@ static int run_batch(const Args& args) {
             // Accumulate hidden states from generated tokens into per-layer buffers.
             // We reuse mean_buf for per-token accumulation and a separate gen_accum
             // buffer for the running sum.
-            static thread_local std::vector<float> gen_accum;
-            static thread_local std::vector<int64_t> gen_count;
+            // P2-3 fix: these were `static thread_local`, implying per-thread
+            // safety. run_batch is single-consumer, so thread_local adds no
+            // protection and only misleads a reader into thinking parallel
+            // generation is safe. Plain function-scope static keeps the
+            // perf benefit (one allocation, reused via resize/fill) without
+            // the false concurrency implication.
+            static std::vector<float> gen_accum;
+            static std::vector<int64_t> gen_count;
             const size_t n_layers_total = target_layers.size();
             gen_accum.resize(n_layers_total * n_embd, 0.0f);
             gen_count.assign(n_layers_total, 0);

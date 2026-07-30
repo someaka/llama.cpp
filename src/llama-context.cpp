@@ -2073,18 +2073,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // Validate layer count matches what was declared at init
                 GGML_ASSERT(n_layers == n_hidden_layers && "hidden state layer count mismatch");
 
-                // Find first non-null layer to get token count (t_hidden_layers[0] may be null
-                // if the model patches layers conditionally)
+                // All supported architectures (llama, gemma, gemma4, qwen35) push
+                // exactly one non-null tensor per layer (the layer-output residual).
+                // A null entry here indicates a bug in the graph builder or memory
+                // corruption — not a legitimate conditional skip. Fail loud rather
+                // than silently zero-filling (which would poison compute_masked_mean
+                // downstream with an all-zero layer contribution).
                 uint32_t n_tokens = 0;
-                bool found = false;
                 for (int32_t il = 0; il < n_layers; il++) {
-                    if (hres->t_hidden_layers[il]) {
-                        n_tokens = (uint32_t) hres->t_hidden_layers[il]->ne[1];
-                        found = true;
-                        break;
+                    if (hres->t_hidden_layers[il] == nullptr) {
+                        LLAMA_LOG_ERROR("%s: t_hidden_layers[%d] is null — graph builder "
+                                        "failed to populate layer %d (this should never happen "
+                                        "on supported architectures)\n", __func__, il, il);
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    if (il == 0) {
+                        n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
                     }
                 }
-                GGML_ASSERT(found && "all t_hidden_layers entries are null despite n_layers > 0");
 
                 // Assert all layers have matching token counts (prevent silent corruption)
                 for (int32_t il = 0; il < n_layers; il++) {
@@ -2117,7 +2124,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
-                    if (t == nullptr) continue;
+                    // Null check already done above — this is guaranteed non-null.
+                    // Defensive assert to catch any future regression.
+                    GGML_ASSERT(t != nullptr && "t_hidden_layers[il] is null in copy loop — internal error");
                     ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
                     GGML_ASSERT(backend_res != nullptr);
 
