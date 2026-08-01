@@ -62,10 +62,11 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     return layers;
 }
 
-static std::vector<llama_token> parse_raw_tokens(const char * str) {
+static std::vector<llama_token> parse_raw_tokens(const char * str, const llama_vocab * vocab) {
     std::vector<llama_token> tokens;
     std::stringstream ss(str);
     std::string item;
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
     while (std::getline(ss, item, ',')) {
         size_t start = item.find_first_not_of(" \t");
         size_t end = item.find_last_not_of(" \t");
@@ -79,6 +80,14 @@ static std::vector<llama_token> parse_raw_tokens(const char * str) {
         }
         if (val < 0) {
             fprintf(stderr, "error: invalid token id %ld (must be non-negative)\n", val);
+            return {};
+        }
+        // Bounds-check against the vocabulary size. An out-of-range id passed to
+        // the embedding lookup (ggml_get_rows) is an out-of-bounds GPU read, since
+        // the lookup does not validate token indices. The batch tool has this check
+        // (hs-extract-batch.cpp); mirror it here.
+        if (val >= n_vocab) {
+            fprintf(stderr, "error: token id %ld out of range [0, %d)\n", val, n_vocab);
             return {};
         }
         tokens.push_back((llama_token) val);
@@ -214,14 +223,14 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> tokens;
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
     if (raw_mode) {
-        tokens = parse_raw_tokens(prompt_text);
+        tokens = parse_raw_tokens(prompt_text, vocab);
         if (tokens.empty()) {
             return 1;
         }
         fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
     } else {
-        const llama_vocab * vocab = llama_model_get_vocab(model);
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
         std::string prompt(prompt_text);
         tokens = common_tokenize(vocab, prompt, add_bos, true);

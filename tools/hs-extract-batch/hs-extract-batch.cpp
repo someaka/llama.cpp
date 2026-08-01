@@ -878,6 +878,10 @@ static AssignmentReadResult read_prompt_assignments(FILE* f) {
                 int32_t start = 0, end = 0;
                 if (fread(&start, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
                 if (fread(&end, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
+                if (start < 0 || end < 0) {
+                    fprintf(stderr, "Error: assignment range [%d, %d) has negative bound  -  corrupt assignments.bin\n", start, end);
+                    return {AssignmentReadStatus::error, {}};
+                }
                 if (start > end) {
                     fprintf(stderr, "Error: assignment range [%d, %d) has start > end  -  corrupt assignments.bin\n", start, end);
                     return {AssignmentReadStatus::error, {}};
@@ -1382,6 +1386,18 @@ static bool read_checkpoint(
                     fprintf(stderr, "Error: checkpoint contains count=%d (negative) - corrupt checkpoint\n", count);
                     return false;
                 }
+                // Upper-bound count: a single (group,mask,layer) accumulator can
+                // receive at most one increment per (prompt, assignment) pair, so
+                // its count cannot exceed n_iterated prompts * MAX_ASSIGNMENTS.
+                // An unbounded count here is later used as a DIVISOR (write: 1/count)
+                // and a v1 MULTIPLIER (sum *= count), so a corrupt huge value would
+                // silently produce garbage means. Use int64 to avoid overflow in the
+                // bound computation.
+                if ((int64_t)count > (int64_t)n_iterated * MAX_ASSIGNMENTS) {
+                    fprintf(stderr, "Error: checkpoint contains count=%d exceeding max %lld (n_iterated=%d * MAX_ASSIGNMENTS=%d) - corrupt checkpoint\n",
+                            count, (long long)((int64_t)n_iterated * MAX_ASSIGNMENTS), n_iterated, MAX_ASSIGNMENTS);
+                    return false;
+                }
 
                 // Use flat key for single-level map lookup
                 uint64_t key = make_accum_key(group_id, mask_id, layer_idx);
@@ -1650,6 +1666,7 @@ static int run_batch(const Args& args) {
 
     // Producer thread: reads prompts, tokenizes, reads assignments
     auto producer = [&]() {
+      try {
         std::string p_line;
         while (std::getline(prompts_fin, p_line)) {
             auto assignment_read = read_prompt_assignments(assign_fin);
@@ -1686,6 +1703,34 @@ static int run_batch(const Args& args) {
             pfq.producer_done = true;
         }
         pfq.cv.notify_all();
+      } catch (const std::exception& e) {
+        // An uncaught exception in the producer thread (e.g. std::bad_alloc from
+        // tokenization, or a stream exception) would call std::terminate and abort
+        // the whole process, leaving the consumer on the main thread hanging with
+        // no diagnostic. Instead, surface a clean error to the consumer via an
+        // error item so it exits gracefully (the consumer already handles pp.error).
+        fprintf(stderr, "Error: producer thread exception: %s\n", e.what());
+        PrefetchedPrompt ep;
+        ep.error = true;
+        {
+            std::lock_guard<std::mutex> lk(pfq.mtx);
+            pfq.queue.push(std::move(ep));
+            pfq.producer_done = true;
+        }
+        pfq.cv.notify_all();
+        pfq.cv_space.notify_all();
+      } catch (...) {
+        fprintf(stderr, "Error: producer thread unknown exception\n");
+        PrefetchedPrompt ep;
+        ep.error = true;
+        {
+            std::lock_guard<std::mutex> lk(pfq.mtx);
+            pfq.queue.push(std::move(ep));
+            pfq.producer_done = true;
+        }
+        pfq.cv.notify_all();
+        pfq.cv_space.notify_all();
+      }
     };
 
     std::thread producer_thread(producer);
@@ -1803,6 +1848,23 @@ static int run_batch(const Args& args) {
             static std::vector<float> gen_accum;
             static std::vector<int64_t> gen_count;
             const size_t n_layers_total = target_layers.size();
+            // Sanity-bound the accumulation buffer before allocating. n_layers_total
+            // and n_embd come from the loaded model (target_layers is validated
+            // against the model's layer count; n_embd is the model's embedding dim),
+            // so the product is normally small (e.g. 42 layers x 2560 embd = 107K
+            // floats). Guard against a corrupt/absurd configuration that would request
+            // a multi-GB allocation: resize() throws std::bad_alloc on failure and
+            // this block has no surrounding try, so an unbounded resize would call
+            // std::terminate. 256M floats (1 GB) is far above any real model's
+            // layer*embd product.
+            constexpr size_t MAX_GEN_ACCUM_FLOATS = 256ull * 1024 * 1024;  // 1 GB
+            if (n_layers_total > 0 && (size_t)n_embd > MAX_GEN_ACCUM_FLOATS / n_layers_total) {
+                fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
+                        "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
+                        n_layers_total, n_embd);
+                STOP_PRODUCER_AND_JOIN();
+                return 1;
+            }
             gen_accum.resize(n_layers_total * n_embd, 0.0f);
             gen_count.assign(n_layers_total, 0);
             std::fill(gen_accum.begin(), gen_accum.end(), 0.0f);
