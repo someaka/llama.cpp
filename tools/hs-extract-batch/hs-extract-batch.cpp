@@ -2161,6 +2161,18 @@ static int run_batch(const Args& args) {
                 n_processed * 1000.0 / (total_ms > 0 ? total_ms : 1));
     }
 
+    // Guard: if we processed prompts but produced no accumulators (e.g. every
+    // prompt hit EOS before gen_step reached token_skip, or all masked means
+    // were empty), refuse to write a header-only output.bin and exit non-zero.
+    // A silent empty file would be misread downstream as a valid-but-empty
+    // result rather than flagged as a failed extraction.
+    if (n_processed > 0 && accumulators.empty()) {
+        fprintf(stderr, "Error: processed %d prompts but accumulated no hidden-state "
+                        "means (check token_skip / EOS / masks); refusing to write an "
+                        "empty output.bin\n", n_processed);
+        return 1;
+    }
+
     // Write output
     if (!write_batch_output(accumulators, args.output_path, n_embd)) {
         return 1;
