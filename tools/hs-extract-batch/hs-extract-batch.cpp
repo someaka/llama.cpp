@@ -91,9 +91,21 @@ struct FilePtr {
     // fflush alone only pushes libc buffers to the kernel; fsync forces the
     // kernel to write them to disk. Without this, a power loss between rename()
     // and kernel writeback can leave the renamed file containing zeros.
-    void sync() { if (fp) { fflush(fp); fsync(fileno(fp)); } }
+    // Returns false if either step fails (disk full, I/O error) — the caller
+    // MUST check this; ignoring it defeats the entire atomic-rename guarantee.
+    bool sync() {
+        if (!fp) return false;
+        if (fflush(fp) != 0) return false;
+        if (fsync(fileno(fp)) != 0) return false;
+        return true;
+    }
 #else
-    void sync() { if (fp) { fflush(fp); _commit(_fileno(fp)); } }
+    bool sync() {
+        if (!fp) return false;
+        if (fflush(fp) != 0) return false;
+        if (_commit(_fileno(fp)) != 0) return false;
+        return true;
+    }
 #endif
 };
 
@@ -573,7 +585,7 @@ static int64_t compute_masked_mean(
         }
 
         for (int t = start; t < end; t++) {
-            const float* row = data + t * n_embd;
+            const float* row = data + (size_t)t * (size_t)n_embd;
             CR_SIMD
             for (int d = 0; d < n_embd; d++) {
                 out[d] += row[d];
@@ -612,7 +624,7 @@ static int compute_single_range_mean(
     }
 
     for (int t = start; t < end; t++) {
-        const float* row = data + t * n_embd;
+        const float* row = data + (size_t)t * (size_t)n_embd;
         CR_SIMD
         for (int d = 0; d < n_embd; d++) {
             out[d] += row[d];
@@ -932,6 +944,11 @@ static int run_raw(const Args& args) {
     const int32_t n_embd = llama_model_n_embd_out(model);
     const int32_t n_layers = llama_model_n_layer(model);
 
+    if (n_embd <= 0) {
+        fprintf(stderr, "Error: invalid model n_embd=%d (model corrupt or unsupported)\n", n_embd);
+        return 1;
+    }
+
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
             n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
 
@@ -1069,7 +1086,12 @@ static int run_raw(const Args& args) {
     // Atomic finalize: sync to durable storage, close, then rename into place.
     // The final path appears only when the write is complete (rename is atomic
     // on POSIX), so a kill mid-write can never leave a truncated raw dump.
-    out.sync();   // fflush + fsync(fileno)
+    if (!out.sync()) {   // fflush + fsync(fileno) — check for disk-full / I/O errors
+        fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", tmp_path.c_str());
+        out.reset();
+        std::remove(tmp_path.c_str());
+        return 1;
+    }
     out.reset();  // fclose before rename
     if (rename(tmp_path.c_str(), args.output_path) != 0) {
         fprintf(stderr, "Error: cannot rename %s to %s\n", tmp_path.c_str(), args.output_path);
@@ -1226,7 +1248,12 @@ static bool write_batch_output(
     }
     bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
     if (ok) {
-        out.sync();  // flush + fsync to durable storage before rename
+        if (!out.sync()) {  // flush + fsync — check for failures before rename
+            fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", temp_path.c_str());
+            out.reset();
+            std::remove(temp_path.c_str());
+            return false;
+        }
         out.reset();  // close file before rename
         if (rename(temp_path.c_str(), output_path) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
@@ -1265,7 +1292,12 @@ static bool write_checkpoint(
     CHECKED_WRITE(&n_iterated, sizeof(int32_t), 1, f);
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (ok) {
-        f.sync();  // flush + fsync to durable storage before rename
+        if (!f.sync()) {  // flush + fsync — check for failures before rename
+            fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
+            f.reset();
+            std::remove(temp_path.c_str());
+            return false;
+        }
         f.reset();  // close file before rename
         // Atomic rename: temp -> final
         if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
@@ -1669,6 +1701,11 @@ static int run_batch(const Args& args) {
       try {
         std::string p_line;
         while (std::getline(prompts_fin, p_line)) {
+            // B2 fix: skip empty lines to match validation's non-empty count.
+            // Without this, an empty line in prompts.txt reads an assignment
+            // record meant for the next real prompt, silently desyncing all
+            // subsequent prompt↔assignment pairings.
+            if (p_line.empty()) continue;
             auto assignment_read = read_prompt_assignments(assign_fin);
             if (assignment_read.status != AssignmentReadStatus::ok) {
                 PrefetchedPrompt p;
@@ -1698,6 +1735,23 @@ static int run_batch(const Args& args) {
             }
             pfq.cv.notify_one();
         }
+        // B1 fix: detect I/O errors on the prompts stream. std::getline returns
+        // false for both EOF and I/O errors — without this check, a disk failure
+        // mid-file is indistinguishable from normal end-of-file, silently
+        // truncating the run and exiting 0.
+        if (prompts_fin.bad()) {
+            fprintf(stderr, "Error: I/O error reading prompts file (bad stream)\n");
+            PrefetchedPrompt ep;
+            ep.error = true;
+            {
+                std::lock_guard<std::mutex> lk(pfq.mtx);
+                pfq.producer_done = true;
+                try { pfq.queue.push(std::move(ep)); } catch (...) {}
+            }
+            pfq.cv.notify_all();
+            pfq.cv_space.notify_all();
+            return;
+        }
         {
             std::lock_guard<std::mutex> lk(pfq.mtx);
             pfq.producer_done = true;
@@ -1710,12 +1764,16 @@ static int run_batch(const Args& args) {
         // no diagnostic. Instead, surface a clean error to the consumer via an
         // error item so it exits gracefully (the consumer already handles pp.error).
         fprintf(stderr, "Error: producer thread exception: %s\n", e.what());
-        PrefetchedPrompt ep;
-        ep.error = true;
+        // B5 fix: set producer_done FIRST (no allocation needed), so the consumer
+        // is guaranteed to wake even if the queue.push throws bad_alloc again.
         {
             std::lock_guard<std::mutex> lk(pfq.mtx);
-            pfq.queue.push(std::move(ep));
             pfq.producer_done = true;
+            try {
+                PrefetchedPrompt ep;
+                ep.error = true;
+                pfq.queue.push(std::move(ep));
+            } catch (...) { /* consumer will see producer_done + empty queue */ }
         }
         pfq.cv.notify_all();
         pfq.cv_space.notify_all();
@@ -2243,7 +2301,12 @@ static int run_batch(const Args& args) {
     // Per-story sidecar: close the temp file and atomically rename to the final
     // path now that the run fully succeeded.
     if (stories_closer) {
-        stories_closer.sync();  // flush + fsync to durable storage before rename
+        if (!stories_closer.sync()) {  // flush + fsync — check for failures
+            fprintf(stderr, "Error: sync failed for %s\n", stories_temp_path.c_str());
+            stories_closer.reset();
+            std::remove(stories_temp_path.c_str());
+            return 1;
+        }
         stories_closer.reset();  // close before rename
         if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",

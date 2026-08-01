@@ -205,6 +205,11 @@ int main(int argc, char ** argv) {
     const int n_layers = llama_model_n_layer(model);
     const int n_embd = llama_model_n_embd_out(model);
 
+    if (n_embd <= 0) {
+        fprintf(stderr, "error: invalid model n_embd=%d (model corrupt or unsupported)\n", n_embd);
+        return 1;
+    }
+
     fprintf(stderr, "%s: model loaded, n_layers=%d, n_embd=%d\n", __func__, n_layers, n_embd);
 
     llama_context_params ctx_params = llama_context_default_params();
@@ -255,8 +260,8 @@ int main(int argc, char ** argv) {
     const int32_t n_tokens_out = llama_get_hidden_state_n_tokens(ctx);
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 
-    if (n_tokens_out == 0) {
-        fprintf(stderr, "error: no hidden states extracted (count=0)\n");
+    if (n_tokens_out <= 0) {
+        fprintf(stderr, "error: invalid hidden state token count (%d)\n", n_tokens_out);
         return 1;
     }
 
