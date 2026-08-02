@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -1984,6 +1985,16 @@ static int run_batch(const Args& args) {
                                 next_token = v;
                             }
                         }
+                        // B8: if all logits are NaN, every comparison is false,
+                        // so next_token stays 0 and NaN propagates into the
+                        // hidden-state accumulation silently. Detect and abort.
+                        if (std::isnan(best_val)) {
+                            fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                            "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                            if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
+                            STOP_PRODUCER_AND_JOIN();
+                            return 1;
+                        }
                     }
                 }
 
@@ -2318,7 +2329,12 @@ static int run_batch(const Args& args) {
 
     // Delete checkpoint on successful completion
     std::string ckpt_path = std::string(args.output_path) + ".checkpoint";
-    remove(ckpt_path.c_str());
+    // B7: check remove() result — a stale checkpoint surviving a successful run
+    // would cause a redundant --resume. Warn (not abort) since data is fine.
+    if (remove(ckpt_path.c_str()) != 0 && errno != ENOENT) {
+        fprintf(stderr, "Warning: could not remove checkpoint %s (run completed successfully; "
+                        "delete it manually to avoid a redundant --resume)\n", ckpt_path.c_str());
+    }
 
     return 0;
 }
@@ -2557,8 +2573,11 @@ static int run_self_test() {
         test_acc[key2].sum = {0.1f, -0.2f, 0.3f, -0.4f};
         test_acc[key2].count = 7;
 
-        // Write checkpoint to temp file
-        const char* test_ckpt = "/tmp/cr_self_test_ckpt.bin";
+        // Write checkpoint to temp file — include PID to avoid collision
+        // between concurrent self-test runs (CI) and symlink attacks.
+        char test_ckpt_buf[256];
+        snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/cr_self_test_ckpt_%d.bin", (int)getpid());
+        const char* test_ckpt = test_ckpt_buf;
         bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42);
         if (!write_ok) {
             fprintf(stderr, "  Test 17 (checkpoint roundtrip): FAIL (write failed)\n");

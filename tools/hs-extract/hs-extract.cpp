@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -140,15 +141,19 @@ int main(int argc, char ** argv) {
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
             char *endptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
             if (*endptr != '\0') { fprintf(stderr, "error: --threads value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "error: --threads value out of range\n"); return 1; }
             if (val < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
             n_threads = (int) val;
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
             char *endptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
             if (*endptr != '\0') { fprintf(stderr, "error: --n-gpu-layers value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "error: --n-gpu-layers value out of range\n"); return 1; }
             if (val < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
             n_gpu_layers = (int) val;
         } else if (arg == "--output") {
@@ -313,8 +318,9 @@ int main(int argc, char ** argv) {
             return 1;
         }
         out << json.str();
+        out.close();
         if (!out) {
-            fprintf(stderr, "error: write to output file '%s' failed\n", output_file);
+            fprintf(stderr, "error: write/close of output file '%s' failed\n", output_file);
             return 1;
         }
         fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
