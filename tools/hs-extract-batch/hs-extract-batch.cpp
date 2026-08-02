@@ -460,12 +460,19 @@ static Args parse_args(int argc, char** argv) {
 // Stop the producer thread cleanly from a consumer error path.
 // Sets producer_done (unblocks a producer waiting on cv_space backpressure)
 // and joins the thread. Used at every consumer error exit point.
+//
+// B11: also remove the per-story temp file if one is open. Every consumer-loop
+// error exit goes through this macro, and a leftover .stories.bin.tmp would be
+// picked up by a subsequent run's parser or accumulate across failed retries.
+// `stories_temp_path` is an empty std::string when --save-per-story is not set,
+// so std::remove on "" is a harmless no-op (returns ENOENT).
 #define STOP_PRODUCER_AND_JOIN()                                                \
     do {                                                                        \
         { std::lock_guard<std::mutex> _lk(pfq.mtx); pfq.producer_done = true; } \
         pfq.cv_space.notify_all();                                              \
         producer_thread.join();                                                 \
         llama_synchronize(ctx);                                                 \
+        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str()); \
     } while (0)
 
 // -- Batch Mode Constants & Data Structures -----------------------------
@@ -1650,11 +1657,17 @@ static int run_batch(const Args& args) {
         if (fwrite(&story_magic, sizeof(int32_t), 1, stories_fp) != 1 ||
             fwrite(&n_embd, sizeof(int32_t), 1, stories_fp) != 1) {
             fprintf(stderr, "Error: per-story header write failed\n");
+            // B11: remove the partially-written temp file.
+            stories_closer.reset();
+            std::remove(stories_temp_path.c_str());
             return 1;
         }
         int32_t n_target_layers = (int32_t)target_layers.size();
         if (fwrite(&n_target_layers, sizeof(int32_t), 1, stories_fp) != 1) {
             fprintf(stderr, "Error: per-story header write failed\n");
+            // B11: remove the partially-written temp file.
+            stories_closer.reset();
+            std::remove(stories_temp_path.c_str());
             return 1;
         }
         fprintf(stderr, "Per-story output: %s (n_embd=%d, n_layers=%d)\n",
@@ -2066,6 +2079,15 @@ static int run_batch(const Args& args) {
                                     next_token = v;
                                 }
                             }
+                            // B8: NaN guard (same as the token_logits argmax above).
+                            // If every logit is NaN, no comparison is true and
+                            // next_token stays 0, propagating NaN into accumulation.
+                            if (std::isnan(best_val)) {
+                                fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                                "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                                STOP_PRODUCER_AND_JOIN();
+                                return 1;
+                            }
                         }
                     }
                 }
@@ -2301,11 +2323,16 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Error: processed %d prompts but accumulated no hidden-state "
                         "means (check token_skip / EOS / masks); refusing to write an "
                         "empty output.bin\n", n_processed);
+        // B11: clean up the per-story temp file on this error path.
+        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
         return 1;
     }
 
     // Write output
     if (!write_batch_output(accumulators, args.output_path, n_embd)) {
+        // B11: write_batch_output failed (its own temp was already cleaned inside
+        // the function); remove the per-story temp file here.
+        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
         return 1;
     }
 
@@ -2322,6 +2349,8 @@ static int run_batch(const Args& args) {
         if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",
                     stories_temp_path.c_str(), stories_path.c_str());
+            // B11: rename failed — remove the orphaned temp file.
+            std::remove(stories_temp_path.c_str());
             return 1;
         }
         fprintf(stderr, "Per-story output complete: %s\n", stories_path.c_str());
