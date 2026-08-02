@@ -540,10 +540,21 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
     const char* p = s.c_str();
     while (*p) {
         char* endptr = nullptr;
+        errno = 0;
         long val = strtol(p, &endptr, 10);
         if (endptr == p) {
             fprintf(stderr, "Error: invalid layer '%c' in layers string '%s'\n", *p, s.c_str());
             return {};  // caller checks for empty target_layers
+        }
+        if (errno == ERANGE) {
+            fprintf(stderr, "Error: layer value out of range in '%s'\n", s.c_str());
+            return {};
+        }
+        // B13: validate at parse time, not downstream. Negative indices are
+        // resolved later (l < 0 → l += n_layer), but must be in [-n_layer, n_layer-1].
+        if (val >= n_layer || val < -n_layer) {
+            fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_layer, -n_layer);
+            return {};
         }
         out.push_back((int)val);
         while (*endptr && *endptr != ',') endptr++;
@@ -2301,6 +2312,16 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Other (overhead):       %8.2f ms    %5.1f%%\n", other,    other / avg_wall * 100);
         fprintf(stderr, "Wall per prompt:        %8.2f ms\n", avg_wall);
         fprintf(stderr, "===============================================\n\n");
+    }
+
+    // B10: TOCTOU guard — verify the actual processed count matches the expected
+    // count from the assignments header. A mismatch means the prompts file was
+    // modified between the count pass and the producer read.
+    if (skip_count == 0 && n_processed != n_prompts_expected) {
+        fprintf(stderr, "Error: processed %d prompts but assignments expected %d "
+                        "(prompts file may have been modified during extraction)\n",
+                n_processed, n_prompts_expected);
+        return 1;
     }
 
     if (skip_count > 0) {
