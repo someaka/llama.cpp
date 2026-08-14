@@ -6,8 +6,8 @@ hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
 ## Fork State
 
 - **Branch:** `main` (work directly on main, no feature branches)
-- **Upstream tracking:** 0 commits behind upstream `master`
-- **Unique commits:** 107 (excluding merges)
+- **Upstream tracking:** 0 commits behind upstream `master` (rebased 2026-08-14)
+- **Unique commits:** 147 (post-rebase 2026-08-14, incl. 1 API adaptation)
 - **Modified files:** 49 (5,310 insertions, 163 deletions)
 
 ## Features
