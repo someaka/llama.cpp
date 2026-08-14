@@ -27,7 +27,7 @@ Zero redundancy.
    capture conditional on cparams flag; models append `t_hidden_layers` at the
    end of each decoder block.
 2. **`hs-extract` CLI** (`tools/hs-extract/`): single-prompt JSON extraction
-   with layer selection, token-skip pooling, BOS suppression, `--self-test`.
+   with layer selection, token-skip pooling, BOS suppression.
 3. **`hs-extract-batch` CLI** (`tools/hs-extract-batch/`): high-throughput
    batch extraction — thousands of prompts per model load; raw mean-pool mode
    and streaming-accumulator mode with checkpoint/resume; per-story sidecar
@@ -53,8 +53,8 @@ Zero redundancy.
 
 - `test-hidden-states` (CPU): API contract — enable/toggle, single + batch
   getters, multi-ubatch consistency.
-- `hs-extract --self-test`: end-to-end pipeline validation (17 checks).
-- Batch tool self-test: 17/17 incl. accumulator resume.
+- `hs-extract-batch --self-test`: 17/17 end-to-end (incl. accumulator
+  checkpoint/resume roundtrip).
 - Both CLIs + server endpoint exercised daily on RTX 3090 (CUDA) and AMD
   Renoir iGPU (Vulkan/RADV) — cross-backend validated, identical results
   within quantization tolerance.
