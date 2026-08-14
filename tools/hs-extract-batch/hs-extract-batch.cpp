@@ -1966,7 +1966,9 @@ static int run_batch(const Args& args) {
                 llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
                 sampler = llama_sampler_chain_init(sparams);
                 if (args.repeat_penalty > 1.0f) {
-                    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(64, args.repeat_penalty, 0.0f, 0.0f));
+                    // upstream API change (2026-08): llama_sampler_init_penalties now
+                    // takes n_vocab first to bound the repeat-scan range.
+                    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(n_vocab, 64, args.repeat_penalty, 0.0f, 0.0f));
                 }
                 if (args.top_k > 0) {
                     llama_sampler_chain_add(sampler, llama_sampler_init_top_k(args.top_k));
