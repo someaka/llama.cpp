@@ -44,10 +44,17 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y build-essential cmake ccache curl
 
+      - name: Record runner CPU model (ccache key isolation)
+        run: |
+          set -euo pipefail
+          CPU_MODEL=$(lscpu 2>/dev/null | grep -m1 'Model name' | sed 's/Model name:[[:space:]]*//' | tr -c '[:alnum:]' '-' | cut -c1-40)
+          echo "CPU_MODEL=${CPU_MODEL:-unknown}" >> "$GITHUB_ENV"
+          echo "Runner CPU: ${CPU_MODEL:-unknown}"
+
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: fork-ci-${{ runner.os }}-native
+          key: fork-ci-${{ runner.os }}-${{ env.CPU_MODEL }}
           max-size: 512M
 
       - name: Configure compiler to use ccache
@@ -84,7 +91,7 @@ jobs:
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_TESTS=ON \
-            -DGGML_NATIVE=ON \
+            -DGGML_NATIVE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
