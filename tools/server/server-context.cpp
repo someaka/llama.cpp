@@ -5217,6 +5217,10 @@ void server_routes::init_routes() {
             if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
                 all_layers = true;
             } else if (layers_json.is_array()) {
+                if (layers_json.empty()) {
+                    res->error(format_error_response("layers array must not be empty", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
                 for (const auto & layer : layers_json) {
                     if (!layer.is_number_integer()) {
                         res->error(format_error_response("layers array must contain integers", ERROR_TYPE_INVALID_REQUEST));

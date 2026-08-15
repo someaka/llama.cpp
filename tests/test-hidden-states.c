@@ -102,11 +102,23 @@ int main(int argc, char ** argv) {
     // documented layout (layer base + (n_tokens-1) * n_embd_out).
     {
         float * hs0 = llama_get_hidden_state(ctx, 0);
-        int32_t n_embd = llama_model_n_embd(model);
-        float * hs_last = hs0 + (size_t)(n_hidden - 1) * n_embd;
-        if (!hs_last || hs_last[0] != hs_last[0]) {  // NULL or NaN check
-            fprintf(stderr, "ERROR: last-token pointer for layer 0 is invalid\n");
+        if (hs0 == nullptr) {
+            fprintf(stderr, "ERROR: layer 0 returned NULL before last-token check\n");
             ok = 0;
+        } else {
+            int32_t n_embd = llama_model_n_embd(model);
+            float * hs_last = hs0 + (size_t)(n_hidden - 1) * n_embd;
+            int bad = 0;
+            for (int32_t d = 0; d < n_embd; d++) {
+                if (hs_last[d] != hs_last[d]) {  // NaN check
+                    bad = 1;
+                    break;
+                }
+            }
+            if (bad) {
+                fprintf(stderr, "ERROR: last-token row for layer 0 contains NaN\n");
+                ok = 0;
+            }
         }
     }
 

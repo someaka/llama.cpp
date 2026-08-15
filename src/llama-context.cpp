@@ -1898,6 +1898,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
             }
 
+            // A failed ubatch leaves hidden_state_buf partially filled;
+            // invalidate the count so getters expose nothing from this decode.
+            if (cparams.extract_hidden_states) {
+                n_hidden_tokens = 0;
+            }
+
             for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
                 if (pos_min[s] == std::numeric_limits<llama_pos>::max()) {
                     continue;
