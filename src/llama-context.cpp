@@ -2196,11 +2196,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
 
-    // P1.1: Validate multi-ubatch hidden state accumulation captured all tokens
+    // Validate multi-ubatch hidden state accumulation captured all tokens
     if (cparams.extract_hidden_states && n_hidden_tokens != 0) {
         GGML_ASSERT((uint32_t)n_hidden_tokens == n_tokens_all &&
                     "hidden state token count mismatch after multi-ubatch accumulation");
-        // C7: Only signal synced AFTER the entire multi-ubatch loop is complete.
+        // Only signal synced AFTER the entire multi-ubatch loop is complete.
         // Previously this was set inside the loop, creating a race window where
         // callers could read partially-filled buffers.
         _hs_synced.store(true, std::memory_order_release);

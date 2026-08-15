@@ -461,7 +461,7 @@ static Args parse_args(int argc, char** argv) {
 // Sets producer_done (unblocks a producer waiting on cv_space backpressure)
 // and joins the thread. Used at every consumer error exit point.
 //
-// B11: also remove the per-story temp file if one is open. Every consumer-loop
+// Also remove the per-story temp file if one is open. Every consumer-loop
 // error exit goes through this macro, and a leftover .stories.bin.tmp would be
 // picked up by a subsequent run's parser or accumulate across failed retries.
 // `stories_temp_path` is an empty std::string when --save-per-story is not set,
@@ -550,7 +550,7 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
             fprintf(stderr, "Error: layer value out of range in '%s'\n", s.c_str());
             return {};
         }
-        // B13: validate at parse time, not downstream. Negative indices are
+        // Validate at parse time, not downstream. Negative indices are
         // resolved later (l < 0 → l += n_layer), but must be in [-n_layer, n_layer-1].
         if (val >= n_layer || val < -n_layer) {
             fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_layer, -n_layer);
@@ -779,7 +779,7 @@ static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::st
         return toks;
     }
 
-    // Validate token bounds (C6: prevent crashes from invalid token IDs)
+    // Validate token bounds (prevent crashes from invalid token IDs)
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
     for (llama_token tok : toks) {
         if (tok < 0 || tok >= n_vocab) {
@@ -918,7 +918,7 @@ static AssignmentReadResult read_prompt_assignments(FILE* f) {
                     return {AssignmentReadStatus::error, {}};
                 }
                 if (start == end) {
-                    // M4: compute_masked_mean treats start >= end as a hard error, so
+                    // compute_masked_mean treats start >= end as a hard error, so
                     // an empty range would abort the entire run deep in the kernel.
                     // Reject it here at read time with a clear diagnostic instead.
                     fprintf(stderr, "Error: assignment range [%d, %d) is empty (start == end)  -  "
@@ -1012,7 +1012,7 @@ static int run_raw(const Args& args) {
     }
 
     // Open output file. Write to a temp path and atomically rename at the end
-    // (P2-2 fix), matching the batch/checkpoint/stories atomicity guarantees.
+    // This matches the batch/checkpoint/stories atomicity guarantees.
     // A crash mid-run previously left a truncated raw dump at the final path,
     // which the Python parser would misread. Now a crash leaves only a .tmp
     // file that is unlinked on the error paths below.
@@ -1552,7 +1552,7 @@ static int run_batch(const Args& args) {
         return 1;
     }
 
-    // H1: --batch-size > 1 is accepted and range-checked by the parser but has
+    // --batch-size > 1 is accepted and range-checked by the parser but has
     // NO effect — processing is always sequential. A caller passing --batch-size 8
     // expecting 8× prompt packing gets 1× with only a stderr warning and exit 0.
     // Per the project's no-silent-errors rule: reject it loudly rather than lie.
@@ -1668,7 +1668,7 @@ static int run_batch(const Args& args) {
         if (fwrite(&story_magic, sizeof(int32_t), 1, stories_fp) != 1 ||
             fwrite(&n_embd, sizeof(int32_t), 1, stories_fp) != 1) {
             fprintf(stderr, "Error: per-story header write failed\n");
-            // B11: remove the partially-written temp file.
+            // Remove the partially-written temp file.
             stories_closer.reset();
             std::remove(stories_temp_path.c_str());
             return 1;
@@ -1676,7 +1676,7 @@ static int run_batch(const Args& args) {
         int32_t n_target_layers = (int32_t)target_layers.size();
         if (fwrite(&n_target_layers, sizeof(int32_t), 1, stories_fp) != 1) {
             fprintf(stderr, "Error: per-story header write failed\n");
-            // B11: remove the partially-written temp file.
+            // Remove the partially-written temp file.
             stories_closer.reset();
             std::remove(stories_temp_path.c_str());
             return 1;
@@ -1726,7 +1726,7 @@ static int run_batch(const Args& args) {
       try {
         std::string p_line;
         while (std::getline(prompts_fin, p_line)) {
-            // B2 fix: skip empty lines to match validation's non-empty count.
+            // Skip empty lines to match validation's non-empty count.
             // Without this, an empty line in prompts.txt reads an assignment
             // record meant for the next real prompt, silently desyncing all
             // subsequent prompt↔assignment pairings.
@@ -1760,7 +1760,7 @@ static int run_batch(const Args& args) {
             }
             pfq.cv.notify_one();
         }
-        // B1 fix: detect I/O errors on the prompts stream. std::getline returns
+        // Detect I/O errors on the prompts stream. std::getline returns
         // false for both EOF and I/O errors — without this check, a disk failure
         // mid-file is indistinguishable from normal end-of-file, silently
         // truncating the run and exiting 0.
@@ -1789,7 +1789,7 @@ static int run_batch(const Args& args) {
         // no diagnostic. Instead, surface a clean error to the consumer via an
         // error item so it exits gracefully (the consumer already handles pp.error).
         fprintf(stderr, "Error: producer thread exception: %s\n", e.what());
-        // B5 fix: set producer_done FIRST (no allocation needed), so the consumer
+        // Set producer_done FIRST (no allocation needed), so the consumer
         // is guaranteed to wake even if the queue.push throws bad_alloc again.
         {
             std::lock_guard<std::mutex> lk(pfq.mtx);
@@ -1896,7 +1896,7 @@ static int run_batch(const Args& args) {
         // paper ("prompted Sonnet 4.5 to write stories... extracted activations")
         // and the SLM paper's finding that generation > comprehension (p=0.007).
         if (args.generate_tokens > 0) {
-            // M1: --generate + --save-per-story is unsupported — the per-story
+            // --generate + --save-per-story is unsupported — the per-story
             // per-story sidecar records are written by the comprehension block below, which
             // this path skips via `continue`. Fail loud rather than emit a
             // header-only sidecar that silently produces zero .pt files.
@@ -1906,7 +1906,7 @@ static int run_batch(const Args& args) {
                 STOP_PRODUCER_AND_JOIN();
                 return 1;
             }
-            // M2: generation mode means over ALL generated tokens. Assignments
+            // Generation mode means over ALL generated tokens. Assignments
             // with skip>0 or ranges (mask_type==1) have no defined semantics here
             // since there is no pre-written content span to mask. Fail loud.
             for (const auto& a : assignments) {
@@ -1922,7 +1922,7 @@ static int run_batch(const Args& args) {
             // Accumulate hidden states from generated tokens into per-layer buffers.
             // We reuse mean_buf for per-token accumulation and a separate gen_accum
             // buffer for the running sum.
-            // P2-3 fix: these were `static thread_local`, implying per-thread
+            // These were `static thread_local`, implying per-thread
             // safety. run_batch is single-consumer, so thread_local adds no
             // protection and only misleads a reader into thinking parallel
             // generation is safe. Plain function-scope static keeps the
@@ -2011,7 +2011,7 @@ static int run_batch(const Args& args) {
                                 next_token = v;
                             }
                         }
-                        // B8: if all logits are NaN, every comparison is false,
+                        // If all logits are NaN, every comparison is false,
                         // so next_token stays 0 and NaN propagates into the
                         // hidden-state accumulation silently. Detect and abort.
                         if (std::isnan(best_val)) {
@@ -2092,7 +2092,7 @@ static int run_batch(const Args& args) {
                                     next_token = v;
                                 }
                             }
-                            // B8: NaN guard (same as the token_logits argmax above).
+                            // NaN guard (same as the token_logits argmax above).
                             // If every logit is NaN, no comparison is true and
                             // next_token stays 0, propagating NaN into accumulation.
                             if (std::isnan(best_val)) {
@@ -2316,7 +2316,7 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "===============================================\n\n");
     }
 
-    // B10: TOCTOU guard — verify the actual processed count matches the expected
+    // TOCTOU guard — verify the actual processed count matches the expected
     // count from the assignments header. A mismatch means the prompts file was
     // modified between the count pass and the producer read.
     if (skip_count == 0 && n_processed != n_prompts_expected) {
@@ -2346,14 +2346,14 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Error: processed %d prompts but accumulated no hidden-state "
                         "means (check token_skip / EOS / masks); refusing to write an "
                         "empty output.bin\n", n_processed);
-        // B11: clean up the per-story temp file on this error path.
+        // Clean up the per-story temp file on this error path.
         if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
         return 1;
     }
 
     // Write output
     if (!write_batch_output(accumulators, args.output_path, n_embd)) {
-        // B11: write_batch_output failed (its own temp was already cleaned inside
+        // write_batch_output failed (its own temp was already cleaned inside
         // the function); remove the per-story temp file here.
         if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
         return 1;
@@ -2372,7 +2372,7 @@ static int run_batch(const Args& args) {
         if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",
                     stories_temp_path.c_str(), stories_path.c_str());
-            // B11: rename failed — remove the orphaned temp file.
+            // rename failed — remove the orphaned temp file.
             std::remove(stories_temp_path.c_str());
             return 1;
         }
@@ -2381,7 +2381,7 @@ static int run_batch(const Args& args) {
 
     // Delete checkpoint on successful completion
     std::string ckpt_path = std::string(args.output_path) + ".checkpoint";
-    // B7: check remove() result — a stale checkpoint surviving a successful run
+    // Check remove() result — a stale checkpoint surviving a successful run
     // would cause a redundant --resume. Warn (not abort) since data is fine.
     if (remove(ckpt_path.c_str()) != 0 && errno != ENOENT) {
         fprintf(stderr, "Warning: could not remove checkpoint %s (run completed successfully; "
