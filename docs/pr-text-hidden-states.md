@@ -30,8 +30,9 @@ Zero redundancy.
    with layer selection, token-skip pooling, BOS suppression.
 3. **`hs-extract-batch` CLI** (`tools/hs-extract-batch/`): high-throughput
    batch extraction — thousands of prompts per model load; raw mean-pool mode
-   and streaming-accumulator mode with checkpoint/resume; per-story sidecar
-   records; binary formats documented in README.
+   and streaming-accumulator mode with checkpoint/resume; per-record sidecar
+   output (`--save-per-record`, legacy alias `--save-per-story`); binary
+   formats documented in README.
 4. **`/hidden-states` server endpoint** (`tools/server/`): POST prompt →
    per-layer vectors, no generation; mean-pooling + layer filtering;
    `--no-hidden-states` flag disables the route.
@@ -43,8 +44,9 @@ Zero redundancy.
 - Capture buffers sync once per decode (not per token) — verified race-free
   against multi-ubatch decode (see test-hidden-states.cpp multi-ubatch
   consistency test).
-- Models opt in via a single line in the layer loop; adding a new arch is a
-  two-line change (comment in llama-context.cpp documents the pattern).
+- Models opt in by appending to `t_hidden_layers` in the layer loop; archs
+  with the last-layer `inp_out_ids` optimization also extend that guard
+  (see `src/models/llama.cpp`).
 - Server endpoint preserves upstream output-allocation optimization when the
   endpoint is disabled.
 - Binary output formats use stable magic constants, documented in README.
@@ -55,6 +57,10 @@ Zero redundancy.
   getters, multi-ubatch consistency.
 - `hs-extract-batch --self-test`: 17/17 end-to-end (incl. accumulator
   checkpoint/resume roundtrip).
+- One commit in the stack restores `tests/test-backend-ops.cpp` to upstream
+  content: an intermediate rebase had silently dropped 117 lines of upstream
+  chunked-scan test coverage; the restore brings the file to zero-diff vs
+  the PR base.
 - Both CLIs + server endpoint exercised daily on RTX 3090 (CUDA) and AMD
   Renoir iGPU (Vulkan/RADV) — cross-backend validated, identical results
   within quantization tolerance.
