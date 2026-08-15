@@ -483,7 +483,6 @@ static Args parse_args(int argc, char** argv) {
         { std::lock_guard<std::mutex> _lk(pfq.mtx); pfq.producer_done = true; } \
         pfq.cv_space.notify_all();                                              \
         producer_thread.join();                                                 \
-        llama_synchronize(ctx);                                                 \
         if (!records_temp_path.empty()) std::remove(records_temp_path.c_str()); \
     } while (0)
 
@@ -2045,7 +2044,6 @@ static int run_batch(const Args& args) {
                     STOP_PRODUCER_AND_JOIN();
                     return 1;
                 }
-                llama_synchronize(ctx);
                 cur_pos++;
 
                 // Extract hidden states from this generated token
