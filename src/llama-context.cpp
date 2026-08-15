@@ -1870,9 +1870,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // Pre-allocate hidden state buffer for all tokens if extraction enabled
     if (cparams.extract_hidden_states) {
+        n_hidden_layers = (int32_t) hparams.n_layer();  // explicit layer count, set during first extract
+
+        // The hidden-state stride is n_embd_out() everywhere (buffer allocation,
+        // copy offsets, get_hidden_state), but the captured tensors are residual-
+        // stream tensors of width n_embd. These are equal on all architectures
+        // that populate t_hidden_layers (llama, gemma, gemma4, qwen35); a future
+        // architecture with a separate output projection would silently
+        // mis-stride the buffer, so fail loud instead.
+        if (hparams.n_embd_out() != hparams.n_embd) {
+            LLAMA_LOG_ERROR("%s: hidden-state extraction requires n_embd_out == n_embd, "
+                            "but the model has a separate output projection "
+                            "(n_embd_out = %u, n_embd = %u) - extraction is unsupported for this configuration\n",
+                            __func__, hparams.n_embd_out(), hparams.n_embd);
+            n_hidden_tokens = 0;
+            return -1;
+        }
+
         const uint32_t n_embd_out = hparams.n_embd_out();
         const int32_t n_layers = (int32_t) hparams.n_layer();
-        n_hidden_layers = n_layers;  // P4.1: Store explicit layer count
         const size_t total_size = (size_t)n_layers * n_tokens_all * n_embd_out;
         hidden_state_buf.resize(total_size);
         std::fill(hidden_state_buf.begin(), hidden_state_buf.end(), 0.0f);
