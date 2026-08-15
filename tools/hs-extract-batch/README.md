@@ -186,7 +186,7 @@ Tested on RTX 3090 (CUDA):
 
 ## Notes
 
-- Calls `llama_synchronize()` after each decode to prevent CUDA race conditions
+- The hidden-state getters synchronize the context before returning data; no explicit `llama_synchronize()` is needed
 - Checkpoints include full state for exact resumption
 - Memory usage scales with batch size, not dataset size
 - For single-prompt extraction, use [hs-extract](../hs-extract/) instead

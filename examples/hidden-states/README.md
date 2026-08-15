@@ -63,7 +63,11 @@ for (int layer = 0; layer < n_layers; layer++) {
 
 ### CUDA Synchronization
 
-Hidden states are written asynchronously by CUDA kernels. **Always call `llama_synchronize()` after `llama_decode()` and before reading hidden states**, otherwise you'll get garbage data.
+The hidden-state getters (`llama_get_hidden_state`,
+`llama_get_hidden_state_n_tokens`, `llama_get_hidden_states_batch`)
+synchronize the context before returning data, following the same
+convention as the logits and embeddings getters. No explicit
+`llama_synchronize()` call is needed before reading hidden states.
 
 ### API Functions
 
