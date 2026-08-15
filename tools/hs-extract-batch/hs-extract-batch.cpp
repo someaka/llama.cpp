@@ -351,6 +351,10 @@ static Args parse_args(int argc, char** argv) {
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             exit(0);
+        } else if (!arg.empty() && arg[0] == '-') {
+            fprintf(stderr, "Error: unknown argument '%s'\n", arg.c_str());
+            print_usage(argv[0]);
+            exit(1);
         } else {
             positional.push_back(argv[i]);
         }
