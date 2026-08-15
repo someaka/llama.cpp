@@ -3428,7 +3428,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--no-hidden-states"},
-        "disable the /hidden-states endpoint (CrimsonRed fork); enables upstream output-allocation optimization for lower memory usage in pure-generation workloads",
+        "disable the /hidden-states endpoint; enables upstream output-allocation optimization for lower memory usage in pure-generation workloads",
         [](common_params & params) {
             params.no_hidden_states = true;
         }

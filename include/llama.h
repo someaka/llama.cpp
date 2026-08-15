@@ -1062,11 +1062,15 @@ extern "C" {
     //
 
     // Get the per-layer hidden states for all tokens in the last decode.
+    // Layer i holds the post-block-i residual stream (the state entering
+    // layer i+1), captured after the attention and FFN blocks of layer i.
+    // Supported on the llama, gemma, gemma4 and qwen35 architectures;
+    // requires n_embd == n_embd_out (decode fails loud otherwise).
     // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
     // or NULL if extract_hidden_states was not set in context params.
-    // The stride per token is n_embd_out (not n_embd) -- most models have
-    // n_embd == n_embd_out but this is not guaranteed (e.g. models with
-    // a separate output projection dimension).
+    // The stride per token equals n_embd (which equals n_embd_out on all
+    // supported architectures; decode rejects models with a separate
+    // output projection).
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.

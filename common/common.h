@@ -600,7 +600,7 @@ struct common_params {
     std::string embd_sep   = "\n";  // separator of embeddings
     std::string cls_sep    = "\t";  // separator of classification sequences
 
-    // CrimsonRed fork: hidden-states extraction
+    // hidden-states extraction
     bool    no_hidden_states   = false;         // disable /hidden-states endpoint (enables upstream output-allocation optimization)
 
     // server params

@@ -9,9 +9,6 @@
 // common/llama-raii.h (shared with hs-extract tools and examples).
 #include "llama-raii.h"
 
-// Backward compat alias: this test uses LlamaBatchRAII instead of LlamaBatch.
-using LlamaBatchRAII = LlamaBatch;
-
 int main(int argc, char ** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <model.gguf>\n", argv[0]);
@@ -64,7 +61,7 @@ int main(int argc, char ** argv) {
     printf("Tokenized '%s' -> %d tokens\n", prompt, n_tokens);
 
     // Decode using llama_batch_init (modern API)
-    LlamaBatchRAII batch_wrapper;
+    LlamaBatch batch_wrapper;
     batch_wrapper.init(n_tokens, 0, 1);
     llama_batch & batch = batch_wrapper.batch;
     for (int i = 0; i < n_tokens; i++) {

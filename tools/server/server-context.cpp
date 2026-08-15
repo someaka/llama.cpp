@@ -27,9 +27,9 @@
 #include <fstream>
 
 #if defined(_OPENMP)
-#define CR_SIMD _Pragma("omp simd")
+#define HS_SIMD _Pragma("omp simd")
 #else
-#define CR_SIMD
+#define HS_SIMD
 #endif
 
 // fix problem with std::min and std::max
@@ -51,7 +51,7 @@ static common_speculative_output_limits server_output_limits(const common_params
         return { params.n_batch, 1 };
     }
 
-    // CrimsonRed fork: the /hidden-states endpoint processes tasks that need
+    // the /hidden-states endpoint processes tasks that need
     // per-token output buffers (like embedding/pooling mode). When hidden-states
     // is active, the server must allocate n_batch outputs. For pure-generation
     // workloads, fall through to upstream's optimized calculation to save memory.
@@ -412,11 +412,11 @@ struct server_slot {
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
-    // (MTP supports splitting - uses task->need_embd() not need_embd())
+    // (MTP supports splitting — uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
 
-        // CrimsonRed fork: hidden-state extraction captures each ubatch into a
+        // hidden-state extraction: captures each ubatch into a
         // preallocated full-prompt buffer and pools after decode, so it can
         // split safely across ubatches. The upstream embedding restriction
         // does not apply here.
@@ -2456,14 +2456,14 @@ private:
                 vec.resize(n_embd, 0.0f);
                 for (int32_t t = start; t < n_hs_tokens; t++) {
                     // size_t cast: t*n_embd is computed in int32 and overflows for
-                    // large ctx·embd (the pool=none path at :2492 already casts;
+                    // large ctx*embd (the pool=none path at :2492 already casts;
                     // this path must match or it reads from a wrapped pointer).
                     const float * tok = hs + (size_t)t * n_embd;
-                    CR_SIMD
+                    HS_SIMD
                     for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
                 }
                 float inv = 1.0f / (float)count;
-                CR_SIMD
+                HS_SIMD
                 for (int d = 0; d < n_embd; d++) vec[d] *= inv;
             } else {
                 // Default: last token's hidden state
@@ -2971,6 +2971,10 @@ private:
             }
 
             llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
+
+            // enable/disable hidden state extraction before decode so the
+            // compute graph populates t_hidden_layers tensors
+            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
         }
 
         llama_batch batch_view;
@@ -3754,29 +3758,6 @@ private:
         SRV_DBG("n_batch (effective) = %d, off = %d\n", n_batch, off);
 
         metrics_pre_decode();
-
-        auto & slot_batched      = batch.slot_batched;
-        auto & alora_scale       = batch.alora_scale;
-        auto & alora_disabled_id = batch.alora_disabled_id;
-
-        // TODO @ngxson : alora handling is too messy, need to refactor it to be more clear and maintainable
-        if (slot_batched) {
-            // apply lora, only need to do it once per batch
-            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
-
-            // if the lora is temporarily disabled for an alora, re-enable it
-            // for next time
-            if (alora_scale > 0.0f) {
-                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
-                slot_batched->lora[alora_disabled_id].scale = alora_scale;
-            }
-
-            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
-
-            // enable/disable hidden state extraction before decode so the
-            // compute graph populates t_hidden_layers tensors
-            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
-        }
 
         if (batch.size() == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
@@ -5262,7 +5243,7 @@ void server_routes::init_routes() {
         std::string pool = "last";
         if (body.contains("pool")) {
             if (!body["pool"].is_string()) {
-                res->error(format_error_response("pool must be a string ('last' or 'skip_mean')", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("pool must be a string ('last', 'skip_mean', or 'none')", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             pool = body["pool"].get<std::string>();
@@ -5272,8 +5253,8 @@ void server_routes::init_routes() {
             }
         }
 
-        // Parse skip_offset parameter (default: 50, used with pool="skip_mean")
-        int32_t skip_offset = 50;
+        // Parse skip_offset parameter (default: 0 = pool over all tokens, used with pool="skip_mean")
+        int32_t skip_offset = 0;
         if (body.contains("skip_offset")) {
             if (!body["skip_offset"].is_number_integer()) {
                 res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));

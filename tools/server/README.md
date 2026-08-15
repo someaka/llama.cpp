@@ -914,7 +914,7 @@ Same as the `/v1/embeddings` endpoint.
 
 ### POST `/hidden-states`: Extract hidden-state activations from the model
 
-This is a fork-specific endpoint (CrimsonRed / someaka) for extracting per-layer hidden-state vectors from a forward pass. It does not generate tokens.
+This is a fork-specific endpoint for extracting per-layer hidden-state vectors from a forward pass. It does not generate tokens.
 
 *Request body (JSON):*
 
@@ -923,7 +923,7 @@ This is a fork-specific endpoint (CrimsonRed / someaka) for extracting per-layer
 | `input` | string or array | yes | - | The input text (or array of texts) to process |
 | `layers` | int[] or `"all"` | no | `"all"` | Which layers to extract. Array of integers in `[0, n_layer)` or `"all"` |
 | `pool` | string | no | `"last"` | Pooling mode: `"last"`, `"skip_mean"`, or `"none"` |
-| `skip_offset` | int | no | `50` | Number of initial tokens to skip when `pool="skip_mean"` |
+| `skip_offset` | int | no | `0` | Number of initial tokens to skip when `pool="skip_mean"` (default pools over all tokens) |
 | `normalize` | bool | no | `false` | L2-normalize each output vector |
 
 *Pooling modes:*

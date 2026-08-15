@@ -1,7 +1,7 @@
 // RAII wrappers for llama.cpp C API resources.
 //
-// Shared by tools/hs-extract, tools/hs-extract-batch, tests/test-hidden-states,
-// and examples/hidden-states. All wrappers support move semantics; tools that
+// Shared by tools/hs-extract, tools/hs-extract-batch, and
+// tests/test-hidden-states. All wrappers support move semantics; tools that
 // don't need moves simply don't use them.
 //
 // Usage:

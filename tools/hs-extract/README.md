@@ -4,6 +4,11 @@ Single-prompt hidden state extraction tool for llama.cpp models.
 
 Extracts residual stream activations from a single prompt and outputs them as JSON.
 
+Layer i holds the post-block-i residual stream (the state entering layer i+1),
+captured after layer i's attention and FFN blocks. Supported architectures:
+llama, gemma, gemma4, qwen35. Extraction requires n_embd == n_embd_out
+(models with a separate output projection are rejected with an error).
+
 ## Usage
 
 ```bash
