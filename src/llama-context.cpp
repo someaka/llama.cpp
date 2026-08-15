@@ -2092,13 +2092,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // All supported architectures (llama, gemma, gemma4, qwen35) push
                 // exactly one non-null tensor per layer (the layer-output residual).
                 // A null entry here indicates a bug in the graph builder or memory
-                // corruption — not a legitimate conditional skip. Fail loud rather
+                // corruption, not a legitimate conditional skip. Fail loud rather
                 // than silently zero-filling (which would poison compute_masked_mean
                 // downstream with an all-zero layer contribution).
                 uint32_t n_tokens = 0;
                 for (int32_t il = 0; il < n_layers; il++) {
                     if (hres->t_hidden_layers[il] == nullptr) {
-                        LLAMA_LOG_ERROR("%s: t_hidden_layers[%d] is null — graph builder "
+                        LLAMA_LOG_ERROR("%s: t_hidden_layers[%d] is null - graph builder "
                                         "failed to populate layer %d (this should never happen "
                                         "on supported architectures)\n", __func__, il, il);
                         n_hidden_tokens = 0;
@@ -2132,7 +2132,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // CRITICAL: Synchronize the compute backend BEFORE reading hidden states.
                 // The compute graph runs on the backend's internal stream (cuda_ctx->stream()),
                 // but ggml_backend_tensor_get() uses the buffer interface which dispatches on
-                // cudaStreamPerThread — a different CUDA stream. Without this sync, the memcpy
+                // cudaStreamPerThread, a different CUDA stream. Without this sync, the memcpy
                 // reads stale/zero data before the compute stream finishes writing.
                 // (Vulkan uses a single queue so this race is Vulkan-immune.)
                 ggml_backend_sched_synchronize(sched.get());
@@ -2140,9 +2140,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
-                    // Null check already done above — this is guaranteed non-null.
+                    // Null check already done above; this is guaranteed non-null.
                     // Defensive assert to catch any future regression.
-                    GGML_ASSERT(t != nullptr && "t_hidden_layers[il] is null in copy loop — internal error");
+                    GGML_ASSERT(t != nullptr && "t_hidden_layers[il] is null in copy loop - internal error");
                     ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
                     GGML_ASSERT(backend_res != nullptr);
 
@@ -2165,7 +2165,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 }
 
                 // Defensive synchronization after the copy loop. Strictly redundant
-                // for correctness — ggml_backend_tensor_get() is synchronous (it
+                // for correctness: ggml_backend_tensor_get() is synchronous (it
                 // blocks the CPU thread until the D2H copy completes, see
                 // ggml_backend_cuda_buffer_get_tensor which calls cudaStreamSynchronize
                 // on cudaStreamPerThread). The next mctx->next() iteration cannot

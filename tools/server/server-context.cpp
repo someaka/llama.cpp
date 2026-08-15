@@ -2456,7 +2456,7 @@ private:
                 vec.resize(n_embd, 0.0f);
                 for (int32_t t = start; t < n_hs_tokens; t++) {
                     // size_t cast: t*n_embd is computed in int32 and overflows for
-                    // large ctx·embd (the pool=none path at :2492 already casts;
+                    // large ctx*embd (the pool=none path at :2492 already casts;
                     // this path must match or it reads from a wrapped pointer).
                     const float * tok = hs + (size_t)t * n_embd;
                     CR_SIMD

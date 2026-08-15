@@ -40,7 +40,7 @@
 #include <mutex>
 #include <condition_variable>
 #ifndef _WIN32
-#include <unistd.h>  // fsync — durability before rename (POSIX)
+#include <unistd.h>  // fsync for durability before rename (POSIX)
 #endif
 #include <queue>
 #include <atomic>
@@ -92,7 +92,7 @@ struct FilePtr {
     // fflush alone only pushes libc buffers to the kernel; fsync forces the
     // kernel to write them to disk. Without this, a power loss between rename()
     // and kernel writeback can leave the renamed file containing zeros.
-    // Returns false if either step fails (disk full, I/O error) — the caller
+    // Returns false if either step fails (disk full, I/O error); the caller
     // MUST check this; ignoring it defeats the entire atomic-rename guarantee.
     bool sync() {
         if (!fp) return false;
@@ -444,7 +444,7 @@ static Args parse_args(int argc, char** argv) {
 
 // Wraps fwrite for per-story sidecar writes. On failure, prints error,
 // signals producer to stop, joins producer thread, and returns 1 from the calling function.
-// All captured state is passed explicitly — no implicit scope capture.
+// All captured state is passed explicitly; no implicit scope capture.
 #define STORIES_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
     do {                                                                        \
         if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
@@ -551,7 +551,7 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
             return {};
         }
         // Validate at parse time, not downstream. Negative indices are
-        // resolved later (l < 0 → l += n_layer), but must be in [-n_layer, n_layer-1].
+        // resolved later (l < 0 means l += n_layer), but must be in [-n_layer, n_layer-1].
         if (val >= n_layer || val < -n_layer) {
             fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_layer, -n_layer);
             return {};
@@ -1105,7 +1105,7 @@ static int run_raw(const Args& args) {
     // Atomic finalize: sync to durable storage, close, then rename into place.
     // The final path appears only when the write is complete (rename is atomic
     // on POSIX), so a kill mid-write can never leave a truncated raw dump.
-    if (!out.sync()) {   // fflush + fsync(fileno) — check for disk-full / I/O errors
+    if (!out.sync()) {   // fflush + fsync(fileno): check for disk-full / I/O errors
         fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", tmp_path.c_str());
         out.reset();
         std::remove(tmp_path.c_str());
@@ -1267,7 +1267,7 @@ static bool write_batch_output(
     }
     bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
     if (ok) {
-        if (!out.sync()) {  // flush + fsync — check for failures before rename
+        if (!out.sync()) {  // flush + fsync: check for failures before rename
             fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", temp_path.c_str());
             out.reset();
             std::remove(temp_path.c_str());
@@ -1311,7 +1311,7 @@ static bool write_checkpoint(
     CHECKED_WRITE(&n_iterated, sizeof(int32_t), 1, f);
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (ok) {
-        if (!f.sync()) {  // flush + fsync — check for failures before rename
+        if (!f.sync()) {  // flush + fsync: check for failures before rename
             fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
             f.reset();
             std::remove(temp_path.c_str());
@@ -1553,8 +1553,8 @@ static int run_batch(const Args& args) {
     }
 
     // --batch-size > 1 is accepted and range-checked by the parser but has
-    // NO effect — processing is always sequential. A caller passing --batch-size 8
-    // expecting 8× prompt packing gets 1× with only a stderr warning and exit 0.
+    // NO effect: processing is always sequential. A caller passing --batch-size 8
+    // expecting 8x prompt packing gets 1x with only a stderr warning and exit 0.
     // Per the project's no-silent-errors rule: reject it loudly rather than lie.
     if (args.batch_size > 1) {
         fprintf(stderr, "Error: --batch-size %d is not supported. Multi-prompt batching is "
@@ -1729,7 +1729,7 @@ static int run_batch(const Args& args) {
             // Skip empty lines to match validation's non-empty count.
             // Without this, an empty line in prompts.txt reads an assignment
             // record meant for the next real prompt, silently desyncing all
-            // subsequent prompt↔assignment pairings.
+            // subsequent prompt/assignment pairings.
             if (p_line.empty()) continue;
             auto assignment_read = read_prompt_assignments(assign_fin);
             if (assignment_read.status != AssignmentReadStatus::ok) {
@@ -1761,7 +1761,7 @@ static int run_batch(const Args& args) {
             pfq.cv.notify_one();
         }
         // Detect I/O errors on the prompts stream. std::getline returns
-        // false for both EOF and I/O errors — without this check, a disk failure
+        // false for both EOF and I/O errors; without this check, a disk failure
         // mid-file is indistinguishable from normal end-of-file, silently
         // truncating the run and exiting 0.
         if (prompts_fin.bad()) {
@@ -1896,7 +1896,7 @@ static int run_batch(const Args& args) {
         // paper ("prompted Sonnet 4.5 to write stories... extracted activations")
         // and the SLM paper's finding that generation > comprehension (p=0.007).
         if (args.generate_tokens > 0) {
-            // --generate + --save-per-story is unsupported — the per-story
+            // --generate + --save-per-story is unsupported: the per-story
             // per-story sidecar records are written by the comprehension block below, which
             // this path skips via `continue`. Fail loud rather than emit a
             // header-only sidecar that silently produces zero .pt files.
@@ -1982,11 +1982,11 @@ static int run_batch(const Args& args) {
 
             for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
                 // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
-                // writes/reads OOB KV state — the exact fault class that hard-locks
+                // writes/reads OOB KV state, the exact fault class that hard-locks
                 // the GPU. Without this, a long prompt + large --generate (or a model
                 // that never emits EOS) overruns the context window.
                 if (cur_pos >= n_ctx) {
-                    fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d — stopping\n",
+                    fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d: stopping\n",
                             n_ctx, gen_step, prompt_idx);
                     break;
                 }
@@ -2056,7 +2056,7 @@ static int run_batch(const Args& args) {
                     return 1;
                 }
 
-                // Accumulate: each layer has 1 token × n_embd floats.
+                // Accumulate: each layer has 1 token x n_embd floats.
                 // Skip the first args.token_skip generated tokens (matching
                 // comprehension-mode behavior): the initial generated tokens
                 // are "warm-up" content that dilutes the concept signal and
@@ -2114,7 +2114,7 @@ static int run_batch(const Args& args) {
 
             // Compute means from generated tokens and accumulate into the assignment buffers
             // (same path as comprehension mode, but using gen_accum instead of masked mean)
-            // Use per-layer gen_count[li] — a null layer_ptrs[li] skips that layer's
+            // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
             // accumulation, so counts can differ across layers.
             for (const auto& assign : assignments) {
                 for (size_t li = 0; li < target_layers.size(); li++) {
@@ -2316,7 +2316,7 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "===============================================\n\n");
     }
 
-    // TOCTOU guard — verify the actual processed count matches the expected
+    // TOCTOU guard: verify the actual processed count matches the expected
     // count from the assignments header. A mismatch means the prompts file was
     // modified between the count pass and the producer read.
     if (skip_count == 0 && n_processed != n_prompts_expected) {
@@ -2362,7 +2362,7 @@ static int run_batch(const Args& args) {
     // Per-story sidecar: close the temp file and atomically rename to the final
     // path now that the run fully succeeded.
     if (stories_closer) {
-        if (!stories_closer.sync()) {  // flush + fsync — check for failures
+        if (!stories_closer.sync()) {  // flush + fsync: check for failures
             fprintf(stderr, "Error: sync failed for %s\n", stories_temp_path.c_str());
             stories_closer.reset();
             std::remove(stories_temp_path.c_str());
@@ -2372,7 +2372,7 @@ static int run_batch(const Args& args) {
         if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",
                     stories_temp_path.c_str(), stories_path.c_str());
-            // rename failed — remove the orphaned temp file.
+            // rename failed: remove the orphaned temp file.
             std::remove(stories_temp_path.c_str());
             return 1;
         }
@@ -2381,7 +2381,7 @@ static int run_batch(const Args& args) {
 
     // Delete checkpoint on successful completion
     std::string ckpt_path = std::string(args.output_path) + ".checkpoint";
-    // Check remove() result — a stale checkpoint surviving a successful run
+    // Check remove() result: a stale checkpoint surviving a successful run
     // would cause a redundant --resume. Warn (not abort) since data is fine.
     if (remove(ckpt_path.c_str()) != 0 && errno != ENOENT) {
         fprintf(stderr, "Warning: could not remove checkpoint %s (run completed successfully; "
@@ -2625,7 +2625,7 @@ static int run_self_test() {
         test_acc[key2].sum = {0.1f, -0.2f, 0.3f, -0.4f};
         test_acc[key2].count = 7;
 
-        // Write checkpoint to temp file — include PID to avoid collision
+        // Write checkpoint to temp file - include PID to avoid collision
         // between concurrent self-test runs (CI) and symlink attacks.
         char test_ckpt_buf[256];
         snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/cr_self_test_ckpt_%d.bin", (int)getpid());
