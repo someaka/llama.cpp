@@ -6,9 +6,8 @@ hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
 ## Fork State
 
 - **Branch:** `main` (work directly on main, no feature branches)
-- **Upstream tracking:** 0 commits behind upstream `master` (rebased 2026-08-14)
-- **Unique commits:** 147 (post-rebase 2026-08-14, incl. 1 API adaptation)
-- **Modified files:** 49 (5,310 insertions, 163 deletions)
+- **Upstream tracking:** merge-base `adb55e5148` (2026-08-14 rebase; 4 upstream commits landed since, no overlap with fork changes)
+- **Fork delta:** 53 files, +7,013/-36 vs merge-base
 
 ## Features
 
@@ -18,8 +17,7 @@ Adds per-layer residual stream activation extraction to the llama.cpp compute gr
 
 - **`llama_context_params.extract_hidden_states`**  -  flag to enable extraction
 - **`llama_set_extract_hidden_states()`**  -  runtime toggle
-- **`llama_get_hidden_state(ctx, layer)`**  -  get all tokens for a layer
-- **`llama_get_hidden_state_ith(ctx, layer, i)`**  -  get specific token (supports negative indexing)
+- **`llama_get_hidden_state(ctx, layer)`**  -  get all tokens for a layer (row i = `ptr + i * n_embd`)
 - **`llama_get_hidden_state_n_tokens(ctx)`**  -  token count
 - **`llama_get_hidden_states_batch()`**  -  batch-get multiple layers in one call
 
@@ -30,12 +28,13 @@ Model patches push the residual stream output of each decoder layer into
 - Llama (llama.cpp)
 - Qwen3.5 (qwen35.cpp)
 
-### 2. Graph Optimization: Skip lm_head
+### 2. Output-Projection Interaction
 
-When `extract_hidden_states` is true and no samplers/embeddings are needed,
-the lm_head output projection is pruned from the compute graph via
-`ggml_set_output(t_logits)` skipping. This gives ~1.89x speedup for
-extraction-only workloads.
+Extraction does not modify the output path: logits are computed as upstream
+computes them. The last-layer `ggml_get_rows` row-selection on
+`inp_out_ids` is suppressed only while extraction is enabled (llama/gemma
+model files), so per-layer tensors carry all tokens; the output projection
+itself runs unchanged.
 
 ### 3. `/hidden-states` HTTP Endpoint (Server)
 
