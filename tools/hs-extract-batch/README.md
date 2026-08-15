@@ -54,8 +54,14 @@ llama-hs-extract-batch --self-test
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
 - `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). `--save-per-story` is accepted as a legacy alias for this flag.
-- `--batch-size N` - Pack N prompts per decode call (default: 1, no batching)
+- `--batch-size N` - Accepted for compatibility; values > 1 are rejected at runtime with an error (multi-prompt batching is not implemented)
 - `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
+- `--no-bos` - Do not add the BOS token (for models whose tokenizer expects no leading BOS)
+- `--generate N` - Generation-based extraction: generate N tokens after each prompt and extract hidden states from the generated tokens only (comprehension-based extraction otherwise). Incompatible with `--save-per-record`
+- `--temperature F` - Sampling temperature for generation mode (0 = greedy argmax, default)
+- `--top-k K` - Top-k sampling, generation mode only (default: 0 = disabled)
+- `--top-p F` - Nucleus sampling threshold, generation mode only (default: 1.0 = disabled)
+- `--repeat-penalty F` - Repeat penalty, generation mode only (default: 1.0 = disabled)
 
 **Layer specification:**
 - `all` - Extract from all layers (default)

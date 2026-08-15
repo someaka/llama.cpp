@@ -185,7 +185,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --token-skip N  In generation mode: skip the first N GENERATED tokens when computing the mean.\n");
     fprintf(stderr, "                  In comprehension mode: skip the first N input tokens. Default: 0.\n");
     fprintf(stderr, "  --temperature F Sampling temperature for generation mode (0 = greedy argmax, default).\n");
-    fprintf(stderr, "                  temperature > 0 reduces cross-chip divergence from greedy decoding.\n");
+    fprintf(stderr, "                  temperature > 0 reduces cross-backend divergence from greedy decoding.\n");
     fprintf(stderr, "  --top-k K       Top-k sampling (generation mode only, default: 0 = disabled).\n");
     fprintf(stderr, "  --top-p F       Nucleus sampling threshold (generation mode only, default: 1.0 = disabled).\n");
     fprintf(stderr, "  --repeat-penalty F  Repeat penalty (generation mode only, default: 1.0 = disabled).\n");
@@ -482,7 +482,7 @@ static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
 static constexpr int32_t OUTPUT_MAGIC      = 0x43524432;  // binary accumulator format v2
 
 // Per (group, mask, layer): running sum and count for accumulating means.
-// Flat key: (group_id << 24) | (mask_id << 16) | layer_idx for single hash lookup.
+// Flat key: (group_id << 32) | (mask_id << 16) | layer_idx for single hash lookup.
 struct AccumulatedVector {
     std::vector<float> sum;  // size n_embd, initialized lazily on first access
     int count = 0;
@@ -1960,7 +1960,7 @@ static int run_batch(const Args& args) {
             // Build sampler chain for generation. Default (temperature=0) is greedy,
             // which is deterministic but divergent across CUDA/Vulkan backends because
             // small logit differences flip the argmax. temperature > 0 adds stochasticity
-            // that, combined with repeat_penalty, stabilizes cross-chip trajectories.
+            // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
             const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
             int n_vocab = llama_vocab_n_tokens(vocab);
             llama_sampler * sampler = nullptr;
@@ -2062,7 +2062,7 @@ static int run_batch(const Args& args) {
                 // Skip the first args.token_skip generated tokens (matching
                 // comprehension-mode behavior): the initial generated tokens
                 // are "warm-up" content that dilutes the concept signal and
-                // amplifies cross-chip divergence (the first ~50 tokens of
+                // amplifies cross-backend divergence (the first ~50 tokens of
                 // greedy decoding diverge most across CUDA/Vulkan backends).
                 if (gen_step >= args.token_skip) {
                     for (size_t li = 0; li < n_layers_total; li++) {

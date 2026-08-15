@@ -5243,7 +5243,7 @@ void server_routes::init_routes() {
         std::string pool = "last";
         if (body.contains("pool")) {
             if (!body["pool"].is_string()) {
-                res->error(format_error_response("pool must be a string ('last' or 'skip_mean')", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("pool must be a string ('last', 'skip_mean', or 'none')", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             pool = body["pool"].get<std::string>();
