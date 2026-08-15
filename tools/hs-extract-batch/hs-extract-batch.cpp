@@ -2628,7 +2628,7 @@ static int run_self_test() {
         // Write checkpoint to temp file - include PID to avoid collision
         // between concurrent self-test runs (CI) and symlink attacks.
         char test_ckpt_buf[256];
-        snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/cr_self_test_ckpt_%d.bin", (int)getpid());
+        snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/hs_self_test_ckpt_%d.bin", (int)getpid());
         const char* test_ckpt = test_ckpt_buf;
         bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42);
         if (!write_ok) {
