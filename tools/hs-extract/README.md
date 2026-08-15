@@ -69,6 +69,6 @@ Each layer entry contains a flat array of `n_tokens * n_embd` float values
 
 ## Notes
 
-- Calls `llama_synchronize()` after decode to ensure CUDA writes complete before reading
+- The hidden-state getters synchronize the context before returning data; no explicit `llama_synchronize()` is needed
 - Supports both CPU and GPU inference via `-ngl` flag
 - For batch processing, use [hs-extract-batch](../hs-extract-batch/) instead
