@@ -1004,7 +1004,7 @@ float * llama_context::get_hidden_state(int32_t layer) {
 }
 
 float * llama_context::get_hidden_state_ith(int32_t layer, int32_t i) {
-    const float * layer_data = get_hidden_state(layer);
+    float * layer_data = get_hidden_state(layer);
     if (layer_data == nullptr) {
         return nullptr;
     }
@@ -1019,7 +1019,7 @@ float * llama_context::get_hidden_state_ith(int32_t layer, int32_t i) {
     }
 
     const uint32_t n_embd_out = model.hparams.n_embd_out();
-    return const_cast<float *>(layer_data) + i * n_embd_out;
+    return layer_data + i * n_embd_out;
 }
 
 int32_t llama_context::get_hidden_state_n_tokens() const {
@@ -2257,6 +2257,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
+    //synchronize();
 
     return 0;
 }
