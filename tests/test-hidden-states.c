@@ -102,7 +102,7 @@ int main(int argc, char ** argv) {
     // documented layout (layer base + (n_tokens-1) * n_embd_out).
     {
         float * hs0 = llama_get_hidden_state(ctx, 0);
-        if (hs0 == nullptr) {
+        if (hs0 == NULL) {
             fprintf(stderr, "ERROR: layer 0 returned NULL before last-token check\n");
             ok = 0;
         } else {
