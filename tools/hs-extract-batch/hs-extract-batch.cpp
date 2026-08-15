@@ -318,8 +318,7 @@ static Args parse_args(int argc, char** argv) {
             args.checkpoint_every = (int)val;
         } else if (arg == "--resume") {
             args.resume = true;
-        } else if (arg == "--save-per-record" || arg == "--save-per-story") {
-            // The second spelling is a legacy alias kept for existing pipelines.
+        } else if (arg == "--save-per-record") {
             args.save_per_record = true;
         } else if (arg == "--profile") {
             args.profile = true;
@@ -352,6 +351,10 @@ static Args parse_args(int argc, char** argv) {
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             exit(0);
+        } else if (!arg.empty() && arg[0] == '-') {
+            fprintf(stderr, "Error: unknown argument '%s'\n", arg.c_str());
+            print_usage(argv[0]);
+            exit(1);
         } else {
             positional.push_back(argv[i]);
         }
@@ -431,6 +434,14 @@ static Args parse_args(int argc, char** argv) {
         }
         if (!args.output_path) {
             fprintf(stderr, "Error: --raw requires an output file path\n");
+            print_usage(argv[0]);
+            exit(1);
+        }
+        // The per-record sidecar is written by the batch-mode accumulation
+        // path only; raw mode writes its own per-prompt output format.
+        if (args.save_per_record) {
+            fprintf(stderr, "Error: --save-per-record requires batch mode; "
+                    "raw mode writes per-prompt vectors to the output file directly\n");
             print_usage(argv[0]);
             exit(1);
         }
@@ -713,13 +724,8 @@ static bool process_prompt(
         return false;
     }
 
-    // CRITICAL: synchronize before reading hidden states.
-    // llama_decode() submits the compute graph asynchronously on CUDA.
-    // Without sync, llama_get_hidden_state() can read a partially-written
-    // tensor, triggering GGML_ASSERT (tensor read out of bounds).
-    llama_synchronize(ctx);
-
-    // Extract hidden state metadata
+    // The getters synchronize the context before returning data
+    // (see llama_get_hidden_state); no explicit sync is needed here.
     int n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);
     if (n_hidden_tokens <= 0) {
         fprintf(stderr, "Error: decode produced no hidden state tokens for prompt %zu\n", prompt_idx);
@@ -1012,11 +1018,9 @@ static int run_raw(const Args& args) {
         return 1;
     }
 
-    // Open output file. Write to a temp path and atomically rename at the end
-    // This matches the batch/checkpoint/records atomicity guarantees.
-    // A crash mid-run previously left a truncated raw dump at the final path,
-    // which the Python parser would misread. Now a crash leaves only a .tmp
-    // file that is unlinked on the error paths below.
+    // Open output file. Write to a temp path and atomically rename at the end;
+    // a crash must never leave a truncated dump at the final path, because
+    // downstream parsers would misread it.
     std::string tmp_path = std::string(args.output_path) + ".tmp";
     FilePtr out(fopen(tmp_path.c_str(), "wb"));
     if (!out) {
@@ -1686,16 +1690,10 @@ static int run_batch(const Args& args) {
                 records_path.c_str(), n_embd, n_target_layers);
     }
 
-    // -- Async prefetch pipeline (Tier 3.2) --
-    // Producer-consumer: prefetch prompt N+1's tokens + assignments while GPU
-    // processes prompt N. The producer thread does file I/O + tokenization (CPU
-    // work that was previously serialized with GPU decode). The consumer (main
-    // thread) owns the llama_context exclusively -- only it calls decode/extract.
-    //
-    // This overlaps ~1ms of I/O + ~0.5ms of tokenization with every decode,
-    // recovering the 1-2% that was previously lost. Not a huge win on its own,
-    // but it establishes the pipeline structure for the future async hidden
-    // state extraction.
+    // -- Async prefetch pipeline --
+    // Producer-consumer: the producer thread does file I/O + tokenization for
+    // prompt N+1 while the GPU processes prompt N. The consumer (main thread)
+    // owns the llama_context exclusively -- only it calls decode/extract.
 
     struct PrefetchedPrompt {
         int prompt_idx = -1;

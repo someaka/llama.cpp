@@ -50,10 +50,8 @@ llama_context* ctx = llama_init_from_model(model, ctx_params);
 std::vector<llama_token> tokens = tokenize(ctx, prompt);
 llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()));
 
-// 4. CRITICAL: Synchronize before reading (CUDA writes are async)
-llama_synchronize(ctx);
-
-// 5. Extract hidden states from each layer
+// 4. Extract hidden states from each layer
+//    (the getters synchronize the context themselves; no explicit sync needed)
 for (int layer = 0; layer < n_layers; layer++) {
     float* hidden = llama_get_hidden_state(ctx, layer);
     int n_tokens = llama_get_hidden_state_n_tokens(ctx);
@@ -71,7 +69,6 @@ Hidden states are written asynchronously by CUDA kernels. **Always call `llama_s
 
 - `llama_get_hidden_state(ctx, layer)` - Get hidden states for a specific layer
 - `llama_get_hidden_state_n_tokens(ctx)` - Get number of tokens with hidden states
-- `llama_get_hidden_state_ith(ctx, layer, token_idx)` - Get hidden state for specific token
 
 ### Memory Layout
 

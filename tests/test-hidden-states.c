@@ -98,20 +98,19 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Test ith accessor
-    float * hs_last = llama_get_hidden_state_ith(ctx, 0, -1);
-    if (!hs_last) {
-        fprintf(stderr, "ERROR: get_hidden_state_ith(layer=0, i=-1) returned NULL\n");
-        ok = 0;
+    // Last-token access with the single getter: pointer arithmetic on the
+    // documented layout (layer base + (n_tokens-1) * n_embd_out).
+    {
+        float * hs0 = llama_get_hidden_state(ctx, 0);
+        int32_t n_embd = llama_model_n_embd(model);
+        float * hs_last = hs0 + (size_t)(n_hidden - 1) * n_embd;
+        if (!hs_last || hs_last[0] != hs_last[0]) {  // NULL or NaN check
+            fprintf(stderr, "ERROR: last-token pointer for layer 0 is invalid\n");
+            ok = 0;
+        }
     }
 
-    // Test out-of-range
-    float * hs_bad = llama_get_hidden_state_ith(ctx, 0, 99999);
-    if (hs_bad != NULL) {
-        fprintf(stderr, "ERROR: out-of-range should return NULL\n");
-        ok = 0;
-    }
-
+    // Test out-of-range layer indices are rejected
     float * hs_bad_layer = llama_get_hidden_state(ctx, -1);
     if (hs_bad_layer != NULL) {
         fprintf(stderr, "ERROR: negative layer should return NULL\n");

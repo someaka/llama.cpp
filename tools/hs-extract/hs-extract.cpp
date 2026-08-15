@@ -259,9 +259,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // CRITICAL: synchronize before reading hidden states (CUDA async write race)
-    llama_synchronize(ctx);
-
+    // The getters synchronize the context before returning data
+    // (see llama_get_hidden_state); no explicit sync is needed here.
     const int32_t n_tokens_out = llama_get_hidden_state_n_tokens(ctx);
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 

@@ -11,7 +11,6 @@
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
 
-#include <atomic>
 #include <map>
 #include <vector>
 
@@ -92,11 +91,7 @@ struct llama_context {
     float * get_embeddings_layer_inp(uint32_t lid);
 
     float * get_hidden_state(int32_t layer);
-    float * get_hidden_state_ith(int32_t layer, int32_t i);
     int32_t get_hidden_state_n_tokens() const;
-
-    // true when hidden_state_buf is up-to-date (no pending async copies)
-    bool hs_synced() const { return _hs_synced.load(std::memory_order_acquire); }
 
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
@@ -315,9 +310,7 @@ private:
 
     // per-layer hidden state buffer (flat: n_hidden_tokens * n_embd per layer), only when extract_hidden_states
     std::vector<float> hidden_state_buf;
-    int32_t n_hidden_tokens = 0;
-    int32_t n_hidden_layers = 0;  // explicit layer count, set during first extract
-    std::atomic<bool> _hs_synced{false};  // true when hidden_state_buf is up-to-date (no pending async copies)
+    int32_t n_hidden_tokens = 0;  // 0 unless the last decode captured every token; bounds all reads
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
