@@ -53,7 +53,7 @@ llama-hs-extract-batch --self-test
 - `--checkpoint-every N` - Save checkpoint every N prompts (default: 10000)
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
-- `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). `--save-per-story` is accepted as a legacy alias for this flag.
+- `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw` and `--generate`.
 - `--batch-size N` - Accepted for compatibility; values > 1 are rejected at runtime with an error (multi-prompt batching is not implemented)
 - `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
 - `--no-bos` - Do not add the BOS token (for models whose tokenizer expects no leading BOS)
