@@ -2971,6 +2971,10 @@ private:
             }
 
             llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
+
+            // enable/disable hidden state extraction before decode so the
+            // compute graph populates t_hidden_layers tensors
+            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
         }
 
         llama_batch batch_view;
@@ -3754,29 +3758,6 @@ private:
         SRV_DBG("n_batch (effective) = %d, off = %d\n", n_batch, off);
 
         metrics_pre_decode();
-
-        auto & slot_batched      = batch.slot_batched;
-        auto & alora_scale       = batch.alora_scale;
-        auto & alora_disabled_id = batch.alora_disabled_id;
-
-        // TODO @ngxson : alora handling is too messy, need to refactor it to be more clear and maintainable
-        if (slot_batched) {
-            // apply lora, only need to do it once per batch
-            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
-
-            // if the lora is temporarily disabled for an alora, re-enable it
-            // for next time
-            if (alora_scale > 0.0f) {
-                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
-                slot_batched->lora[alora_disabled_id].scale = alora_scale;
-            }
-
-            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
-
-            // enable/disable hidden state extraction before decode so the
-            // compute graph populates t_hidden_layers tensors
-            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
-        }
 
         if (batch.size() == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
