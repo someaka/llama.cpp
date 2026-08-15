@@ -360,10 +360,12 @@ jobs:
           echo "=== Check 3: RAII LlamaBackend ==="
           for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
             grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
-            grep -q "llama_synchronize" "$f" && echo "PASS: sync $f" || { echo "FAIL: missing llama_synchronize in $f"; exit 1; }
           done
-          echo "=== Check 4: llama_synchronize in batch tool ==="
-          grep -q "llama_synchronize" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: missing llama_synchronize in hs-extract-batch.cpp"; exit 1; }
+          echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
+          for f in src/llama-context.cpp; do
+            grep -q "llama_context::get_hidden_state\b" "$f" || { echo "FAIL: get_hidden_state impl missing"; exit 1; }
+            grep -A2 "^float \* llama_get_hidden_state(" "$f" | grep -q "ctx->synchronize()" && echo "PASS: getters sync" || { echo "FAIL: llama_get_hidden_state does not synchronize"; exit 1; }
+          done
           echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
           python3 - <<'PY'
           from pathlib import Path
