@@ -5253,8 +5253,8 @@ void server_routes::init_routes() {
             }
         }
 
-        // Parse skip_offset parameter (default: 50, used with pool="skip_mean")
-        int32_t skip_offset = 50;
+        // Parse skip_offset parameter (default: 0 = pool over all tokens, used with pool="skip_mean")
+        int32_t skip_offset = 0;
         if (body.contains("skip_offset")) {
             if (!body["skip_offset"].is_number_integer()) {
                 res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));

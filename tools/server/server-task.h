@@ -104,7 +104,7 @@ struct task_params {
     bool hidden_normalize = false; // normalize hidden state vectors
     // Pooling: "last" (default) = last token only, "skip_mean" = mean over [skip_offset, n_tokens), "none" = all per-token vectors
     std::string hidden_pool = "last";
-    int32_t hidden_skip_offset = 50; // tokens to skip for skip_mean pooling
+    int32_t hidden_skip_offset = 0; // tokens to skip for skip_mean pooling (default: pool over all tokens)
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
