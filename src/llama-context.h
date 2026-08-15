@@ -95,6 +95,9 @@ struct llama_context {
     float * get_hidden_state_ith(int32_t layer, int32_t i);
     int32_t get_hidden_state_n_tokens() const;
 
+    // true when hidden_state_buf is up-to-date (no pending async copies)
+    bool hs_synced() const { return _hs_synced.load(std::memory_order_acquire); }
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -315,9 +318,6 @@ private:
     int32_t n_hidden_tokens = 0;
     int32_t n_hidden_layers = 0;  // P4.1: explicit layer count, set during first extract
     std::atomic<bool> _hs_synced{false};  // true when hidden_state_buf is up-to-date (no pending async copies)
-
-public:
-    bool hs_synced() const { return _hs_synced.load(std::memory_order_acquire); }
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
