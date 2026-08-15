@@ -57,10 +57,18 @@ Zero redundancy.
   getters, multi-ubatch consistency.
 - `hs-extract-batch --self-test`: 17/17 end-to-end (incl. accumulator
   checkpoint/resume roundtrip).
-- One commit in the stack restores `tests/test-backend-ops.cpp` to upstream
-  content: an intermediate rebase had silently dropped 117 lines of upstream
-  chunked-scan test coverage; the restore brings the file to zero-diff vs
-  the PR base.
+- Two commits in the stack restore upstream test coverage that intermediate
+  branch surgery had silently dropped: `tests/test-backend-ops.cpp` (117
+  lines of upstream chunked-scan tests) and the
+  `test-recurrent-state-rollback-nemotron-h` registration in
+  `tests/CMakeLists.txt` (10 lines). Both files are zero-diff (resp.
+  add-only) vs the PR base after the restores.
+- One included change is deliberately outside the extraction feature:
+  `src/llama-kv-cells.h` replaces a per-position `std::map` with a flat
+  count table. It rides in the first commit because sustained extraction
+  workloads (200K+ prompts, millions of decode cycles) exposed heap churn
+  in the rb-tree node allocator; the flat table removes that surface. Happy
+  to split it into its own commit (or PR) if maintainers prefer.
 - Both CLIs + server endpoint exercised daily on RTX 3090 (CUDA) and AMD
   Renoir iGPU (Vulkan/RADV) — cross-backend validated, identical results
   within quantization tolerance.
