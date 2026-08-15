@@ -1082,9 +1082,9 @@ extern "C" {
     LLAMA_API int32_t llama_get_hidden_state_n_tokens(struct llama_context * ctx);
 
     // Batch-get hidden state pointers for multiple layers in a single call.
-    // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd_out floats),
-    // or NULL if that layer is out of range.
-    // Returns 0 on success, -1 if hidden states are unavailable.
+    // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd_out floats).
+    // Returns 0 on success, -1 if hidden states are unavailable or any layer
+    // index is out of range (no out_ptrs entry is written in that case).
     // Performs one synchronize() and one bounds validation pass for the whole
     // layer set, instead of one per llama_get_hidden_state() call.
     LLAMA_API int32_t llama_get_hidden_states_batch(
