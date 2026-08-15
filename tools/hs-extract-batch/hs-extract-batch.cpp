@@ -74,7 +74,7 @@ struct FilePtr {
     ~FilePtr() { if (fp) fclose(fp); }
     FilePtr(const FilePtr&) = delete;
     FilePtr& operator=(const FilePtr&) = delete;
-    // Move semantics (needed for stories_file pattern)
+    // Move semantics (needed for records_file pattern)
     FilePtr(FilePtr&& other) noexcept : fp(other.fp) { other.fp = nullptr; }
     FilePtr& operator=(FilePtr&& other) noexcept {
         if (this != &other) {
@@ -147,7 +147,7 @@ struct Args {
     int checkpoint_every = 10000; // --checkpoint-every N
     bool resume = false;          // --resume: continue from checkpoint
     int n_gpu_layers = ALL_GPU_LAYERS; // --n-gpu-layers / -ngl: GPU offload (ALL_GPU_LAYERS = all)
-    bool save_per_story = false;  // --save-per-story: write per-story vectors sidecar
+    bool save_per_record = false;  // --save-per-record: write per-record vectors sidecar
     int batch_size = 1;           // --batch-size N: pack N prompts per decode (default: 1)
     bool profile = false;         // --profile: print per-phase timing breakdown
     bool no_bos = false;          // --no-bos: do not add BOS token (for models like Qwen3.5)
@@ -175,12 +175,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --checkpoint-every N  Write checkpoint every N prompts (default: 10000)\n");
     fprintf(stderr, "  --resume         Resume from last checkpoint\n");
     fprintf(stderr, "  --n-gpu-layers N / -ngl N  Layers to offload to GPU (default: 99 = all)\n");
-    fprintf(stderr, "  --save-per-story  Also write per-story vectors to <output>.stories.bin\n");
+    fprintf(stderr, "  --save-per-record  Also write per-record vectors to <output>.records.bin\n");
     fprintf(stderr, "  --batch-size N   Pack N prompts per decode call (default: 1, no batching)\n");
     fprintf(stderr, "  --profile       Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)\n");
     fprintf(stderr, "  --no-bos        Do not add BOS token (for models like Qwen3.5 with bos_offset=0)\n");
     fprintf(stderr, "  --generate N    Generation-based extraction: generate N tokens after each prompt,\n");
-    fprintf(stderr, "                  extract hidden states from GENERATED tokens only (Anthropic/SLM methodology).\n");
+    fprintf(stderr, "                  extract hidden states from GENERATED tokens only.\n");
     fprintf(stderr, "                  Without this flag, extraction is comprehension-based (forward pass only).\n");
     fprintf(stderr, "  --token-skip N  In generation mode: skip the first N GENERATED tokens when computing the mean.\n");
     fprintf(stderr, "                  In comprehension mode: skip the first N input tokens. Default: 0.\n");
@@ -318,8 +318,9 @@ static Args parse_args(int argc, char** argv) {
             args.checkpoint_every = (int)val;
         } else if (arg == "--resume") {
             args.resume = true;
-        } else if (arg == "--save-per-story") {
-            args.save_per_story = true;
+        } else if (arg == "--save-per-record" || arg == "--save-per-story") {
+            // The second spelling is a legacy alias kept for existing pipelines.
+            args.save_per_record = true;
         } else if (arg == "--profile") {
             args.profile = true;
         } else if (arg == "--batch-size") {
@@ -442,13 +443,13 @@ static Args parse_args(int argc, char** argv) {
     exit(1);
 }
 
-// Wraps fwrite for per-story sidecar writes. On failure, prints error,
+// Wraps fwrite for per-record sidecar writes. On failure, prints error,
 // signals producer to stop, joins producer thread, and returns 1 from the calling function.
 // All captured state is passed explicitly; no implicit scope capture.
-#define STORIES_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
+#define RECORDS_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
     do {                                                                        \
         if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
-            fprintf(stderr, "Error: per-story write failed at %s:%d\n",         \
+            fprintf(stderr, "Error: per-record write failed at %s:%d\n",        \
                     __FILE__, __LINE__);                                        \
             { std::lock_guard<std::mutex> _lk((pfq_ref).mtx); (pfq_ref).producer_done = true; } \
             (pfq_ref).cv_space.notify_all();                                    \
@@ -461,10 +462,10 @@ static Args parse_args(int argc, char** argv) {
 // Sets producer_done (unblocks a producer waiting on cv_space backpressure)
 // and joins the thread. Used at every consumer error exit point.
 //
-// Also remove the per-story temp file if one is open. Every consumer-loop
-// error exit goes through this macro, and a leftover .stories.bin.tmp would be
+// Also remove the per-record temp file if one is open. Every consumer-loop
+// error exit goes through this macro, and a leftover .records.bin.tmp would be
 // picked up by a subsequent run's parser or accumulate across failed retries.
-// `stories_temp_path` is an empty std::string when --save-per-story is not set,
+// `records_temp_path` is an empty std::string when --save-per-record is not set,
 // so std::remove on "" is a harmless no-op (returns ENOENT).
 #define STOP_PRODUCER_AND_JOIN()                                                \
     do {                                                                        \
@@ -472,7 +473,7 @@ static Args parse_args(int argc, char** argv) {
         pfq.cv_space.notify_all();                                              \
         producer_thread.join();                                                 \
         llama_synchronize(ctx);                                                 \
-        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str()); \
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str()); \
     } while (0)
 
 // -- Batch Mode Constants & Data Structures -----------------------------
@@ -572,7 +573,7 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
  * Generalizes the single-contiguous-range mean (token_skip -> n_tokens) to
  * arbitrary collections of [start, end) token index pairs. Used by both the
  * refactored one-shot/persistent mean mode (single range) and the future
- * batch-accumulate mode (arbitrary ranges for deflection masking).
+ * batch-accumulate mode (arbitrary token ranges).
  *
  * @param data      Pointer to hidden state data, shape (n_tokens, n_embd).
  * @param n_tokens  Number of tokens in the sequence.
@@ -1012,7 +1013,7 @@ static int run_raw(const Args& args) {
     }
 
     // Open output file. Write to a temp path and atomically rename at the end
-    // This matches the batch/checkpoint/stories atomicity guarantees.
+    // This matches the batch/checkpoint/records atomicity guarantees.
     // A crash mid-run previously left a truncated raw dump at the final path,
     // which the Python parser would misread. Now a crash leaves only a .tmp
     // file that is unlinked on the error paths below.
@@ -1648,41 +1649,41 @@ static int run_batch(const Args& args) {
     double prof_total_kv = 0, prof_total_decode = 0, prof_total_extract = 0, prof_total_mean = 0;
     int prof_count = 0;
 
-    // Per-story sidecar file (optional)
-    // Written to a temp path and atomically renamed to the final .stories.bin
+    // Per-record sidecar file (optional)
+    // Written to a temp path and atomically renamed to the final .records.bin
     // only on full success, so a mid-run crash can never leave a truncated
     // sidecar that the Python parser would misread on the next run.
-    std::string stories_path;
-    std::string stories_temp_path;
-    FilePtr stories_closer;
-    if (args.save_per_story) {
-        stories_path = std::string(args.output_path) + ".stories.bin";
-        stories_temp_path = stories_path + ".tmp";
-        stories_closer.fp = fopen(stories_temp_path.c_str(), "wb");
-        if (!stories_closer) {
-            fprintf(stderr, "Error: cannot open per-story file %s\n", stories_temp_path.c_str());
+    std::string records_path;
+    std::string records_temp_path;
+    FilePtr records_closer;
+    if (args.save_per_record) {
+        records_path = std::string(args.output_path) + ".records.bin";
+        records_temp_path = records_path + ".tmp";
+        records_closer.fp = fopen(records_temp_path.c_str(), "wb");
+        if (!records_closer) {
+            fprintf(stderr, "Error: cannot open per-record file %s\n", records_temp_path.c_str());
             return 1;
         }
-        FILE* stories_fp = stories_closer.fp;
-        int32_t story_magic = 0x53545231;  // per-story sidecar format
-        if (fwrite(&story_magic, sizeof(int32_t), 1, stories_fp) != 1 ||
-            fwrite(&n_embd, sizeof(int32_t), 1, stories_fp) != 1) {
-            fprintf(stderr, "Error: per-story header write failed\n");
+        FILE* records_fp = records_closer.fp;
+        int32_t record_magic = 0x53545231;  // per-record sidecar format
+        if (fwrite(&record_magic, sizeof(int32_t), 1, records_fp) != 1 ||
+            fwrite(&n_embd, sizeof(int32_t), 1, records_fp) != 1) {
+            fprintf(stderr, "Error: per-record header write failed\n");
             // Remove the partially-written temp file.
-            stories_closer.reset();
-            std::remove(stories_temp_path.c_str());
+            records_closer.reset();
+            std::remove(records_temp_path.c_str());
             return 1;
         }
         int32_t n_target_layers = (int32_t)target_layers.size();
-        if (fwrite(&n_target_layers, sizeof(int32_t), 1, stories_fp) != 1) {
-            fprintf(stderr, "Error: per-story header write failed\n");
+        if (fwrite(&n_target_layers, sizeof(int32_t), 1, records_fp) != 1) {
+            fprintf(stderr, "Error: per-record header write failed\n");
             // Remove the partially-written temp file.
-            stories_closer.reset();
-            std::remove(stories_temp_path.c_str());
+            records_closer.reset();
+            std::remove(records_temp_path.c_str());
             return 1;
         }
-        fprintf(stderr, "Per-story output: %s (n_embd=%d, n_layers=%d)\n",
-                stories_path.c_str(), n_embd, n_target_layers);
+        fprintf(stderr, "Per-record output: %s (n_embd=%d, n_layers=%d)\n",
+                records_path.c_str(), n_embd, n_target_layers);
     }
 
     // -- Async prefetch pipeline (Tier 3.2) --
@@ -1890,19 +1891,20 @@ static int run_batch(const Args& args) {
         llama_synchronize(ctx);
         auto t_decode_end = std::chrono::steady_clock::now();
 
-        // -- Generation-based extraction (Anthropic/SLM methodology) --
+        // -- Generation-based extraction --
         // If --generate N is set, autoregressively generate N tokens and extract
-        // hidden states from the GENERATED tokens only. This matches the Anthropic
-        // paper ("prompted Sonnet 4.5 to write stories... extracted activations")
-        // and the SLM paper's finding that generation > comprehension (p=0.007).
+        // hidden states from the GENERATED tokens only. This contrasts with the
+        // default comprehension-based mode, which reads hidden states from the
+        // INPUT tokens of a single forward pass: here the model's own output
+        // tokens are the span whose representations are captured.
         if (args.generate_tokens > 0) {
-            // --generate + --save-per-story is unsupported: the per-story
-            // per-story sidecar records are written by the comprehension block below, which
+            // --generate + --save-per-record is unsupported: the per-record
+            // sidecar records are written by the comprehension block below, which
             // this path skips via `continue`. Fail loud rather than emit a
             // header-only sidecar that silently produces zero .pt files.
-            if (args.save_per_story) {
-                fprintf(stderr, "Error: --generate is incompatible with --save-per-story "
-                        "(per-story records are not written in generation mode)\n");
+            if (args.save_per_record) {
+                fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
+                        "(per-record records are not written in generation mode)\n");
                 STOP_PRODUCER_AND_JOIN();
                 return 1;
             }
@@ -2236,16 +2238,16 @@ static int run_batch(const Args& args) {
                 for (int d = 0; d < n_embd; d++) av.sum[d] += mean_buf[d];
                 av.count++;
 
-                if (args.save_per_story && stories_closer) {
-                    FILE* stories_fp = stories_closer.fp;
-                    STORIES_WRITE(&prompt_idx, sizeof(int32_t), 1, stories_fp, pfq, producer_thread);
+                if (args.save_per_record && records_closer) {
+                    FILE* records_fp = records_closer.fp;
+                    RECORDS_WRITE(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
                     int32_t gid = assign.group_id;
                     int32_t mid = assign.mask_id;
                     int32_t layer_idx = target_layers[li];
-                    STORIES_WRITE(&gid, sizeof(int32_t), 1, stories_fp, pfq, producer_thread);
-                    STORIES_WRITE(&mid, sizeof(int32_t), 1, stories_fp, pfq, producer_thread);
-                    STORIES_WRITE(&layer_idx, sizeof(int32_t), 1, stories_fp, pfq, producer_thread);
-                    STORIES_WRITE(mean_buf.data(), sizeof(float), n_embd, stories_fp, pfq, producer_thread);
+                    RECORDS_WRITE(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
+                    RECORDS_WRITE(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
+                    RECORDS_WRITE(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
+                    RECORDS_WRITE(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread);
                 }
             }
         }
@@ -2346,37 +2348,37 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Error: processed %d prompts but accumulated no hidden-state "
                         "means (check token_skip / EOS / masks); refusing to write an "
                         "empty output.bin\n", n_processed);
-        // Clean up the per-story temp file on this error path.
-        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
+        // Clean up the per-record temp file on this error path.
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
         return 1;
     }
 
     // Write output
     if (!write_batch_output(accumulators, args.output_path, n_embd)) {
         // write_batch_output failed (its own temp was already cleaned inside
-        // the function); remove the per-story temp file here.
-        if (!stories_temp_path.empty()) std::remove(stories_temp_path.c_str());
+        // the function); remove the per-record temp file here.
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
         return 1;
     }
 
-    // Per-story sidecar: close the temp file and atomically rename to the final
+    // Per-record sidecar: close the temp file and atomically rename to the final
     // path now that the run fully succeeded.
-    if (stories_closer) {
-        if (!stories_closer.sync()) {  // flush + fsync: check for failures
-            fprintf(stderr, "Error: sync failed for %s\n", stories_temp_path.c_str());
-            stories_closer.reset();
-            std::remove(stories_temp_path.c_str());
+    if (records_closer) {
+        if (!records_closer.sync()) {  // flush + fsync: check for failures
+            fprintf(stderr, "Error: sync failed for %s\n", records_temp_path.c_str());
+            records_closer.reset();
+            std::remove(records_temp_path.c_str());
             return 1;
         }
-        stories_closer.reset();  // close before rename
-        if (rename(stories_temp_path.c_str(), stories_path.c_str()) != 0) {
+        records_closer.reset();  // close before rename
+        if (rename(records_temp_path.c_str(), records_path.c_str()) != 0) {
             fprintf(stderr, "Error: cannot rename %s to %s\n",
-                    stories_temp_path.c_str(), stories_path.c_str());
+                    records_temp_path.c_str(), records_path.c_str());
             // rename failed: remove the orphaned temp file.
-            std::remove(stories_temp_path.c_str());
+            std::remove(records_temp_path.c_str());
             return 1;
         }
-        fprintf(stderr, "Per-story output complete: %s\n", stories_path.c_str());
+        fprintf(stderr, "Per-record output complete: %s\n", records_path.c_str());
     }
 
     // Delete checkpoint on successful completion
@@ -2435,7 +2437,7 @@ static int run_self_test() {
         if (ok) passed++; else all_ok = false;
     }
 
-    // Test 3: non-contiguous ranges (deflection pattern: tokens 0 and 2, skip 1)
+    // Test 3: non-contiguous ranges (non-contiguous selection: tokens 0 and 2, skip 1)
     {
         std::vector<std::pair<int,int>> ranges = {{0, 1}, {2, 3}};
         float out[2] = {0, 0};
