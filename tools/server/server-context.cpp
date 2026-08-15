@@ -1790,14 +1790,13 @@ private:
         // (pos_next() returns the old count), producing incorrect activations.
         // This ensures position 0 start, matching the llama-hs-extract CLI path.
         if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES && !slot.task->is_child()) {
-            // CRITICAL: For Gated Delta Net architectures (Qwen3.5), common_context_seq_rm()
-            // removes entries from the memory table but does NOT zero the underlying KV cache
-            // or recurrence state buffers. The linear attention layers maintain running
-            // recurrence state that persists across requests on the same slot, causing
-            // non-deterministic hidden states that drift with each request.
-            // Synchronize first to ensure all GPU operations are complete, then clear
-            // the entire memory to zero all recurrence state and match the CLI's
-            // fresh-context behavior.
+            // Linear-attention architectures (Gated Delta Net, e.g. Qwen3.5)
+            // carry running recurrence state that survives context removal:
+            // common_context_seq_rm() drops memory-table entries but leaves
+            // the underlying KV cache and recurrence buffers untouched, so
+            // consecutive requests on one slot would see drifting hidden
+            // states. Clear the whole context memory to zero the recurrence
+            // state and match the CLI's fresh-context behavior.
             //
             // Scope assumption: llama_memory_clear(true) zeros ALL sequences in this
             // context's memory module. This is safe because HIDDEN_STATES tasks decode
