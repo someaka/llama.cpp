@@ -71,7 +71,6 @@ Hidden states are written asynchronously by CUDA kernels. **Always call `llama_s
 
 - `llama_get_hidden_state(ctx, layer)` - Get hidden states for a specific layer
 - `llama_get_hidden_state_n_tokens(ctx)` - Get number of tokens with hidden states
-- `llama_get_hidden_state_ith(ctx, layer, token_idx)` - Get hidden state for specific token
 
 ### Memory Layout
 

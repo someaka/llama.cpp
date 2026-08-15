@@ -104,9 +104,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // synchronize before reading hidden states (CUDA async write race)
-    llama_synchronize(ctx);
-
+    // The getters synchronize the context before returning data
+    // (see llama_get_hidden_state); no explicit sync is needed here.
     int n_layers = llama_model_n_layer(model);
     int32_t n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);
 

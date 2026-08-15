@@ -1078,12 +1078,6 @@ extern "C" {
     // llama_set_extract_hidden_states(ctx, false), or llama_free().
     LLAMA_API float * llama_get_hidden_state(struct llama_context * ctx, int32_t layer);
 
-    // Get the hidden state for a specific token at the given layer.
-    // Returns float[n_embd_out] for the i-th token.
-    // i can be negative to index from the end (-1 = last token).
-    // Returns NULL if extract_hidden_states was not set or i is out of range.
-    LLAMA_API float * llama_get_hidden_state_ith(struct llama_context * ctx, int32_t layer, int32_t i);
-
     // Returns the number of tokens for which hidden states were extracted.
     LLAMA_API int32_t llama_get_hidden_state_n_tokens(struct llama_context * ctx);
 
@@ -1091,8 +1085,8 @@ extern "C" {
     // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd_out floats),
     // or NULL if that layer is out of range.
     // Returns 0 on success, -1 if hidden states are unavailable.
-    // This is faster than calling llama_get_hidden_state() in a loop because it
-    // performs the sync and bounds validation only once, not per-layer.
+    // Performs one synchronize() and one bounds validation pass for the whole
+    // layer set, instead of one per llama_get_hidden_state() call.
     LLAMA_API int32_t llama_get_hidden_states_batch(
             struct llama_context * ctx,
             const int32_t        * layers,
