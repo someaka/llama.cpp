@@ -46,9 +46,9 @@
 #include <atomic>
 
 #if defined(_OPENMP)
-#define CR_SIMD _Pragma("omp simd")
+#define HS_SIMD _Pragma("omp simd")
 #else
-#define CR_SIMD
+#define HS_SIMD
 #endif
 
 // -- Checked Write Macro ------------------------------------------------
@@ -605,7 +605,7 @@ static int64_t compute_masked_mean(
 
         for (int t = start; t < end; t++) {
             const float* row = data + (size_t)t * (size_t)n_embd;
-            CR_SIMD
+            HS_SIMD
             for (int d = 0; d < n_embd; d++) {
                 out[d] += row[d];
             }
@@ -615,7 +615,7 @@ static int64_t compute_masked_mean(
 
     if (count > 0) {
         float inv = 1.0f / (float)count;
-        CR_SIMD
+        HS_SIMD
         for (int d = 0; d < n_embd; d++) {
             out[d] *= inv;
         }
@@ -644,7 +644,7 @@ static int compute_single_range_mean(
 
     for (int t = start; t < end; t++) {
         const float* row = data + (size_t)t * (size_t)n_embd;
-        CR_SIMD
+        HS_SIMD
         for (int d = 0; d < n_embd; d++) {
             out[d] += row[d];
         }
@@ -652,7 +652,7 @@ static int compute_single_range_mean(
 
     const int count = end - start;
     float inv = 1.0f / (float)count;
-    CR_SIMD
+    HS_SIMD
     for (int d = 0; d < n_embd; d++) {
         out[d] *= inv;
     }
@@ -2067,7 +2067,7 @@ static int run_batch(const Args& args) {
                         float* data = layer_ptrs[li];
                         if (data) {
                             float* accum_ptr = &gen_accum[li * n_embd];
-                            CR_SIMD
+                            HS_SIMD
                             for (int d = 0; d < n_embd; d++) {
                                 accum_ptr[d] += data[d];
                             }
@@ -2123,7 +2123,7 @@ static int run_batch(const Args& args) {
                     float* accum_ptr = &gen_accum[li * n_embd];
                     // Divide by count to get mean
                     float inv = 1.0f / (float)n_gen;
-                    CR_SIMD
+                    HS_SIMD
                     for (int d = 0; d < n_embd; d++) {
                         mean_buf[d] = accum_ptr[d] * inv;
                     }
@@ -2137,7 +2137,7 @@ static int run_batch(const Args& args) {
                         acc.sum.assign(mean_buf.data(), mean_buf.data() + n_embd);
                         acc.count = 1;
                     } else {
-                        CR_SIMD
+                        HS_SIMD
                         for (int d = 0; d < n_embd; d++) {
                             acc.sum[d] += mean_buf[d];
                         }
@@ -2232,7 +2232,7 @@ static int run_batch(const Args& args) {
                 uint64_t flat_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
                 auto& av = accumulators[flat_key];
                 if (av.sum.empty()) av.sum.resize(n_embd, 0.0f);
-                CR_SIMD
+                HS_SIMD
                 for (int d = 0; d < n_embd; d++) av.sum[d] += mean_buf[d];
                 av.count++;
 

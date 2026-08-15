@@ -27,9 +27,9 @@
 #include <fstream>
 
 #if defined(_OPENMP)
-#define CR_SIMD _Pragma("omp simd")
+#define HS_SIMD _Pragma("omp simd")
 #else
-#define CR_SIMD
+#define HS_SIMD
 #endif
 
 // fix problem with std::min and std::max
@@ -2459,11 +2459,11 @@ private:
                     // large ctx*embd (the pool=none path at :2492 already casts;
                     // this path must match or it reads from a wrapped pointer).
                     const float * tok = hs + (size_t)t * n_embd;
-                    CR_SIMD
+                    HS_SIMD
                     for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
                 }
                 float inv = 1.0f / (float)count;
-                CR_SIMD
+                HS_SIMD
                 for (int d = 0; d < n_embd; d++) vec[d] *= inv;
             } else {
                 // Default: last token's hidden state
