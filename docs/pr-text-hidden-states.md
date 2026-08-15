@@ -22,8 +22,9 @@ Zero redundancy.
 
 1. **Core API** (`include/llama.h`, `src/llama-context.cpp`, graph, cparams,
    4 model files): `llama_set_extract_hidden_states`, `llama_get_hidden_state`,
-   `llama_get_hidden_state_ith`, `llama_get_hidden_state_n_tokens`,
-   `llama_get_hidden_states_batch`. Graph capture buffers allocated per decode;
+   `llama_get_hidden_state_n_tokens`,
+   `llama_get_hidden_states_batch`. The getters synchronize the context
+   (same convention as the logits/embeddings getters). Graph capture buffers allocated per decode;
    capture conditional on cparams flag; models append `t_hidden_layers` at the
    end of each decoder block.
 2. **`hs-extract` CLI** (`tools/hs-extract/`): single-prompt JSON extraction
@@ -31,8 +32,8 @@ Zero redundancy.
 3. **`hs-extract-batch` CLI** (`tools/hs-extract-batch/`): high-throughput
    batch extraction — thousands of prompts per model load; raw mean-pool mode
    and streaming-accumulator mode with checkpoint/resume; per-record sidecar
-   output (`--save-per-record`, legacy alias `--save-per-story`); binary
-   formats documented in README.
+   output (`--save-per-record`); binary formats documented in README.
+   Unknown flags and invalid flag combinations error at parse time.
 4. **`/hidden-states` server endpoint** (`tools/server/`): POST prompt →
    per-layer vectors, no generation; mean-pooling + layer filtering;
    `--no-hidden-states` flag disables the route.
