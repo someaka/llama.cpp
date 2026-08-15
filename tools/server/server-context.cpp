@@ -2348,11 +2348,6 @@ private:
     void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
         (void) batch;
 
-        // CRITICAL: CUDA operations are async. llama_decode() submits work to the
-        // GPU and returns immediately. Reading hidden state memory without this
-        // barrier returns garbage or stale data (CUDA race condition).
-        llama_synchronize(slot.ctx_tgt);
-
         auto res = std::make_unique<server_task_result_hidden_states>();
         res->id       = slot.task->id;
         res->index    = slot.task->index;
@@ -2388,13 +2383,12 @@ private:
         // floats as JSON. Without a cap, a single request with long input + all
         // layers can exhaust server memory (DoS vector).
         // 100 MB float data limit (~1.5 GB JSON after serialization).
-        // Hoisted before the layer loop since it doesn't depend on individual layer.
         if (slot.task->params.hidden_pool == "none") {
             const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
             size_t total_all_layers = (size_t)n_hs_tokens * (size_t)n_embd * (size_t)layers.size();
             if (total_all_layers > MAX_POOL_NONE_FLOATS) {
                 auto err = std::make_unique<server_task_result_error>();
-                err->id    = slot.task->id;
+                err->id   = slot.task->id;
                 err->index = slot.task->index;
                 err->err_type = ERROR_TYPE_INVALID_REQUEST;
                 err->err_msg = "pool=none response too large: " +
@@ -2412,14 +2406,31 @@ private:
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
-                err->err_type = ERROR_TYPE_SERVER;
+                err->err_type = ERROR_TYPE_INVALID_REQUEST;
                 err->err_msg = "hidden state layer " + std::to_string(layer) +
                                " out of range [0, " + std::to_string(n_layer) + ")";
                 queue_results.send(std::move(err));
                 return;
             }
+        }
 
-            float * hs = llama_get_hidden_state(slot.ctx_tgt, layer);
+        // Fetch all layer pointers in one call (single synchronize + single
+        // validation pass) instead of one llama_get_hidden_state() per layer.
+        std::vector<int32_t> layer_ids(layers.begin(), layers.end());
+        std::vector<float *> layer_ptrs(layer_ids.size(), nullptr);
+        if (llama_get_hidden_states_batch(slot.ctx_tgt, layer_ids.data(), (int32_t) layer_ids.size(), layer_ptrs.data()) != 0) {
+            auto err = std::make_unique<server_task_result_error>();
+            err->id   = slot.task->id;
+            err->index = slot.task->index;
+            err->err_type = ERROR_TYPE_SERVER;
+            err->err_msg = "failed to get hidden states for the requested layers";
+            queue_results.send(std::move(err));
+            return;
+        }
+
+        for (size_t li = 0; li < layer_ids.size(); li++) {
+            const int layer = layers[li];
+            float * hs = layer_ptrs[li];
             if (hs == nullptr) {
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
