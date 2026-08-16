@@ -128,6 +128,49 @@ creation (flag set), at the setter (enable), and at the server route.
   hybrid recurrent) are refused pending per-builder semantic decisions.
   See `docs/hidden-states-adoption-manifest.md`.
 
+## The llama/gemma extraction crash (found and fixed on this branch)
+
+Before this branch, extracting hidden states on the llama or classic-gemma
+architecture aborted inside `llama_decode`:
+
+```
+ggml-backend.cpp:194: GGML_ASSERT(buffer) failed   ← llm_graph_input_out_ids::set_input
+```
+
+Root cause (two defects, both pre-existing on main and reproducible with
+main's own binaries):
+
+1. **Orphaned input tensor.** The fork suppressed the last layer's
+   in-loop `ggml_get_rows` output pruning under extraction (so all tokens'
+   residuals get captured) — but nothing else in the graph consumed
+   `inp_out_ids` afterwards. An input tensor no node references is never
+   allocated by the scheduler; `set_input` then dereferenced its NULL
+   buffer and aborted every decode.
+2. **Wrong logits shape hiding behind the crash.** With the pruning
+   suppressed, `t_logits` was full-token shaped (all positions), while the
+   logits copy-back in `llama_context::decode` reads only
+   `n_outputs × n_vocab` floats — i.e. the FIRST n_outputs positions'
+   logits, not the marked output positions. Had the abort not fired, llama
+   and gemma would have returned silently wrong logits under extraction.
+
+Fix (this branch): mirror the shape gemma4/qwen35 already use — keep the
+in-loop suppression (capture stays all-token), then prune with
+`ggml_get_rows(cur, inp_out_ids)` **after the final output norm**, before
+`lm_head`. `inp_out_ids` is consumed again (allocated, no abort), and
+logits/embeddings return output-only rows exactly as without extraction.
+
+Verification (all on real runs):
+
+- llama-arch extraction now completes (exit 0, 2048-dim float vectors,
+  no NaNs); main's own binary still aborts on the same input (bug is
+  pre-existing, not introduced here).
+- Logits equivalence probe (`tools/hs-probe/logits-probe.cpp`, public API
+  only): identical argmax and identical top-8 logit values (6 decimal
+  places) with extraction on vs off on Llama-3.2-1B f16.
+- Byte-identity vs main's pre-refactor binaries on qwen35 / gemma4 E2B /
+  gemma4 E4B (`cmp` on full capture dumps) — see below.
+
+
 ## Evidence
 
 - Byte-equivalence with upstream access points: the same `ggml_tensor*` is
