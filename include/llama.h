@@ -587,6 +587,15 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
+    // Returns whether the model's architecture emits per-layer hidden-state
+    // capture when extract_hidden_states is enabled. Single source of truth:
+    // llm_arch_supports_hidden_states() in src/llama-arch.cpp.
+    LLAMA_API bool llama_model_supports_hidden_states(const struct llama_model * model);
+
+    // Returns the architecture identifier string of the model (the GGUF
+    // general.architecture value), e.g. "llama", "gemma", "qwen35".
+    LLAMA_API const char * llama_model_arch_name(const struct llama_model * model);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 

@@ -2527,6 +2527,14 @@ int32_t llama_model_n_layer(const llama_model * model) {
     return model->hparams.n_layer();
 }
 
+bool llama_model_supports_hidden_states(const llama_model * model) {
+    return llm_arch_supports_hidden_states(model->arch);
+}
+
+const char * llama_model_arch_name(const llama_model * model) {
+    return llm_arch_name(model->arch);
+}
+
 int32_t llama_model_n_layer_nextn(const llama_model * model) {
     return model->hparams.n_layer_nextn;
 }

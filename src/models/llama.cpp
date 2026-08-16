@@ -234,6 +234,15 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
             model.output_norm, NULL,
             LLM_NORM_RMS, -1);
 
+    if (cparams.extract_hidden_states && inp_out_ids) {
+        // Extraction suppresses the last layer's in-loop output pruning so
+        // every token's residual is captured. Prune after the final norm
+        // instead: logits/embeddings stay output-only, and inp_out_ids
+        // stays reachable — an input tensor nothing consumes is never
+        // allocated and aborts in llm_graph_input_out_ids::set_input.
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 

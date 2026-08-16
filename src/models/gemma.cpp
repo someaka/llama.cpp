@@ -128,6 +128,13 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
             model.output_norm, NULL,
             LLM_NORM_RMS, -1);
 
+    if (cparams.extract_hidden_states && inp_out_ids) {
+        // Same as llama.cpp: extraction suppresses the last layer's in-loop
+        // pruning; prune post-final-norm so inp_out_ids stays reachable and
+        // logits/embeddings stay output-only.
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
