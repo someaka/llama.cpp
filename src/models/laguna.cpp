@@ -318,6 +318,8 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
         cb(cur, "l_out", il);
 
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

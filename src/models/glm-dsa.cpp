@@ -545,6 +545,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

@@ -165,6 +165,8 @@ llama_model_gemma_embedding::graph::graph(const llama_model & model, const llm_g
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

@@ -344,6 +344,8 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

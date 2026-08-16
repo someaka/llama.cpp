@@ -173,6 +173,8 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     // Final norm
     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);

@@ -151,6 +151,8 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

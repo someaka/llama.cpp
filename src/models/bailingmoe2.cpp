@@ -195,6 +195,8 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

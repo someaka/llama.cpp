@@ -181,6 +181,8 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     // final rmsnorm
     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);

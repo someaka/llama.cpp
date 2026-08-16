@@ -173,6 +173,8 @@ llama_model_deci::graph::graph(const llama_model & model, const llm_graph_params
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

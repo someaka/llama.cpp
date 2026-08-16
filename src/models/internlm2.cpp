@@ -119,6 +119,8 @@ llama_model_internlm2::graph::graph(const llama_model & model, const llm_graph_p
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

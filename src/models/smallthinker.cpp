@@ -170,6 +170,8 @@ llama_model_smallthinker::graph<iswa>::graph(const llama_model & model, const ll
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

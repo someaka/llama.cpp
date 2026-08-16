@@ -177,6 +177,8 @@ llama_model_muse_glimmer::graph::graph(const llama_model & model, const llm_grap
         cb(cur, "l_out", il);
 
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

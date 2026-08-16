@@ -184,6 +184,8 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cb(cur, "out_scaled", il);
 
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

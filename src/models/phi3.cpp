@@ -170,6 +170,8 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = build_norm(inpL,
             model.output_norm,

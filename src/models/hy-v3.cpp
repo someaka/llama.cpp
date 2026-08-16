@@ -210,6 +210,8 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
         cb(cur, "l_out", il);
 
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);

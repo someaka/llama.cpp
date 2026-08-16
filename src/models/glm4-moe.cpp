@@ -263,6 +263,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

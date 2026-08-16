@@ -269,6 +269,8 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
         cb(cur, "l_out", il);
 
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     cur = inpL;

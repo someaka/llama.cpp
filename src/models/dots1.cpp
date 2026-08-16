@@ -175,6 +175,8 @@ llama_model_dots1::graph::graph(const llama_model & model, const llm_graph_param
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

@@ -250,6 +250,8 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

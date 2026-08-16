@@ -215,6 +215,8 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 
