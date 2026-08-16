@@ -2358,8 +2358,11 @@ private:
         // determine which layers to extract
         std::vector<int> layers;
         if (slot.task->params.hidden_all_layers) {
-            layers.resize(n_layer);
-            for (int i = 0; i < n_layer; i++) {
+            // Full hidden_states ladder: 0 (embeddings) .. n_layer (final
+            // block output) inclusive — n_layer + 1 slots, matching the
+            // [0, n_layer] range accepted for explicit layer lists.
+            layers.resize(n_layer + 1);
+            for (int32_t i = 0; i <= n_layer; i++) {
                 layers[i] = i;
             }
         } else {
@@ -5237,6 +5240,10 @@ void server_routes::init_routes() {
         std::vector<int> layers;
         bool all_layers = false;
 
+        // Layers follow the hidden_states convention: 0 = embeddings,
+        // i = state entering block i, n_layer = final block output.
+        // Valid range is [0, n_layer] inclusive (n_layer + 1 slots).
+        const int32_t n_hs_slots = n_layer + 1;
         if (body.contains("layers")) {
             const json & layers_json = body["layers"];
             if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
@@ -5252,7 +5259,7 @@ void server_routes::init_routes() {
                         return res;
                     }
                     int layer_num = layer.get<int>();
-                    if (layer_num < 0 || layer_num >= n_layer) {
+                    if (layer_num < 0 || layer_num >= n_hs_slots) {
                         res->error(format_error_response(
                             "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",
                             ERROR_TYPE_INVALID_REQUEST));
