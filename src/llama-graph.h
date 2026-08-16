@@ -1019,6 +1019,7 @@ struct llm_graph_context {
     // capture: entries must arrive in increasing layer order, and the
     // context-side copy requires exactly n_layer entries.
     void capture_layer_output(int il, ggml_tensor * cur);
+    void capture_embeddings(ggml_tensor * embd);
 
     //
     // common

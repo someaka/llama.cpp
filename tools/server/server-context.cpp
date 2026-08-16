@@ -2400,14 +2400,18 @@ private:
             }
         }
 
+        // Layer indices follow the hidden_states convention:
+        // 0 = embeddings, i = state entering block i, n_layer = final block
+        // output. Valid range is [0, n_layer] inclusive.
+        const int32_t n_hs_slots = n_layer + 1;
         for (int layer : layers) {
-            if (layer < 0 || layer >= n_layer) {
+            if (layer < 0 || layer >= n_hs_slots) {
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
                 err->err_type = ERROR_TYPE_INVALID_REQUEST;
                 err->err_msg = "hidden state layer " + std::to_string(layer) +
-                               " out of range [0, " + std::to_string(n_layer) + ")";
+                               " out of range [0, " + std::to_string(n_hs_slots) + ")";
                 queue_results.send(std::move(err));
                 return;
             }

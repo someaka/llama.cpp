@@ -39,8 +39,12 @@ static void print_usage(const char * prog) {
 
 static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     std::vector<int> layers;
+    // hidden_states indices: 0 = embeddings, i = state entering block i
+    // (= HF hidden_states[i]), N = final block output. Legacy fork
+    // numbering (post-block-i residual) = upstream index - 1.
+    const int n_slots = n_layers + 1;
     if (strcmp(str, "all") == 0) {
-        for (int i = 0; i < n_layers; i++) {
+        for (int i = 0; i < n_slots; i++) {
             layers.push_back(i);
         }
         return layers;
@@ -54,8 +58,8 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
             fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
             return {};
         }
-        if (val < 0 || val >= n_layers) {
-            fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_layers);
+        if (val < 0 || val >= n_slots) {
+            fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_slots);
             return {};
         }
         layers.push_back((int)val);

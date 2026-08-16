@@ -106,6 +106,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
+    capture_embeddings(inpL);
 
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();

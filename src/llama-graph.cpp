@@ -1487,14 +1487,33 @@ void llm_graph_context::capture_layer_output(int il, ggml_tensor * cur) {
         return;
     }
 
-    // Capture order is the storage order: the context-side copy requires
-    // exactly n_layer entries in increasing layer order.
+    // The residual stream leaving block il is the state entering block il+1,
+    // so it is stored at hidden_states index il+1: one uniform ladder mapping
+    // for every builder (slot 0, the embeddings, is captured separately by
+    // capture_embeddings before the loop).
     GGML_ASSERT(cur != nullptr);
-    GGML_ASSERT((int) res->t_hidden_layers.size() == il &&
-                "capture_layer_output called out of layer order");
+    GGML_ASSERT((int) res->t_hidden_layers.size() == il + 1 &&
+                "capture_layer_output called out of layer order "
+                "(capture_embeddings must run first)");
 
     cb(cur, "hidden_state", il);
     res->t_hidden_layers.push_back(cur);
+}
+
+void llm_graph_context::capture_embeddings(ggml_tensor * embd) {
+    if (!cparams.extract_hidden_states) {
+        return;
+    }
+
+    // hidden_states[0]: the tensor entering block 0, after any
+    // architecture-specific embedding transform (e.g. the Gemma
+    // sqrt(n_embd) scale). Must be called before any capture_layer_output.
+    GGML_ASSERT(embd != nullptr);
+    GGML_ASSERT(res->t_hidden_layers.empty() &&
+                "capture_embeddings must be called before capture_layer_output");
+
+    cb(embd, "hidden_state_embd", -1);
+    res->t_hidden_layers.push_back(embd);
 }
 
 ggml_tensor * llm_graph_context::build_cvec(

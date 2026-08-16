@@ -149,6 +149,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     inpL = build_inp_embd(model.tok_embd);
 
     cb(inpL, "model.input_embed", -1);
+    capture_embeddings(inpL);
 
     auto * inp = build_inp_mem_hybrid();
 

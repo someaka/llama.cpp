@@ -1071,8 +1071,13 @@ extern "C" {
     //
 
     // Get the per-layer hidden states for all tokens in the last decode.
-    // Layer i holds the post-block-i residual stream (the state entering
-    // layer i+1), captured after the attention and FFN blocks of layer i.
+    // The layer argument is a hidden_states index, matching the HF
+    // convention and upstream llama.cpp's internal layer-input tensors:
+    //   index 0        = token embeddings (state entering block 0)
+    //   index i        = state entering block i (= HF hidden_states[i])
+    //   index n_layer  = output of the final block
+    // Post-final-norm output is NOT captured. Legacy fork numbering
+    // (post-block-i residual) = this index - 1.
     // Supported on the llama, gemma, gemma4 and qwen35 architectures
     // (single source of truth: llm_arch_supports_hidden_states() in
     // src/llama-arch.cpp — extend that registry, not this list, when

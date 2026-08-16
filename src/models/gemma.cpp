@@ -48,6 +48,7 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
 
     inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
     cb(inpL, "inp_scaled", -1);
+    capture_embeddings(inpL);
 
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();

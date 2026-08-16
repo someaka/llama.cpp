@@ -985,12 +985,14 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
 }
 
 float * llama_context::get_hidden_state(int32_t layer) {
-    if (hidden_state_buf.empty() || n_hidden_tokens == 0) {
+    // Public layer indices are hidden_states indices: 0 = embeddings,
+    // 1..n_layer-1 = state entering block i, n_layer = final block output.
+    const int32_t n_slots = (int32_t) model.hparams.n_layer() + 1;
+    if (layer < 0 || layer >= n_slots) {
         return nullptr;
     }
 
-    const int32_t n_layer = (int32_t) model.hparams.n_layer();
-    if (layer < 0 || layer >= n_layer) {
+    if (hidden_state_buf.empty() || n_hidden_tokens == 0) {
         return nullptr;
     }
 
@@ -1862,8 +1864,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         const uint32_t n_embd_out = hparams.n_embd_out();
-        const int32_t n_layers = (int32_t) hparams.n_layer();
-        const size_t total_size = (size_t)n_layers * n_tokens_all * n_embd_out;
+        // hidden_states ladder: index 0 (embeddings) through index n_layer
+        // (final block output) — one slot more than the block count.
+        const int32_t n_slots = (int32_t) hparams.n_layer() + 1;
+        const size_t total_size = (size_t)n_slots * n_tokens_all * n_embd_out;
         hidden_state_buf.resize(total_size);
         n_hidden_tokens = 0;
     }
@@ -2057,9 +2061,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
             const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
 
             if (n_layers > 0) {
-                // The buffer is sized for hparams.n_layer() layers; the graph
-                // must supply exactly that many or higher layers read unfilled slots.
-                GGML_ASSERT(n_layers == (int32_t) hparams.n_layer() && "hidden state layer count mismatch");
+                // The buffer is sized for the full hidden_states ladder
+                // (n_layer + 1 slots: index 0 embeddings .. index n_layer
+                // final block output); the graph must supply exactly that many
+                // or higher layers read unfilled slots.
+                GGML_ASSERT(n_layers == (int32_t) hparams.n_layer() + 1 && "hidden state layer count mismatch");
 
                 // Every layer must carry one tensor with the same token count;
                 // a null or short entry means the graph builder broke its contract.

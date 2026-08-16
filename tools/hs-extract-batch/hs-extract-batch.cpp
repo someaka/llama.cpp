@@ -190,6 +190,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --top-p F       Nucleus sampling threshold (generation mode only, default: 1.0 = disabled).\n");
     fprintf(stderr, "  --repeat-penalty F  Repeat penalty (generation mode only, default: 1.0 = disabled).\n");
     fprintf(stderr, "\nLayers: comma-separated list (e.g. '0,5,10') or 'all' (default)\n");
+    fprintf(stderr, "        Layer indices follow the hidden_states convention: 0 = token embeddings,\n");
+    fprintf(stderr, "        i = state entering block i (= HF hidden_states[i]), N = final block output.\n");
+    fprintf(stderr, "        Legacy fork numbering (post-block-i residual) = upstream index - 1.\n");
     fprintf(stderr, "Output: file path (required)\n");
 }
 
@@ -544,8 +547,12 @@ struct AssignmentReadResult {
 
 static std::vector<int> parse_layers(const std::string& s, int n_layer) {
     std::vector<int> out;
+    // Layer indices are hidden_states indices: 0 = embeddings, i = state
+    // entering block i (= HF hidden_states[i]), N = final block output.
+    // Legacy fork numbering (post-block-i residual) = upstream index - 1.
+    const int n_slots = n_layer + 1;
     if (s == "all") {
-        for (int i = 0; i < n_layer; i++) out.push_back(i);
+        for (int i = 0; i < n_slots; i++) out.push_back(i);
         return out;
     }
     const char* p = s.c_str();
@@ -562,9 +569,9 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
             return {};
         }
         // Validate at parse time, not downstream. Negative indices are
-        // resolved later (l < 0 means l += n_layer), but must be in [-n_layer, n_layer-1].
-        if (val >= n_layer || val < -n_layer) {
-            fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_layer, -n_layer);
+        // resolved later (l < 0 means l += n_slots), but must be in [-n_slots, n_slots-1].
+        if (val >= n_slots || val < -n_slots) {
+            fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_slots, -n_slots);
             return {};
         }
         out.push_back((int)val);
@@ -977,15 +984,16 @@ static int run_raw(const Args& args) {
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
             n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
 
-    // Resolve layers
+    // Resolve layers (hidden_states indices: 0..n_layers inclusive)
+    const int32_t n_slots = n_layers + 1;
     auto raw_layers = parse_layers(args.layers_str, n_layers);
     std::vector<int32_t> target_layers;
     for (int l : raw_layers) {
-        if (l < 0) l = n_layers + l;
-        if (l >= 0 && l < n_layers) {
+        if (l < 0) l = n_slots + l;
+        if (l >= 0 && l < n_slots) {
             target_layers.push_back(l);
         } else {
-            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_layers);
+            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_slots);
             return 1;
         }
     }
@@ -1512,15 +1520,16 @@ static int run_batch(const Args& args) {
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
             n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
 
-    // Resolve layers
+    // Resolve layers (hidden_states indices: 0..n_layers inclusive)
+    const int32_t n_slots = n_layers + 1;
     auto raw_layers = parse_layers(args.layers_str, n_layers);
     std::vector<int32_t> target_layers;
     for (int l : raw_layers) {
-        if (l < 0) l = n_layers + l;
-        if (l >= 0 && l < n_layers) {
+        if (l < 0) l = n_slots + l;
+        if (l >= 0 && l < n_slots) {
             target_layers.push_back(l);
         } else {
-            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_layers);
+            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_slots);
             return 1;
         }
     }
