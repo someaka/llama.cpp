@@ -373,9 +373,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         // input for next layer
         inpL = cur;
 
-        if (cparams.extract_hidden_states) {
-            res->t_hidden_layers.push_back(cur);
-        }
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 

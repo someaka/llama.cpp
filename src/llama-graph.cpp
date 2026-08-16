@@ -1482,7 +1482,20 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     }
 }
 
+void llm_graph_context::capture_layer_output(int il, ggml_tensor * cur) {
+    if (!cparams.extract_hidden_states) {
+        return;
+    }
 
+    // Capture order is the storage order: the context-side copy requires
+    // exactly n_layer entries in increasing layer order.
+    GGML_ASSERT(cur != nullptr);
+    GGML_ASSERT((int) res->t_hidden_layers.size() == il &&
+                "capture_layer_output called out of layer order");
+
+    cb(cur, "hidden_state", il);
+    res->t_hidden_layers.push_back(cur);
+}
 
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,

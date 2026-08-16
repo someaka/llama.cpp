@@ -1010,6 +1010,16 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
+    // Capture the residual stream leaving block il (the state entering
+    // block il+1) for per-layer hidden-state extraction. Architecture
+    // graph builders call this once per layer at the bottom of their
+    // layer loop, immediately after the residual reassignment
+    // (inpL = cur or equivalent). No effect unless
+    // cparams.extract_hidden_states is set. The il argument orders the
+    // capture: entries must arrive in increasing layer order, and the
+    // context-side copy requires exactly n_layer entries.
+    void capture_layer_output(int il, ggml_tensor * cur);
+
     //
     // common
     //

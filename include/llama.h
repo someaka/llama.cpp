@@ -1064,7 +1064,10 @@ extern "C" {
     // Get the per-layer hidden states for all tokens in the last decode.
     // Layer i holds the post-block-i residual stream (the state entering
     // layer i+1), captured after the attention and FFN blocks of layer i.
-    // Supported on the llama, gemma, gemma4 and qwen35 architectures;
+    // Supported on the llama, gemma, gemma4 and qwen35 architectures
+    // (single source of truth: llm_arch_supports_hidden_states() in
+    // src/llama-arch.cpp — extend that registry, not this list, when
+    // adding architectures);
     // requires n_embd == n_embd_out (decode fails loud otherwise).
     // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
     // or NULL if extract_hidden_states was not set in context params.

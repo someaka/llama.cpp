@@ -118,6 +118,10 @@ llama_context::llama_context(
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
     cparams.extract_hidden_states   = params.extract_hidden_states;
+    if (cparams.extract_hidden_states && !llm_arch_supports_hidden_states(model.arch)) {
+        throw std::runtime_error(std::string("hidden-state extraction not implemented for architecture '")
+                                 + llm_arch_name(model.arch) + "'");
+    }
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -1208,6 +1212,11 @@ void llama_context::set_extract_hidden_states(bool value) {
         return;
     }
 
+    if (value && !llm_arch_supports_hidden_states(model.arch)) {
+        throw std::runtime_error(std::string("hidden-state extraction not implemented for architecture '")
+                                 + llm_arch_name(model.arch) + "'");
+    }
+
     cparams.extract_hidden_states = value;
 
     // Toggling extraction changes the graph topology (adds/removes
@@ -2112,8 +2121,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     ggml_backend_tensor_get(t, dst, 0, copy_size);
                 }
             } else {
+                if (llm_arch_supports_hidden_states(model.arch)) {
+                    // The registry lists this architecture and its graph
+                    // builder ran with the flag set, yet no capture
+                    // arrived: the builder broke its contract.
+                    GGML_ABORT("%s: extract_hidden_states is enabled and the architecture "
+                               "'%s' is registered as supported, but t_hidden_layers is empty - "
+                               "the graph builder does not call capture_layer_output\n",
+                               __func__, llm_arch_name(model.arch));
+                }
                 // This model architecture does not populate t_hidden_layers;
                 // getters return NULL for this decode (n_hidden_tokens = 0).
+                // Context creation and the runtime setter refuse unsupported
+                // architectures, so reaching this branch means the context was
+                // created before the check existed or the check was bypassed.
                 LLAMA_LOG_ERROR("%s: extract_hidden_states is enabled but this model architecture "
                                 "does not support it (t_hidden_layers is empty)\n", __func__);
                 n_hidden_tokens = 0;

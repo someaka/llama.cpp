@@ -5215,6 +5215,17 @@ void server_routes::init_routes() {
             return res;
         }
 
+        // The capability registry is the single source of truth for which
+        // architectures emit per-layer capture. Refuse here with the arch
+        // name so the client learns the request cannot succeed on this model.
+        if (!llm_arch_supports_hidden_states(ctx_server.model_tgt->arch)) {
+            res->error(format_error_response(
+                std::string("hidden-state extraction not implemented for architecture '")
+                + llm_arch_name(ctx_server.model_tgt->arch) + "'",
+                ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
         const json body = json::parse(req.body);
 
         // Parse layers parameter

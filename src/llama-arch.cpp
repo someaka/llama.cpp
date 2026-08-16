@@ -1032,6 +1032,23 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     }
 }
 
+// Single source of truth for architectures whose graph builders emit
+// per-layer hidden-state capture. Context creation and the runtime setter
+// refuse hidden-state extraction for any architecture not listed here.
+// The llama.h hidden-state doc block refers to this function as the
+// maintenance point.
+bool llm_arch_supports_hidden_states(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_GEMMA:
+        case LLM_ARCH_GEMMA4:
+        case LLM_ARCH_QWEN35:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_GROK:
