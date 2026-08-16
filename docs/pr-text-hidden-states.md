@@ -13,7 +13,7 @@ capability available upstream.
 
 **Relation to upstream's `llama_set_embeddings_layer_inp`:** none — different
 tensor, different purpose. That internal API (declared in `src/llama-ext.h`,
-used by 12 model files) assigns the layer **input** (pre-norm `inpL`) for
+used by the model files that need it) assigns the layer **input** (pre-norm `inpL`) for
 speculative-decoding acceptance checks. This PR captures the post-block
 **output** residual and exposes it through the public `include/llama.h` API.
 Zero redundancy.
@@ -56,20 +56,20 @@ Zero redundancy.
 
 - `test-hidden-states` (CPU): API contract — enable/toggle, single + batch
   getters, multi-ubatch consistency.
-- `hs-extract-batch --self-test`: 17/17 end-to-end (incl. accumulator
-  checkpoint/resume roundtrip).
-- Two commits in the stack restore upstream test coverage that intermediate
-  branch surgery had silently dropped: `tests/test-backend-ops.cpp` (117
-  lines of upstream chunked-scan tests) and the
+- `hs-extract-batch --self-test`: passes end-to-end, including the
+  accumulator checkpoint/resume roundtrip.
+- The stack restores upstream test coverage that intermediate branch
+  surgery had silently dropped: the chunked-scan tests in
+  `tests/test-backend-ops.cpp` and the
   `test-recurrent-state-rollback-nemotron-h` registration in
-  `tests/CMakeLists.txt` (10 lines). Both files are zero-diff (resp.
-  add-only) vs the PR base after the restores.
+  `tests/CMakeLists.txt`. Both files are zero-diff (resp. add-only)
+  against upstream after the restores.
 - One included change is deliberately outside the extraction feature:
   `src/llama-kv-cells.h` replaces a per-position `std::map` with a flat
-  count table. It rides in the first commit because sustained extraction
+  count table. It is included here because sustained extraction
   workloads (200K+ prompts, millions of decode cycles) exposed heap churn
   in the rb-tree node allocator; the flat table removes that surface. Happy
-  to split it into its own commit (or PR) if maintainers prefer.
+  to split it out if maintainers prefer.
 - Both CLIs + server endpoint exercised daily on RTX 3090 (CUDA) and AMD
   Renoir iGPU (Vulkan/RADV) — cross-backend validated, identical results
   within quantization tolerance.

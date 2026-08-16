@@ -6,8 +6,10 @@ hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
 ## Fork State
 
 - **Branch:** `main` (work directly on main, no feature branches)
-- **Upstream tracking:** merge-base `adb55e5148` (2026-08-14 rebase; 4 upstream commits landed since, no overlap with fork changes)
-- **Fork delta:** 53 files, +7,013/-36 vs merge-base
+- Upstream state and the fork-vs-upstream delta are live git data, not doc
+  content: `git fetch origin && git log --oneline origin/master..main`
+  (commits) or `git diff --stat $(git merge-base main origin/master)..main`
+  (files). This file describes what the fork contains, not repo statistics.
 
 ## Features
 
