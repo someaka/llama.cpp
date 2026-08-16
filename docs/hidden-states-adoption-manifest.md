@@ -4,6 +4,41 @@ Generated 2026-08-16 from the exhaustive classification pass over src/models/
 (147 arch files; 126 builders with graph loops classified; every row carries
 file:line evidence from source reads, not sampling).
 
+
+# Layer Index Convention (canonical)
+
+> This section is the single source of truth for layer numbering across the
+> fork's hidden-state surface and CrimsonRed's consumers. The same wording
+> appears in every doc that discusses layer indices; do not paraphrase it.
+
+The public layer index follows the **hidden_states convention**, matching
+HuggingFace `hidden_states` and upstream llama.cpp's internal layer-input
+tensors (`t_layer_inp`):
+
+| index | meaning |
+|-------|---------|
+| `0` | token embeddings — the state entering block 0 (after any arch-specific embedding transform, e.g. the Gemma `sqrt(n_embd)` scale) |
+| `i` | the state entering block `i` — the same tensor upstream stores as `t_layer_inp[i]` and HF returns as `hidden_states[i]` |
+| `N` | the output of the final block (`n_layer` = block count) — a fork extension; upstream stops at `N-1` and exposes nothing publicly |
+
+Not captured: post-final-norm output.
+
+Migration from the old fork numbering (post-block-i residual):
+
+| recorded in old fork space | upstream / hidden_states space |
+|---|---|
+| any layer `L` | `L + 1` |
+| E2B `L24` (of 35) | `25` |
+| E4B `L29` (of 42) | `30` |
+| Qwen `L16` (of 24) | `17` |
+| Llama `L11` (of 16) | `12` |
+
+Existing on-disk artifacts recorded before the migration stay in the old
+space; readers must remap with `fork_to_upstream(i) = i + 1` and refuse
+ambiguous files rather than guess.
+
+---
+
 ## Mechanism (what a new arch joins)
 
 The unified mechanism has three parts (branch hs-arch-core):
