@@ -150,8 +150,20 @@ reassignment that follows the final residual add listed below.
 | 99 | llama_model_talkie | src/models/talkie.cpp | 126 |
 | 100 | llama_model_xverse | src/models/xverse.cpp | 114 |
 
-Of the 100 CLASSIC builders, 4 are the reference adoption; the remaining 96 are
-mechanical single-call adoptions in 96 files.
+Of the 103 CLASSIC builders, 4 are the reference adoption; 98 received the
+dormant `capture_layer_output()` call in the hs-arch-core sweep (2026-08-16,
+compile-verified, byte-identity on the supported archs preserved);
+1 (nanbeige) was skipped — no residual add before its loop-tail reassign,
+so the classic tail pattern does not hold there. Dormant calls are no-ops
+until the arch is added to the registry; per-adoption steps:
+
+1. read the builder's loop tail against this table (adopt point = loop
+   bottom, after the final residual reassign);
+2. check the last-layer get_rows pruning site — under extraction it must
+   be suppressed (or moved post-final-norm, as llama/gemma now do) or the
+   graph aborts (orphaned `inp_out_ids`);
+3. add the arch value to `llm_arch_supports_hidden_states()`;
+4. run the real-GGUF extraction test + logits-probe equivalence.
 
 ## REFUSE list - with named reasons
 
