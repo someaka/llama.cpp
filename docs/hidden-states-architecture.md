@@ -155,8 +155,9 @@ creation (flag set), at the setter (enable), and at the server route.
 - When the flag is off: one bool in cparams; helper is a no-op return.
 - When on: `n_layers × n_tokens × n_embd` floats per decode (the capture
   buffer), plus one device sync per getter/batch-getter call.
-- Not captured: the embeddings entry (state entering layer 0) and the
-  post-final-norm state. Our index `i` ≡ HF `hidden_states[i+1]`.
+- Not captured: the post-final-norm state. Index `i` ≡ HF
+  `hidden_states[i]` (slot 0 = embeddings ≡ HF `hidden_states[0]`,
+  per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs — joining is a two-line
   adoption per the manifest; the 26 non-classic shapes (parallel-residual,
   hybrid recurrent) are refused pending per-builder semantic decisions.

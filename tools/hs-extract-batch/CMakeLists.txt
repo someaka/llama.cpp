@@ -1,5 +1,8 @@
 set(TARGET llama-hs-extract-batch)
 add_executable(${TARGET} hs-extract-batch.cpp)
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
 target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 # Resolve the CUDA backend registration symbol (ggml_backend_cuda_reg) that
 # libggml references when GGML_BACKEND_DL=OFF. The backend is a separate library
