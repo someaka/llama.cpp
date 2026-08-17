@@ -1,0 +1,29 @@
+{
+  "s1_llama_comp_records": {
+    "output.bin": "3c0609f97f277fd0d2eb28433a676de8be7ed39670225169c65f45d5a67df150",
+    "output.bin.records.bin": "219307078c520325999699948a60cdc6a9244ccb0d842a9c8252cc592323da0c"
+  },
+  "s2_llama_resume": {
+    "output.bin.fullrun": "3c0609f97f277fd0d2eb28433a676de8be7ed39670225169c65f45d5a67df150",
+    "output.bin.resumed": "3c0609f97f277fd0d2eb28433a676de8be7ed39670225169c65f45d5a67df150",
+    "fullrun_equals_resumed": true
+  },
+  "s3_llama_gen_greedy": {
+    "output.bin": "8f61ffd5c27da4484ac85c7e581eae339c4d32d781c1ab37364b07024c207b8f"
+  },
+  "s4_llama_gen_sampled": {
+    "output.bin": "5d0d1f50a9b2682b6d03b37ddbcb033d8467466791136d8ec793a1de20a5542d"
+  },
+  "s5_e2b_comp_records": {
+    "output.bin": "dcd6b2486945e69f564d9d0810c69052461837677ea4055aa2c47e12b7af3f45",
+    "output.bin.records.bin": "1c77f7abb4d7000adef051579789bb2ec52c5d06158af8c27f2846c3c8d26508"
+  },
+  "s6_e2b_resume": {
+    "output.bin.fullrun": "dcd6b2486945e69f564d9d0810c69052461837677ea4055aa2c47e12b7af3f45",
+    "output.bin.resumed": "dcd6b2486945e69f564d9d0810c69052461837677ea4055aa2c47e12b7af3f45",
+    "fullrun_equals_resumed": true
+  },
+  "s7_e2b_gen_greedy": {
+    "output.bin": "bf0f396f90d0a528e2948e64a5a282a044b527049384c17d7120bf46265bc04a"
+  }
+}
