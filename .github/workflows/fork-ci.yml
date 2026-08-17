@@ -429,9 +429,15 @@ jobs:
           PY
           echo "=== Check 7: assignment reader uses explicit status ==="
           grep -q "enum class AssignmentReadStatus" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
-          echo "=== Check 8: auto_size_ctx does not call exit ==="
-          if sed -n '/static bool auto_size_ctx/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then
-            echo "FAIL: auto_size_ctx still calls exit()"; exit 1
+          echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
+          # auto_size_ctx was removed by cb140146b (single-pass pre-scan
+          # refactor); its successor must uphold the same contract: pure
+          # stream walk, returns bool, never exits.
+          if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then
+          echo "FAIL: scan_prompts_file calls exit()"; exit 1
+          fi
+          if ! grep -q "struct PromptsScan" tools/hs-extract-batch/hs-extract-batch.cpp; then
+          echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this check)"; exit 1
           fi
           echo "PASS"
           echo "=== Check 9: No off-by-one ==="

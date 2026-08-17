@@ -407,7 +407,7 @@ struct server_slot {
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
-    // (MTP supports splitting — uses task->need_embd() not need_embd())
+    // (MTP supports splitting -- uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
 
@@ -430,7 +430,7 @@ struct server_slot {
         // HIDDEN_STATES tasks must never share a decode batch with ANY other
         // slot (including another HIDDEN_STATES task): all slots share one
         // ctx_tgt, so the hidden-state capture buffer accumulates every token
-        // in the batch — a co-batched slot's tokens would pollute the
+        // in the batch -- a co-batched slot's tokens would pollute the
         // response (mixed token streams, wrong last-token, pool=none
         // returning other prompts' vectors). Serialize them instead: the
         // batching loop skips a slot that cannot batch with the current
@@ -2362,7 +2362,7 @@ private:
         std::vector<int> layers;
         if (slot.task->params.hidden_all_layers) {
             // Full hidden_states ladder: 0 (embeddings) .. n_layer (final
-            // block output) inclusive — n_layer + 1 slots, matching the
+            // block output) inclusive -- n_layer + 1 slots, matching the
             // [0, n_layer] range accepted for explicit layer lists.
             layers.resize(n_layer + 1);
             for (int32_t i = 0; i <= n_layer; i++) {
