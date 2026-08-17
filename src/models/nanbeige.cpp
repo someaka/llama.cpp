@@ -160,6 +160,8 @@ llama_model_nanbeige::graph::graph(const llama_model & model, const llm_graph_pa
 
         inpL = cur;
 
+        capture_layer_output(il, cur);
+
         if (n_loops > 1 &&
             ((il + 1) % n_phys) == 0 &&
             (il + 1) < n_layer &&
