@@ -1790,23 +1790,18 @@ private:
         // (pos_next() returns the old count), producing incorrect activations.
         // This ensures position 0 start, matching the llama-hs-extract CLI path.
         if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES && !slot.task->is_child()) {
-            // Linear-attention architectures (Gated Delta Net, e.g. Qwen3.5)
-            // carry running recurrence state that survives context removal:
-            // common_context_seq_rm() drops memory-table entries but leaves
-            // the underlying KV cache and recurrence buffers untouched, so
-            // consecutive requests on one slot would see drifting hidden
-            // states. Clear the whole context memory to zero the recurrence
-            // state and match the CLI's fresh-context behavior.
-            //
-            // Scope assumption: llama_memory_clear(true) zeros ALL sequences in this
-            // context's memory module. This is safe because HIDDEN_STATES tasks decode
-            // exclusively (the server processes one slot at a time for this task type),
-            // and each slot has its own llama_context with independent memory. If future
-            // changes introduce shared memory across slots, this must be replaced with
-            // per-sequence clearing.
+            // prompt_clear() -> mem.seq_rm(slot.id, -1, -1) removes this slot's
+            // sequence from every memory type:
+            //   - KV-cache cells: seq ids dropped, cells freed
+            //   - recurrent (Gated Delta Net, Mamba, RWKV): seq_rm(seq, 0, max)
+            //     takes the rm_all branch -> set_rs_idx(seq, 0) + tail
+            //     invalidation = full per-sequence recurrence reset
+            //   - hybrid: both sub-memories
+            // All slots share ctx_tgt (one llama_context), so a global
+            // llama_memory_clear() here would wipe every concurrent slot's KV
+            // mid-decode -- it must stay per-sequence.
             llama_synchronize(slot.ctx_tgt);
             slot.prompt_clear();
-            llama_memory_clear(llama_get_memory(slot.ctx_tgt), true);
         }
 
         slot.state = slot.task->is_child()
