@@ -28,6 +28,7 @@ static void print_usage(const char * prog) {
     printf("  -l, --layers LIST         comma-separated layer indices or 'all' (default: all)\n");
     printf("  -f, --file PATH           read prompt from file\n");
     printf("  --no-bos                  do not add BOS token\n");
+    printf("  -c, --ctx-size N          context size (default: auto = token count, capped at n_ctx_train)\n");
     printf("  -t, --threads N           number of threads (default: 4)\n");
     printf("  -ngl, --n-gpu-layers N    number of GPU layers to offload (default: 0)\n");
     printf("  --output FILE             output JSON file (default: stdout)\n");
@@ -120,6 +121,7 @@ int main(int argc, char ** argv) {
     bool no_bos = false;
     int n_threads = 4;
     int n_gpu_layers = 0;
+    int ctx_size = 0;  // 0 = auto: size to the token count, capped at n_ctx_train
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -142,6 +144,15 @@ int main(int argc, char ** argv) {
             prompt_file = argv[i];
         } else if (arg == "--no-bos") {
             no_bos = true;
+        } else if (arg == "-c" || arg == "--ctx-size") {
+            if (++i >= argc) { fprintf(stderr, "error: --ctx-size requires an argument\n"); return 1; }
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0') { fprintf(stderr, "error: --ctx-size value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "error: --ctx-size value out of range\n"); return 1; }
+            if (val < 1) { fprintf(stderr, "error: --ctx-size must be >= 1\n"); return 1; }
+            ctx_size = (int) val;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
             char *endptr;
@@ -222,8 +233,39 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "%s: model loaded, n_layers=%d, n_embd=%d\n", __func__, n_layers, n_embd);
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 2048;
-    ctx_params.n_batch = 2048;
+    // Size the context to the work, not a hardcoded 2048: auto = token count
+    // (+ headroom zero: decode is single-shot), capped at n_ctx_train; or the
+    // user's --ctx-size. A prompt longer than n_ctx_train is rejected upfront
+    // (a too-small ctx would fail mid-decode with no pointer to the cause).
+    {
+        const int64_t n_ctx_train64 = llama_model_n_ctx_train(model);
+        int32_t ctx_n;
+        if (ctx_size > 0) {
+            ctx_n = ctx_size;
+        } else {
+            ctx_n = (int32_t) tokens.size();
+        }
+        if ((int64_t) ctx_n > n_ctx_train64) {
+            if (ctx_size == 0) {
+                ctx_n = (int32_t) n_ctx_train64;  // auto: cap, do not reject
+            } else if ((int64_t) tokens.size() <= n_ctx_train64) {
+                // user asked for more ctx than needed-in-principle: allow, cap
+                ctx_n = (int32_t) n_ctx_train64;
+            } else {
+                fprintf(stderr, "error: prompt is %zu tokens but the model's training context is only %lld tokens; use a shorter prompt\n",
+                        tokens.size(), (long long) n_ctx_train64);
+                return 1;
+            }
+        }
+        if ((int64_t) tokens.size() > (int64_t) ctx_n) {
+            fprintf(stderr, "error: prompt is %zu tokens but context is %d tokens; pass a larger --ctx-size or a shorter prompt\n",
+                    tokens.size(), ctx_n);
+            return 1;
+        }
+        ctx_params.n_ctx = (uint32_t) ctx_n;
+        ctx_params.n_batch = (uint32_t) ctx_n;
+        fprintf(stderr, "%s: using n_ctx=%d for %zu tokens\n", __func__, ctx_n, tokens.size());
+    }
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
     ctx_params.extract_hidden_states = true;
@@ -278,7 +320,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    std::ostringstream json;
+    // Stream the JSON directly (no ostringstream buffer): "all" layers with a
+    // long prompt (e.g. 2048 tokens x 2560 dims) would otherwise accumulate
+    // GB-scale text in RAM before the first write. The emitted bytes are
+    // identical to the former buffered form.
+    std::ofstream file_out;
+    std::ostream* json_stream = &std::cout;
+    if (output_file) {
+        file_out.open(output_file);
+        if (!file_out) {
+            fprintf(stderr, "error: could not open output file '%s'\n", output_file);
+            return 1;
+        }
+        json_stream = &file_out;
+    }
+    std::ostream& json = *json_stream;
     json << "{\n";
     json << "  \"n_tokens\": " << n_tokens_out << ",\n";
     json << "  \"n_embd\": " << n_embd << ",\n";
@@ -291,6 +347,12 @@ int main(int argc, char ** argv) {
 
         if (!hs) {
             fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
+            // Streaming opens the output file before extraction; a failure
+            // here must not leave an empty/truncated JSON behind.
+            if (output_file) {
+                file_out.close();
+                std::remove(output_file);
+            }
             return 1;
         }
 
@@ -313,22 +375,14 @@ int main(int argc, char ** argv) {
 
     json << "  ]\n";
     json << "}\n";
-
+    json.flush();
+    if (!json) {
+        fprintf(stderr, "error: write/flush of output '%s' failed\n",
+                output_file ? output_file : "stdout");
+        return 1;
+    }
     if (output_file) {
-        std::ofstream out(output_file);
-        if (!out) {
-            fprintf(stderr, "error: could not open output file '%s'\n", output_file);
-            return 1;
-        }
-        out << json.str();
-        out.close();
-        if (!out) {
-            fprintf(stderr, "error: write/close of output file '%s' failed\n", output_file);
-            return 1;
-        }
         fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
-    } else {
-        printf("%s", json.str().c_str());
     }
 
     return 0;
