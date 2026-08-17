@@ -779,6 +779,13 @@ static bool process_prompt(
 
 /**
  * Tokenize a prompt. Returns token vector (empty on failure).
+ *
+ * Deliberately NOT common_tokenize(): this variant (a) validates every token
+ * against the vocab bound and hard-errors on violation (no-silent-errors
+ * rule), (b) returns an empty vector on failure instead of throwing -- the
+ * producer thread and run_raw check emptiness as their error contract, and an
+ * exception from here would change that contract. Token output is identical
+ * to common_tokenize(vocab, text, add_bos, true) on the happy path.
  */
 static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool add_bos = true) {
     int n = -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, add_bos, true);
