@@ -52,6 +52,7 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
     }
     std::stringstream ss(str);
     std::string item;
+    std::vector<int> seen(n_slots, 0);  // duplicate layers emit redundant JSON blocks; reject
     while (std::getline(ss, item, ',')) {
         char *endp = nullptr;
         long val = strtol(item.c_str(), &endp, 10);
@@ -63,6 +64,11 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
             fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_slots);
             return {};
         }
+        if (seen[val]) {
+            fprintf(stderr, "error: duplicate layer index %ld in '%s'\n", val, str);
+            return {};
+        }
+        seen[val] = 1;
         layers.push_back((int)val);
     }
     return layers;

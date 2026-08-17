@@ -1017,6 +1017,7 @@ static int run_raw(const Args& args) {
         std::remove(tmp_path.c_str());
         return 1;
     }
+    fsync_parent_dir(args.output_path);  // make the rename itself durable
 
     return 0;
 }
@@ -1052,8 +1053,7 @@ struct PrefetchQueue {
 // tokenization outpaces GPU decode.
 static constexpr size_t MAX_PREFETCH = 64;
 
-// Checked fwrite for the per-record sidecar. On failure: print error, signal
-// producer to stop, join the producer thread, remove the per-record temp file
+// Checked fwrite for the per-record sidecar.
 // Write one field of a per-record row. On failure returns false ONLY --
 // producer teardown (join + temp removal) is owned by the single
 // stop_producer_and_join call at the caller's error site; joining here
@@ -1986,6 +1986,7 @@ static int run_batch(const Args& args) {
             std::remove(records_temp_path.c_str());
             return 1;
         }
+        fsync_parent_dir(records_path.c_str());  // make the rename itself durable
         fprintf(stderr, "Per-record output complete: %s\n", records_path.c_str());
     }
 
