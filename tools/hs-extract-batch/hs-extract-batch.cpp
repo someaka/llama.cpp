@@ -388,6 +388,26 @@ static Args parse_args(int argc, char** argv) {
         exit(1);
     }
 
+    // --token-skip is consumed ONLY in generation mode (and in --raw mode,
+    // which is a different invocation). In batch comprehension mode the
+    // token ranges come exclusively from the assignments file; the flag
+    // would be silently ignored. Reject the combination so the flag
+    // contract in --help is not a lie.
+    if (args.batch_mode && args.generate_tokens <= 0 && args.token_skip > 0) {
+        fprintf(stderr,
+                "Error: --token-skip applies only to --raw mode or --batch --generate mode; "
+                "in batch comprehension mode the token ranges come from the assignments file. "
+                "Encode the skip as a mask_type=0 assignment instead.\n");
+        exit(1);
+    }
+
+    // --batch and --raw together: the batch block below returns first and
+    // the raw invocation would be silently discarded.
+    if (args.batch_mode && args.raw_mode) {
+        fprintf(stderr, "Error: --batch and --raw are mutually exclusive\n");
+        exit(1);
+    }
+
     // --batch mode has its own positional layout: [model] [prompts] [layers] [output]
     if (args.batch_mode) {
         if (positional.empty()) {
@@ -448,8 +468,26 @@ static Args parse_args(int argc, char** argv) {
             print_usage(argv[0]);
             exit(1);
         }
+        // Flags consumed only by run_batch would be silently ignored in raw
+        // mode: --generate N performs a plain comprehension dump and exits 0,
+        // sampling/resume/checkpoint flags vanish without a trace. Reject
+        // them so every accepted invocation means what it says.
+        if (args.generate_tokens > 0) {
+            fprintf(stderr, "Error: --generate requires --batch (raw mode is comprehension-only)\n");
+            exit(1);
+        }
+        if (args.temperature != 0.0f || args.top_k != 0 || args.top_p != 1.0f || args.repeat_penalty != 1.0f) {
+            fprintf(stderr, "Error: sampling flags (--temperature/--top-k/--top-p/--repeat-penalty) "
+                    "require --batch --generate; raw mode is comprehension-only\n");
+            exit(1);
+        }
+        if (args.resume || args.checkpoint_every > 0) {
+            fprintf(stderr, "Error: --resume/--checkpoint-every apply to batch mode only\n");
+            exit(1);
+        }
         return args;
     }
+
 
     // No mode specified -- show usage and exit
     fprintf(stderr, "Error: must specify --batch, --raw, or --self-test\n\n");
@@ -457,9 +495,12 @@ static Args parse_args(int argc, char** argv) {
     exit(1);
 }
 
-// Wraps fwrite for per-record sidecar writes. On failure, prints error,
-// signals producer to stop, joins producer thread, and returns 1 from the calling function.
-// All captured state is passed explicitly; no implicit scope capture.
+// Wraps fwrite for per-record sidecar writes. On failure: print error, signal
+// producer to stop, join the producer thread, remove the per-record temp file
+// (same cleanup contract as STOP_PRODUCER_AND_JOIN — a leftover
+// .records.bin.tmp would be picked up by a subsequent run's parser), and
+// return 1 from the calling function. All captured state is passed
+// explicitly; no implicit scope capture.
 #define RECORDS_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
     do {                                                                        \
         if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
@@ -468,6 +509,7 @@ static Args parse_args(int argc, char** argv) {
             { std::lock_guard<std::mutex> _lk((pfq_ref).mtx); (pfq_ref).producer_done = true; } \
             (pfq_ref).cv_space.notify_all();                                    \
             (thread_ref).join();                                                \
+            if (!(records_temp_path).empty()) std::remove((records_temp_path).c_str()); \
             return 1;                                                           \
         }                                                                       \
     } while (0)
@@ -913,6 +955,20 @@ static AssignmentReadResult read_prompt_assignments(FILE* f) {
         Assignment& a = assignments[i];
         if (fread(&a.group_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
         if (fread(&a.mask_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
+        // group_id/mask_id feed make_accum_key(), which truncates them to
+        // 16 bits (and group_id to 32 bits). Out-of-range values would
+        // silently alias into a different group/mask's statistics and
+        // produce checkpoints the tool's own reader rejects on --resume.
+        // Reject here, at the parse site, so every consumer (generation
+        // path, comprehension path, checkpoint writer) is covered.
+        if (a.group_id < 0 || a.group_id > 0xFFFF) {
+            fprintf(stderr, "Error: group_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.group_id);
+            return {AssignmentReadStatus::error, {}};
+        }
+        if (a.mask_id < 0 || a.mask_id > 0xFFFF) {
+            fprintf(stderr, "Error: mask_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.mask_id);
+            return {AssignmentReadStatus::error, {}};
+        }
         if (fread(&a.mask_type, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
 
         if (a.mask_type == 0) {
@@ -1085,6 +1141,13 @@ static int run_raw(const Args& args) {
         while (std::getline(count_fin, line)) {
             if (!line.empty()) n_prompts_total++;
         }
+        // getline returns false for both EOF and I/O error; a bad stream
+        // here would count a truncated file, and the header would then
+        // certify the truncated body as complete in the second pass.
+        if (count_fin.bad()) {
+            fprintf(stderr, "Error: I/O error reading prompts file during count pass (bad stream)\n");
+            return 1;
+        }
     }
 
     // Global header
@@ -1146,6 +1209,29 @@ static int run_raw(const Args& args) {
             fprintf(stderr, "Processed %d/%d prompts (%.2f prompts/sec)\n",
                     prompt_idx, n_prompts_total, pps);
         }
+    }
+
+    // getline returns false for both EOF and I/O error (bad stream). An
+    // unchecked I/O error here would finalize a silently truncated dump via
+    // the atomic rename below, and the header (written from the count pass)
+    // would certify it as complete.
+    if (fin.bad()) {
+        fprintf(stderr, "Error: I/O error reading prompts file mid-run (bad stream) at prompt %d\n", prompt_idx);
+        out.reset();
+        std::remove(tmp_path.c_str());
+        return 1;
+    }
+    // Position-based completeness check (TOCTOU guard, mirrors run_batch):
+    // every non-empty line counted in the first pass must have been
+    // processed in the second pass. A prompts file modified between the two
+    // passes must abort before the dump is finalized, never rename a short
+    // file certified complete by the header.
+    if (prompt_idx != n_prompts_total) {
+        fprintf(stderr, "Error: processed %d prompts but counted %d  -  prompts file changed between passes\n",
+                prompt_idx, n_prompts_total);
+        out.reset();
+        std::remove(tmp_path.c_str());
+        return 1;
     }
 
     auto end_time = std::chrono::steady_clock::now();
@@ -1447,7 +1533,7 @@ static bool read_checkpoint(
         if (fread(&group_id, sizeof(int32_t), 1, f) != 1) return false;
         if (fread(&n_masks, sizeof(int32_t), 1, f) != 1) return false;
 
-        // Validate group_id fits in 16-bit range (matches runtime validation at line ~1136)
+        // Validate group_id fits in 16-bit range (matches the parse-site bounds check in read_prompt_assignments)
         if (group_id < 0 || group_id > 0xFFFF) {
             fprintf(stderr, "Error: checkpoint contains group_id=%d out of range [0, 65535] - corrupt checkpoint\n", group_id);
             return false;
@@ -1995,7 +2081,18 @@ static int run_batch(const Args& args) {
             const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
             int n_vocab = llama_vocab_n_tokens(gen_vocab);
             LlamaSampler sampler_owner;
-            if (args.temperature > 0.0f) {
+            // Chain is built when temperature > 0 OR when any secondary
+            // sampling parameter is non-default: --repeat-penalty/--top-k/
+            // --top-p must not be silently dropped at temperature=0 (the
+            // documented greedy default). A temp(0) tail converts the chain
+            // to greedy argmax AFTER penalties/top-k/top-p are applied, so
+            // "greedy with repeat penalty" behaves as documented. Pure
+            // defaults (all zero) keep the fast manual-argmax path.
+            const bool want_sampling_chain = args.temperature > 0.0f
+                || args.repeat_penalty > 1.0f
+                || args.top_k > 0
+                || args.top_p < 1.0f;
+            if (want_sampling_chain) {
                 llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
                 sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
                 if (args.repeat_penalty > 1.0f) {
@@ -2010,7 +2107,7 @@ static int run_batch(const Args& args) {
                     llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
                 }
                 llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
-                llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism with temperature
+                llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism
             }
             llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
 
@@ -2152,7 +2249,7 @@ static int run_batch(const Args& args) {
                     }
                     // Accumulate into the group/mask/layer accumulator.
                     // Use target_layers[li] (the REAL layer number), matching the
-                    // comprehension path at line 1812. Using the loop index `li`
+                    // comprehension accumulation loop. Using the loop index `li`
                     // would silently mislabel layers in the binary accumulator output.
                     uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
                     auto& acc = accumulators[acc_key];
