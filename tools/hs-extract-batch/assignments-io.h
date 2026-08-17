@@ -6,6 +6,11 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
@@ -60,24 +65,7 @@ struct AssignmentReadResult {
     std::vector<Assignment> assignments;
 };
 
-// Wraps fwrite for per-record sidecar writes. On failure: print error, signal
-// producer to stop, join the producer thread, remove the per-record temp file
-// (same cleanup contract as STOP_PRODUCER_AND_JOIN — a leftover
-// .records.bin.tmp would be picked up by a subsequent run's parser), and
-// return 1 from the calling function. All captured state is passed
-// explicitly; no implicit scope capture.
-#define RECORDS_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
-    do {                                                                        \
-        if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
-            fprintf(stderr, "Error: per-record write failed at %s:%d\n",        \
-                    __FILE__, __LINE__);                                        \
-            { std::lock_guard<std::mutex> _lk((pfq_ref).mtx); (pfq_ref).producer_done = true; } \
-            (pfq_ref).cv_space.notify_all();                                    \
-            (thread_ref).join();                                                \
-            if (!(records_temp_path).empty()) std::remove((records_temp_path).c_str()); \
-            return 1;                                                           \
-        }                                                                       \
-    } while (0)
+
 
 /**
  * Read assignments.bin header: magic, n_prompts, n_embd, group name table.

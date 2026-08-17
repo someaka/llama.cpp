@@ -641,7 +641,7 @@ static bool process_prompt(
         header[3 + i] = target_layers[i];
     }
 
-    CHECKED_WRITE(header.data(), sizeof(int32_t), 3 + target_layers.size(), out);
+    if (!checked_write(header.data(), sizeof(int32_t), 3 + target_layers.size(), out)) return false;
 
     // Write hidden state data for each layer
     for (int32_t layer : target_layers) {
@@ -658,11 +658,11 @@ static bool process_prompt(
                 return false;
             }
 
-            CHECKED_WRITE(mean_buf, sizeof(float), n_embd, out);
+            if (!checked_write(mean_buf, sizeof(float), n_embd, out)) return false;
         } else {
             // Full mode: write all tokens x hidden_size
             size_t data_size = (size_t)n_hidden_tokens * (size_t)n_embd;
-            CHECKED_WRITE(data, sizeof(float), data_size, out);
+            if (!checked_write(data, sizeof(float), data_size, out)) return false;
         }
     }
 
@@ -1017,6 +1017,32 @@ struct PrefetchQueue {
 // 64 items -> max ~3MB queued, prevents OOM on 200K-prompt runs where
 // tokenization outpaces GPU decode.
 static constexpr size_t MAX_PREFETCH = 64;
+
+// Checked fwrite for the per-record sidecar. On failure: print error, signal
+// producer to stop, join the producer thread, remove the per-record temp file
+// (a leftover .records.bin.tmp would be picked up by a subsequent run's
+// parser), and return false; the caller propagates (return 1).
+// All state is passed explicitly; no implicit scope capture.
+static inline bool records_write(
+    const void* ptr, size_t size, size_t count, FILE* fp,
+    PrefetchQueue& pfq, std::thread& producer_thread,
+    const std::string& records_temp_path
+) {
+    if (fwrite(ptr, size, count, fp) != count) {
+        fprintf(stderr, "Error: per-record write failed at %s:%d\n",
+                __FILE__, __LINE__);
+        {
+            std::lock_guard<std::mutex> lk(pfq.mtx);
+            pfq.producer_done = true;
+        }
+        pfq.cv_space.notify_all();
+        producer_thread.join();
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
+        return false;
+    }
+    return true;
+}
+
 
 // Signal the producer to stop, join it, and remove the per-record temp file
 // (a leftover .records.bin.tmp would be picked up by a subsequent run's
@@ -1803,14 +1829,14 @@ static int run_batch(const Args& args) {
 
                 if (args.save_per_record && records_closer) {
                     FILE* records_fp = records_closer.fp;
-                    RECORDS_WRITE(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
+                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                     int32_t gid = assign.group_id;
                     int32_t mid = assign.mask_id;
                     int32_t layer_idx = target_layers[li];
-                    RECORDS_WRITE(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread);
+                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                 }
             }
         }

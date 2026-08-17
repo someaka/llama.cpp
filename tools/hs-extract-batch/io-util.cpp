@@ -76,11 +76,11 @@ static bool _write_accumulator_to_file(
 
     // Write header
     int32_t magic = OUTPUT_MAGIC;
-    CHECKED_WRITE(&magic, sizeof(int32_t), 1, out);
-    CHECKED_WRITE(&n_groups, sizeof(int32_t), 1, out);
+    if (!checked_write(&magic, sizeof(int32_t), 1, out)) return false;
+    if (!checked_write(&n_groups, sizeof(int32_t), 1, out)) return false;
     int32_t n_layers = max_layer + 1;
-    CHECKED_WRITE(&n_layers, sizeof(int32_t), 1, out);
-    CHECKED_WRITE(&n_embd, sizeof(int32_t), 1, out);
+    if (!checked_write(&n_layers, sizeof(int32_t), 1, out)) return false;
+    if (!checked_write(&n_embd, sizeof(int32_t), 1, out)) return false;
 
     // Write per-group data: iterate over groups, and within each group
     // over its (group, mask) pairs. Each mask block is emitted exactly once.
@@ -98,30 +98,30 @@ static bool _write_accumulator_to_file(
             gm_idx++;
         }
 
-        CHECKED_WRITE(&group_id, sizeof(int32_t), 1, out);
-        CHECKED_WRITE(&n_masks, sizeof(int32_t), 1, out);
+        if (!checked_write(&group_id, sizeof(int32_t), 1, out)) return false;
+        if (!checked_write(&n_masks, sizeof(int32_t), 1, out)) return false;
 
         for (size_t mi = mask_start; mi < mask_start + (size_t)n_masks; mi++) {
             const auto& gm = gm_pairs[mi];
-            CHECKED_WRITE(&gm.mask_id, sizeof(int32_t), 1, out);
+            if (!checked_write(&gm.mask_id, sizeof(int32_t), 1, out)) return false;
 
             int32_t n_layers_data = (int32_t)gm.layer_indices.size();
-            CHECKED_WRITE(&n_layers_data, sizeof(int32_t), 1, out);
+            if (!checked_write(&n_layers_data, sizeof(int32_t), 1, out)) return false;
 
             for (int32_t li : gm.layer_indices) {
                 uint64_t layer_key = make_accum_key(group_id, gm.mask_id, li);
                 const auto& av = accumulators.at(layer_key);
-                CHECKED_WRITE(&li, sizeof(int32_t), 1, out);
-                CHECKED_WRITE(&av.count, sizeof(int32_t), 1, out);
+                if (!checked_write(&li, sizeof(int32_t), 1, out)) return false;
+                if (!checked_write(&av.count, sizeof(int32_t), 1, out)) return false;
 
                 if (write_sum) {
                     // Checkpoint format (v2+): write raw sum directly to avoid
                     // precision loss from mean=sum/count then sum=mean*count roundtrip.
                     if (av.count > 0 && !av.sum.empty()) {
-                        CHECKED_WRITE(av.sum.data(), sizeof(float), n_embd, out);
+                        if (!checked_write(av.sum.data(), sizeof(float), n_embd, out)) return false;
                     } else {
                         std::fill(mean.begin(), mean.end(), 0.0f);
-                        CHECKED_WRITE(mean.data(), sizeof(float), n_embd, out);
+                        if (!checked_write(mean.data(), sizeof(float), n_embd, out)) return false;
                     }
                 } else {
                     // Output format: write mean = sum / count for downstream consumers.
@@ -131,7 +131,7 @@ static bool _write_accumulator_to_file(
                     } else {
                         std::fill(mean.begin(), mean.end(), 0.0f);
                     }
-                    CHECKED_WRITE(mean.data(), sizeof(float), n_embd, out);
+                    if (!checked_write(mean.data(), sizeof(float), n_embd, out)) return false;
                 }
             }
         }
@@ -198,8 +198,8 @@ bool write_checkpoint(
         fprintf(stderr, "Error: cannot write checkpoint to %s\n", temp_path.c_str());
         return false;
     }
-    CHECKED_WRITE(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f);
-    CHECKED_WRITE(&n_iterated, sizeof(int32_t), 1, f);
+    if (!checked_write(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f)) return false;
+    if (!checked_write(&n_iterated, sizeof(int32_t), 1, f)) return false;
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (ok) {
         if (!f.sync()) {  // flush + fsync: check for failures before rename

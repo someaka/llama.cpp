@@ -58,17 +58,18 @@ struct FilePtr {
 #endif
 };
 
-// Wraps fwrite to check return value. On failure, prints an error and
-// returns false from the calling function. Used for all output writes
-// to ensure corrupt files are never silently produced.
-#define CHECKED_WRITE(ptr, size, count, f)                                      \
-    do {                                                                        \
-        if (fwrite((ptr), (size), (count), (f)) != (size_t)(count)) {          \
-            fprintf(stderr, "Error: write failed at %s:%d (expected %zu, wrote less)\n", \
-                    __FILE__, __LINE__, (size_t)(count));                      \
-            return false;                                                       \
-        }                                                                       \
-    } while (0)
+// Checked fwrite: verifies the full count was written. On failure prints an
+// error and returns false; callers must propagate the failure (never produce
+// corrupt files silently). Function form of the former CHECKED_WRITE macro.
+static inline bool checked_write(const void* ptr, size_t size, size_t count, FILE* f) {
+    if (fwrite(ptr, size, count, f) != count) {
+        fprintf(stderr, "Error: write failed at %s:%d (expected %zu, wrote less)\n",
+                __FILE__, __LINE__, count);
+        return false;
+    }
+    return true;
+}
+
 
 // -- Batch-Accumulate Output Writer (io-util.cpp) ------------------------
 
