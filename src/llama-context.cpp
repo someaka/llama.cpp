@@ -989,6 +989,7 @@ float * llama_context::get_hidden_state(int32_t layer) {
     // 1..n_layer-1 = state entering block i, n_layer = final block output.
     const int32_t n_slots = (int32_t) model.hparams.n_layer() + 1;
     if (layer < 0 || layer >= n_slots) {
+        LLAMA_LOG_ERROR("%s: invalid layer %d (must be in [0, %d))\n", __func__, layer, n_slots);
         return nullptr;
     }
 
@@ -1693,6 +1694,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
 
+    // Hidden-state capture contract: a pointer/count from llama_get_hidden_state*
+    // is valid only for the most recent llama_decode() call. Early-exit failure
+    // paths below (memory-slot failure, compute failure, output-reserve failure)
+    // return before the capture buffers are refreshed, which would leave the
+    // previous batch's states readable after a FAILED decode. Invalidate up
+    // front so every exit from this call exposes the same nothing-captured state.
+    if (cparams.extract_hidden_states) {
+        n_hidden_tokens = 0;
+    }
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -1868,7 +1879,18 @@ int llama_context::decode(const llama_batch & batch_inp) {
         // (final block output) -- one slot more than the block count.
         const int32_t n_slots = (int32_t) hparams.n_layer() + 1;
         const size_t total_size = (size_t)n_slots * n_tokens_all * n_embd_out;
-        hidden_state_buf.resize(total_size);
+        // Host allocation proportional to n_batch: an allocation failure here
+        // must surface as decode's usual -1, not as std::bad_alloc propagating
+        // through the extern "C" llama_decode() boundary.
+        try {
+            hidden_state_buf.resize(total_size);
+        } catch (const std::exception & err) {
+            LLAMA_LOG_ERROR("%s: failed to allocate hidden-state capture buffer "
+                            "(%zu slots x %d tokens x %u embd): %s\n",
+                            __func__, total_size, n_tokens_all, n_embd_out, err.what());
+            n_hidden_tokens = 0;
+            return -1;
+        }
         n_hidden_tokens = 0;
     }
 
@@ -3829,6 +3851,18 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    // Hidden-state capture is implemented in the main decoder graph builders
+    // (capture_layer_output/capture_embeddings). The MTP draft graph variants
+    // (LLM_GRAPH_TYPE_DECODER_MTP) do not install capture hooks, so extraction
+    // + MTP would otherwise die at first decode with a misleading
+    // "architecture ... does not call capture_layer_output" abort. Refuse the
+    // combination here, at creation, with an accurate message.
+    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.extract_hidden_states) {
+        LLAMA_LOG_ERROR("%s: hidden-state extraction is not supported for MTP draft contexts "
+                        "(the MTP graph variant does not install capture hooks)\n", __func__);
+        return nullptr;
+    }
+
     try {
         auto * ctx = new llama_context(*model, params);
         return ctx;
@@ -3914,7 +3948,16 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 }
 
 void llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden_states) {
-    ctx->set_extract_hidden_states(extract_hidden_states);
+    // The member fn validates the arch and throws on unsupported ones. This is
+    // the documented refusal path for the C++ API, but a C++ exception must
+    // never cross the extern "C" seam (UB for C callers; the repo ships
+    // tests/test-hidden-states.c). Mirror llama_init_from_model's handling:
+    // catch, log, and leave the context unchanged.
+    try {
+        ctx->set_extract_hidden_states(extract_hidden_states);
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to set hidden-state extraction: %s\n", __func__, err.what());
+    }
 }
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
