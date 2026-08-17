@@ -871,6 +871,13 @@ static int run_raw(const Args& args) {
         fprintf(stderr, "Error: cannot open output file %s\n", tmp_path.c_str());
         return 1;
     }
+    // Shared error cleanup: close the temp file and remove it so a failed
+    // run never leaves a stray .tmp that a later run could mistake for
+    // progress. Every error path below returns 1 after calling this.
+    auto fail_cleanup = [&]() {
+        out.reset();
+        std::remove(tmp_path.c_str());
+    };
     fprintf(stderr, "Writing output to %s\n", args.output_path);
 
     // Prompt count from the single pre-scan; the TOCTOU guard below still
@@ -880,8 +887,7 @@ static int run_raw(const Args& args) {
     // Global header
     if (fwrite(&n_prompts_total, sizeof(int32_t), 1, out) != 1) {
         fprintf(stderr, "Error: failed to write raw output header\n");
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
 
@@ -907,15 +913,13 @@ static int run_raw(const Args& args) {
         auto tokens = tokenize(vocab, line, /*add_bos=*/!args.no_bos);
         if (tokens.empty()) {
             fprintf(stderr, "Error: prompt %d tokenized to empty\n", prompt_idx);
-            out.reset();
-            std::remove(tmp_path.c_str());
+            fail_cleanup();
             return 1;
         }
         if ((int)tokens.size() > n_ctx) {
             fprintf(stderr, "Error: prompt %d has %zu tokens, exceeds n_ctx=%d\n",
                     prompt_idx, tokens.size(), n_ctx);
-            out.reset();
-            std::remove(tmp_path.c_str());
+            fail_cleanup();
             return 1;
         }
 
@@ -945,8 +949,7 @@ static int run_raw(const Args& args) {
     // would certify it as complete.
     if (fin.bad()) {
         fprintf(stderr, "Error: I/O error reading prompts file mid-run (bad stream) at prompt %d\n", prompt_idx);
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
     // Position-based completeness check (TOCTOU guard, mirrors run_batch):
@@ -957,8 +960,7 @@ static int run_raw(const Args& args) {
     if (prompt_idx != n_prompts_total) {
         fprintf(stderr, "Error: processed %d prompts but counted %d  -  prompts file changed between passes\n",
                 prompt_idx, n_prompts_total);
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
 
@@ -973,8 +975,7 @@ static int run_raw(const Args& args) {
     // on POSIX), so a kill mid-write can never leave a truncated raw dump.
     if (!out.sync()) {   // fflush + fsync(fileno): check for disk-full / I/O errors
         fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", tmp_path.c_str());
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
     out.reset();  // fclose before rename
