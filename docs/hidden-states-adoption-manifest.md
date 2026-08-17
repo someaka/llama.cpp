@@ -247,3 +247,20 @@ is_recr dispatch — and refusals win over adoption-order suggestions.)
 Later waves: remaining CLASSIC rows, family cluster by family cluster.
 Refused archs stay out until a per-builder semantic decision is made and recorded.
 
+## The 21 unlisted files (148 on disk - 127 classified)
+
+Not omissions -- each is covered by proxy through a classified builder:
+
+- **11 registered alias archs** inherit a builder's graph (and its dormant
+  tap) via `using graph =` aliases in models.h: llama-embed -> llama,
+  phimoe -> phi3, granite-moe & minicpm -> granite, mistral4 &
+  deepseek2ocr -> deepseek2, jina-bert-v2/v3 & nomic-bert &
+  nomic-bert-moe -> bert, hunyuan-dense -> hunyuan_vl. Their taps are
+  deliberate dormant no-ops until the registry lists them.
+- **4 inherit refusals** the same way: mamba2 -> mamba, lfm2moe -> lfm2,
+  nemotron-h-moe -> nemotron_h, t5encoder -> t5.
+- **4 are base helpers** other builders compose (delta-net-base, mamba-base,
+  rwkv6-base, rwkv7-base) -- no standalone graph to classify.
+- **clip** is a vision encoder (not a text decoder ladder); **qwen3tts** is a
+  registered arch whose graph comes from another builder.
+

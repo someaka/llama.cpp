@@ -11,6 +11,10 @@
 #include "llama.h"
 
 int main(int argc, char ** argv) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.gguf> <prompt>\n", argv[0]);
+        return 1;
+    }
     const char * model_path = argv[1];
     const char * prompt     = argv[2];
 
@@ -48,11 +52,11 @@ int main(int argc, char ** argv) {
             batch.logits[i]   = (i == n - 1);
         }
         batch.n_tokens = n;
-        if (llama_decode(ctx, batch)) { fprintf(stderr, "decode failed mode=%d\n", mode); return 1; }
+        if (llama_decode(ctx, batch)) { fprintf(stderr, "decode failed mode=%d\n", mode); llama_batch_free(batch); return 1; }
 
         // get_logits_ith takes the BATCH TOKEN index, not the output row
         const float * logits = llama_get_logits_ith(ctx, n - 1);
-        const int n_vocab = llama_n_vocab(vocab);
+        const int n_vocab = llama_vocab_n_tokens(vocab);
         int best = 0;
         for (int i = 1; i < n_vocab; ++i) if (logits[i] > logits[best]) best = i;
         argmaxes[mode] = best;
@@ -67,6 +71,7 @@ int main(int argc, char ** argv) {
         fflush(stdout);
         for (int k = 0; k < 8; ++k) printf("  top%d: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
 
+        llama_batch_free(batch);
         llama_free(ctx);
     }
 

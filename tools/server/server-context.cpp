@@ -5261,7 +5261,14 @@ void server_routes::init_routes() {
                         res->error(format_error_response("layers array must contain integers", ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
-                    int layer_num = layer.get<int>();
+                    // get<int64_t> first: get<int> narrows before the range
+                    // check, so an int64 value like 2^33+5 truncates to 5 and
+                    // would be accepted instead of 400'd.
+                    const int64_t layer_req = layer.get<int64_t>();
+                    int layer_num = -1;
+                    if (layer_req >= 0 && layer_req <= (int64_t) n_hs_slots) {
+                        layer_num = (int) layer_req;
+                    }
                     if (layer_num < 0 || layer_num >= n_hs_slots) {
                         res->error(format_error_response(
                             "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",

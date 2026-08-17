@@ -692,6 +692,13 @@ static bool process_prompt(
  * producer thread and run_raw check emptiness as their error contract, and an
  * exception from here would change that contract. Token output is identical
  * to common_tokenize(vocab, text, add_bos, true) on the happy path.
+ *
+ * add_bos default note: callers pass !args.no_bos (BOS always added unless
+ * --no-bos). hs-extract instead uses llama_vocab_get_add_bos(vocab) &&
+ * !no_bos, i.e. the VOCAB's own default. The divergence is deliberate here:
+ * batch extraction targets fixed story sets where an explicit token budget
+ * matters, and the Python driver (batch_runner) passes --no-bos for every
+ * bos_offset==0 model, keeping cross-tool parity where it counts.
  */
 static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool add_bos = true) {
     int n = -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, add_bos, true);
