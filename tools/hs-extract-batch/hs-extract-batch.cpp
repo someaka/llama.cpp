@@ -176,7 +176,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --resume         Resume from last checkpoint\n");
     fprintf(stderr, "  --n-gpu-layers N / -ngl N  Layers to offload to GPU (default: 99 = all)\n");
     fprintf(stderr, "  --save-per-record  Also write per-record vectors to <output>.records.bin\n");
-    fprintf(stderr, "  --batch-size N   Pack N prompts per decode call (default: 1, no batching)\n");
+    fprintf(stderr, "  --batch-size N   Accepted for compatibility; values > 1 are rejected at runtime\n");
+    fprintf(stderr, "                  (multi-prompt batching is not implemented). Default: 1.\n");
     fprintf(stderr, "  --profile       Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)\n");
     fprintf(stderr, "  --no-bos        Do not add BOS token (for models like Qwen3.5 with bos_offset=0)\n");
     fprintf(stderr, "  --generate N    Generation-based extraction: generate N tokens after each prompt,\n");
@@ -534,6 +535,11 @@ static Args parse_args(int argc, char** argv) {
 // -- Batch Mode Constants & Data Structures -----------------------------
 
 static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
+
+// Repeat-penalty window (last_n) for generation-mode sampling: tokens further
+// back than this are not penalized. Fixed, not CLI-tunable; named instead of
+// a bare literal at the call site.
+static constexpr int REPEAT_PENALTY_LAST_N = 64;
 static constexpr int32_t OUTPUT_MAGIC      = 0x43524432;  // binary accumulator format v2
 
 // Per (group, mask, layer): running sum and count for accumulating means.
@@ -1829,9 +1835,18 @@ static int run_batch(const Args& args) {
 
             PrefetchedPrompt pp;
             pp.prompt_idx = p_idx;
-            pp.tokens = tokenize(vocab, p_line, /*add_bos=*/!args.no_bos);
+            // On --resume, prompts below skip_count are discarded by the
+            // consumer without decoding; their tokens are never used.
+            // Skip the tokenization (pure waste on resume: a 150K-prompt
+            // resume burns 150K tokenizations). The line itself must still
+            // be consumed to keep the stream in sync with assignments.
+            if (p_idx >= skip_count) {
+                pp.tokens = tokenize(vocab, p_line, /*add_bos=*/!args.no_bos);
+            }
             pp.assignments = std::move(assignment_read.assignments);
-            pp.skip = pp.tokens.empty() || ((int)pp.tokens.size() > n_ctx);
+            // Empty tokens on a skipped prompt are expected (not tokenized);
+            // the consumer's skip branch runs before the empty-tokens error.
+            pp.skip = (p_idx < skip_count) ? false : (pp.tokens.empty() || ((int)pp.tokens.size() > n_ctx));
 
             {
                 std::unique_lock<std::mutex> lk(pfq.mtx);
@@ -2098,7 +2113,7 @@ static int run_batch(const Args& args) {
                 if (args.repeat_penalty > 1.0f) {
                     // upstream API change (2026-08): llama_sampler_init_penalties now
                     // takes n_vocab first to bound the repeat-scan range.
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, 64, args.repeat_penalty, 0.0f, 0.0f));
+                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, REPEAT_PENALTY_LAST_N, args.repeat_penalty, 0.0f, 0.0f));
                 }
                 if (args.top_k > 0) {
                     llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
@@ -2269,6 +2284,16 @@ static int run_batch(const Args& args) {
             // Skip the normal comprehension-mode extraction below.
             // The shared tail does the bookkeeping (counters, checkpoint,
             // progress) identically to the comprehension path.
+            // Profiling: kv/decode timers are shared with comprehension mode
+            // (they wrap the common prologue + generation steps); extract and
+            // mean have no separate phases here, so they accrue as 0. Count
+            // the prompt so --profile still prints its breakdown in
+            // generation mode instead of silently printing nothing.
+            if (args.profile) {
+                prof_total_kv     += std::chrono::duration<double, std::milli>(t_kv_end - t_kv_start).count();
+                prof_total_decode += std::chrono::duration<double, std::milli>(t_decode_end - t_decode_start).count();
+                prof_count++;
+            }
             if (!after_prompt_done()) {
                 STOP_PRODUCER_AND_JOIN();
                 return 1;
@@ -2306,11 +2331,18 @@ static int run_batch(const Args& args) {
                 return 1;
             }
 
+            // mask_type 0 is the common case (single full-span range): reuse
+            // the hoisted buffer with clear+push_back (no allocation).
+            // mask_type 1 points at the assignment's own vector -- a const
+            // pointer, no copy. The old code deep-copied assign.ranges per
+            // assignment per prompt on this hot path.
+            const std::vector<std::pair<int,int>>* ranges_ptr;
             if (assign.mask_type == 0) {
                 ranges_buf.clear();
                 ranges_buf.push_back({assign.skip, n_hidden});
+                ranges_ptr = &ranges_buf;
             } else {
-                ranges_buf = assign.ranges;
+                ranges_ptr = &assign.ranges;
             }
 
             for (size_t li = 0; li < target_layers.size(); li++) {
@@ -2322,7 +2354,7 @@ static int run_batch(const Args& args) {
                 }
 
                 std::fill(mean_buf.begin(), mean_buf.end(), 0.0f);
-                int64_t tokens_in_mask = compute_masked_mean(data, n_hidden, n_embd, ranges_buf, mean_buf.data());
+                int64_t tokens_in_mask = compute_masked_mean(data, n_hidden, n_embd, *ranges_ptr, mean_buf.data());
                 if (tokens_in_mask < 0) {
                     fprintf(stderr, "Error: compute_masked_mean failed for prompt %d\n", pp.prompt_idx);
                     STOP_PRODUCER_AND_JOIN();

@@ -86,7 +86,7 @@ Header:
   n_groups:        int32
   Per group:
     name_len:      int32
-    name:          name_len bytes (UTF-8 label for this group_id, used in output and progress logs)
+    name:          name_len bytes (UTF-8 label for this group_id; parsed and validated, not currently used in output)
 
 Per prompt (n_prompts times, in the same order as prompts.txt lines):
   n_assignments:   int32 (0..100000)
