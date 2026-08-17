@@ -1,14 +1,18 @@
 /*
  * Batch hidden-state extraction CLI.
  *
- * Three modes:
- *   Batch:     hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --batch --assignments <file> [flags]
- *   Raw:       hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --raw [flags]
- *   Self-test: hs-extract-batch --self-test
+ * Four modes:
+ *   Batch:      hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --batch --assignments <file> [flags]
+ *               (with --generate N: generation-based extraction, see generate_assignment())
+ *   Raw:        hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --raw [flags]
+ *   Self-test:  hs-extract-batch --self-test
+ *   Generate:   hs-extract-batch ... --batch --generate N [sampling flags]
  *
  * Production mode is --batch: reads prompts.txt + assignments.bin, streams
  * one prompt at a time, computes masked means per assignment, accumulates
- * per group/mask/layer, writes output.bin with final means.
+ * per group/mask/layer, writes output.bin with final means. With --generate N
+ * it autoregressively generates N tokens per prompt and accumulates the
+ * hidden states of the generated tokens instead (generate_assignment()).
  *
  * --raw is a debug/parity mode that dumps per-prompt binary data.
  *
@@ -53,84 +57,15 @@
 
 // -- Checked Write Macro ------------------------------------------------
 
-// Wraps fwrite to check return value. On failure, prints an error and
-// returns false from the calling function. Used for all output writes
-// to ensure corrupt files are never silently produced.
-#define CHECKED_WRITE(ptr, size, count, f)                                      \
-    do {                                                                        \
-        if (fwrite((ptr), (size), (count), (f)) != (size_t)(count)) {          \
-            fprintf(stderr, "Error: write failed at %s:%d (expected %zu, wrote less)\n", \
-                    __FILE__, __LINE__, (size_t)(count));                      \
-            return false;                                                       \
-        }                                                                       \
-    } while (0)
-
-// -- RAII Wrappers for Automatic Resource Cleanup -----------------------
-
-struct FilePtr {
-    FILE* fp;
-    FilePtr() : fp(nullptr) {}
-    FilePtr(FILE* f) : fp(f) {}
-    ~FilePtr() { if (fp) fclose(fp); }
-    FilePtr(const FilePtr&) = delete;
-    FilePtr& operator=(const FilePtr&) = delete;
-    // Move semantics (needed for records_file pattern)
-    FilePtr(FilePtr&& other) noexcept : fp(other.fp) { other.fp = nullptr; }
-    FilePtr& operator=(FilePtr&& other) noexcept {
-        if (this != &other) {
-            if (fp) fclose(fp);
-            fp = other.fp;
-            other.fp = nullptr;
-        }
-        return *this;
-    }
-    operator FILE*() const { return fp; }
-    explicit operator bool() const { return fp != nullptr; }
-    void reset() { if (fp) { fclose(fp); fp = nullptr; } }
-#ifndef _WIN32
-    // Flush + fsync to guarantee data reaches durable storage before a rename.
-    // fflush alone only pushes libc buffers to the kernel; fsync forces the
-    // kernel to write them to disk. Without this, a power loss between rename()
-    // and kernel writeback can leave the renamed file containing zeros.
-    // Returns false if either step fails (disk full, I/O error); the caller
-    // MUST check this; ignoring it defeats the entire atomic-rename guarantee.
-    bool sync() {
-        if (!fp) return false;
-        if (fflush(fp) != 0) return false;
-        if (fsync(fileno(fp)) != 0) return false;
-        return true;
-    }
-#else
-    bool sync() {
-        if (!fp) return false;
-        if (fflush(fp) != 0) return false;
-        if (_commit(_fileno(fp)) != 0) return false;
-        return true;
-    }
-#endif
-};
-
 // RAII wrappers (LlamaModel, LlamaContext, LlamaBackend, LlamaBatch) are in
 // common/llama-raii.h (shared with hs-extract, tests, examples).
 #include "llama-raii.h"
 
-// -- Named Constants (replaces magic numbers throughout) -------------------
-
-static constexpr int32_t MIN_CTX_SIZE       = 512;     // minimum context size
-static constexpr double   CHARS_PER_TOKEN   = 3.5;     // tokenizer estimate for auto-ctx
-static constexpr int32_t MAX_PROMPTS        = 10000000; // max prompts in file
-static constexpr int32_t MAX_N_EMBD         = 65536;   // max embedding dimension
-static constexpr int32_t MAX_GROUPS         = 10000;   // max label groups
-static constexpr int32_t MAX_LAYERS         = 10000;   // max layers in checkpoint
-static constexpr int32_t MAX_MASKS          = 65536;   // max masks in checkpoint
-static constexpr int32_t MAX_ASSIGNMENTS    = 100000;  // max assignments per prompt
-static constexpr int32_t MAX_RANGES         = 100000;  // max ranges per assignment
-static constexpr int32_t MAX_GROUP_NAME_LEN = 1000;    // max group name length
-static constexpr int32_t ALL_GPU_LAYERS     = 99;      // load all layers on GPU
-static constexpr int      PROGRESS_INTERVAL  = 100;     // prompts between progress reports
-static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max batch size for multi mode
-
-// -- Argument Parsing ---------------------------------------------------
+#include "hs-accum.h"
+#include "hs-kernels.h"
+#include "io-util.h"
+#include "self-test.h"
+#include "assignments-io.h"
 
 struct Args {
     const char* model_path = nullptr;
@@ -500,101 +435,11 @@ static Args parse_args(int argc, char** argv) {
     exit(1);
 }
 
-// Wraps fwrite for per-record sidecar writes. On failure: print error, signal
-// producer to stop, join the producer thread, remove the per-record temp file
-// (same cleanup contract as STOP_PRODUCER_AND_JOIN — a leftover
-// .records.bin.tmp would be picked up by a subsequent run's parser), and
-// return 1 from the calling function. All captured state is passed
-// explicitly; no implicit scope capture.
-#define RECORDS_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
-    do {                                                                        \
-        if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
-            fprintf(stderr, "Error: per-record write failed at %s:%d\n",        \
-                    __FILE__, __LINE__);                                        \
-            { std::lock_guard<std::mutex> _lk((pfq_ref).mtx); (pfq_ref).producer_done = true; } \
-            (pfq_ref).cv_space.notify_all();                                    \
-            (thread_ref).join();                                                \
-            if (!(records_temp_path).empty()) std::remove((records_temp_path).c_str()); \
-            return 1;                                                           \
-        }                                                                       \
-    } while (0)
 
-// Stop the producer thread cleanly from a consumer error path.
-// Sets producer_done (unblocks a producer waiting on cv_space backpressure)
-// and joins the thread. Used at every consumer error exit point.
-//
-// Also remove the per-record temp file if one is open. Every consumer-loop
-// error exit goes through this macro, and a leftover .records.bin.tmp would be
-// picked up by a subsequent run's parser or accumulate across failed retries.
-// `records_temp_path` is an empty std::string when --save-per-record is not set,
-// so std::remove on "" is a harmless no-op (returns ENOENT).
-#define STOP_PRODUCER_AND_JOIN()                                                \
-    do {                                                                        \
-        { std::lock_guard<std::mutex> _lk(pfq.mtx); pfq.producer_done = true; } \
-        pfq.cv_space.notify_all();                                              \
-        producer_thread.join();                                                 \
-        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str()); \
-    } while (0)
 
 // -- Batch Mode Constants & Data Structures -----------------------------
 
-static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
-
-// Repeat-penalty window (last_n) for generation-mode sampling: tokens further
-// back than this are not penalized. Fixed, not CLI-tunable; named instead of
-// a bare literal at the call site.
 static constexpr int REPEAT_PENALTY_LAST_N = 64;
-static constexpr int32_t OUTPUT_MAGIC      = 0x43524432;  // binary accumulator format v2
-
-// Per (group, mask, layer): running sum and count for accumulating means.
-// Flat key: (group_id << 32) | (mask_id << 16) | layer_idx for single hash lookup.
-struct AccumulatedVector {
-    std::vector<float> sum;  // size n_embd, initialized lazily on first access
-    int count = 0;
-};
-
-// Flat accumulator map: single-level hash for better cache locality than nested maps.
-using AccumulatorMap = std::unordered_map<uint64_t, AccumulatedVector>;
-
-// Helper to construct flat key from components.
-// Layout: bits 0-15 = layer_idx, bits 16-31 = mask_id, bits 32-63 = group_id
-inline uint64_t make_accum_key(int32_t group_id, int32_t mask_id, int32_t layer_idx) {
-    return ((uint64_t)(uint32_t)group_id << 32) | ((uint64_t)(uint16_t)mask_id << 16) | (uint64_t)(uint16_t)layer_idx;
-}
-
-// Helper to extract components from flat key.
-inline void decode_accum_key(uint64_t key, int32_t& group_id, int32_t& mask_id, int32_t& layer_idx) {
-    layer_idx = (int32_t)(key & 0xFFFF);
-    mask_id   = (int32_t)((key >> 16) & 0xFFFF);
-    group_id  = (int32_t)((key >> 32) & 0xFFFFFFFF);
-}
-
-// One (group, mask) assignment for a prompt.
-struct Assignment {
-    int32_t group_id;
-    int32_t mask_id;
-    int32_t mask_type;    // 0 = simple_skip, 1 = explicit_ranges
-    int32_t skip;         // valid when mask_type == 0
-    std::vector<std::pair<int,int>> ranges;  // valid when mask_type == 1
-};
-
-// Group name table from assignments.bin header.
-struct GroupTable {
-    int32_t n_groups = 0;
-    std::vector<std::string> names;  // indexed by group_id
-};
-
-enum class AssignmentReadStatus {
-    ok,
-    eof,
-    error,
-};
-
-struct AssignmentReadResult {
-    AssignmentReadStatus status = AssignmentReadStatus::error;
-    std::vector<Assignment> assignments;
-};
-
 // -- Layer Parsing ------------------------------------------------------
 
 static std::vector<int> parse_layers(const std::string& s, int n_layer) {
@@ -651,7 +496,7 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
  * @param out       Output buffer, size n_embd. Must be zeroed by caller.
  * @return          Number of tokens included in the mean (0 = empty mask).
  */
-static int64_t compute_masked_mean(
+int64_t compute_masked_mean(
     const float* data,
     int n_tokens,
     int n_embd,
@@ -693,7 +538,7 @@ static int64_t compute_masked_mean(
     return count;
 }
 
-static int compute_single_range_mean(
+int compute_single_range_mean(
     const float* data,
     int n_tokens,
     int n_embd,
@@ -800,7 +645,7 @@ static bool process_prompt(
         header[3 + i] = target_layers[i];
     }
 
-    CHECKED_WRITE(header.data(), sizeof(int32_t), 3 + target_layers.size(), out);
+    if (!checked_write(header.data(), sizeof(int32_t), 3 + target_layers.size(), out)) return false;
 
     // Write hidden state data for each layer
     for (int32_t layer : target_layers) {
@@ -817,11 +662,11 @@ static bool process_prompt(
                 return false;
             }
 
-            CHECKED_WRITE(mean_buf, sizeof(float), n_embd, out);
+            if (!checked_write(mean_buf, sizeof(float), n_embd, out)) return false;
         } else {
             // Full mode: write all tokens x hidden_size
             size_t data_size = (size_t)n_hidden_tokens * (size_t)n_embd;
-            CHECKED_WRITE(data, sizeof(float), data_size, out);
+            if (!checked_write(data, sizeof(float), data_size, out)) return false;
         }
     }
 
@@ -907,139 +752,6 @@ static int32_t ctx_from_scan(const PromptsScan& scan) {
     fprintf(stderr, "Auto-ctx: max line %zu chars -> estimated %d tokens -> n_ctx=%d\n",
             scan.max_len, (int)(scan.max_len / CHARS_PER_TOKEN), n_ctx);
     return n_ctx;
-}
-
-/**
- * Read assignments.bin header: magic, n_prompts, n_embd, group name table.
- * Leaves file position at the start of per-prompt data.
- * Returns true on success.
- */
-static bool read_assignments_header(
-    FILE* f, int32_t& n_prompts, int32_t& n_embd_expected, GroupTable& groups
-) {
-    int32_t magic = 0;
-    if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != ASSIGNMENTS_MAGIC) {
-        fprintf(stderr, "Error: invalid assignments.bin magic (got 0x%08X, expected 0x%08X)\n",
-                magic, ASSIGNMENTS_MAGIC);
-        return false;
-    }
-    if (fread(&n_prompts, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_embd_expected, sizeof(int32_t), 1, f) != 1) return false;
-
-    // Validate n_prompts and n_embd to prevent UB on corrupt file
-    if (n_prompts <= 0 || n_prompts > MAX_PROMPTS) {
-        fprintf(stderr, "Error: n_prompts %d out of range [1, %d] - corrupt assignments.bin\n", n_prompts, MAX_PROMPTS);
-        return false;
-    }
-    if (n_embd_expected < 0 || n_embd_expected > MAX_N_EMBD) {
-        fprintf(stderr, "Error: n_embd %d out of range [0, %d] - corrupt assignments.bin\n", n_embd_expected, MAX_N_EMBD);
-        return false;
-    }
-
-    if (fread(&groups.n_groups, sizeof(int32_t), 1, f) != 1) return false;
-
-    // Validate n_groups to prevent OOM on corrupt file
-    if (groups.n_groups < 0 || groups.n_groups > MAX_GROUPS) {
-        fprintf(stderr, "Error: n_groups %d out of range [0, %d] - corrupt assignments.bin\n", groups.n_groups, MAX_GROUPS);
-        return false;
-    }
-    groups.names.resize(groups.n_groups);
-    for (int32_t i = 0; i < groups.n_groups; i++) {
-        int32_t name_len = 0;
-        if (fread(&name_len, sizeof(int32_t), 1, f) != 1) return false;
-        // Validate name_len to prevent OOM on corrupt file
-        if (name_len < 0 || name_len > MAX_GROUP_NAME_LEN) {
-            fprintf(stderr, "Error: group name length %d out of range [0, %d] - corrupt assignments.bin\n", name_len, MAX_GROUP_NAME_LEN);
-            return false;
-        }
-        std::vector<char> buf(name_len > 0 ? name_len : 1, 0);
-        if (name_len > 0 && fread(buf.data(), 1, name_len, f) != (size_t)name_len) return false;
-        groups.names[i] = std::string(buf.data(), name_len);
-    }
-
-    fprintf(stderr, "Assignments: %d prompts, %d groups, n_embd_expected=%d\n",
-            n_prompts, groups.n_groups, n_embd_expected);
-    return true;
-}
-
-/**
- * Read one prompt's assignments from assignments.bin (sequential read).
- * Must be called in prompt order, matching prompts.txt line order.
- * Returns explicit status so EOF, valid zero-assignment prompts, and truncated
- * records cannot be confused.
- */
-static AssignmentReadResult read_prompt_assignments(FILE* f) {
-    int32_t n_assignments = 0;
-    if (fread(&n_assignments, sizeof(int32_t), 1, f) != 1) {
-        if (feof(f)) return {AssignmentReadStatus::eof, {}};
-        fprintf(stderr, "Error: failed to read n_assignments at offset %ld\n", ftell(f));
-        return {AssignmentReadStatus::error, {}};
-    }
-
-    if (n_assignments < 0 || n_assignments > MAX_ASSIGNMENTS) {
-        fprintf(stderr, "Error: n_assignments %d out of range [0, %d]\n", n_assignments, MAX_ASSIGNMENTS);
-        return {AssignmentReadStatus::error, {}};
-    }
-
-    std::vector<Assignment> assignments(n_assignments);
-    for (int32_t i = 0; i < n_assignments; i++) {
-        Assignment& a = assignments[i];
-        if (fread(&a.group_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        if (fread(&a.mask_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        // group_id/mask_id feed make_accum_key(), which truncates them to
-        // 16 bits (and group_id to 32 bits). Out-of-range values would
-        // silently alias into a different group/mask's statistics and
-        // produce checkpoints the tool's own reader rejects on --resume.
-        // Reject here, at the parse site, so every consumer (generation
-        // path, comprehension path, checkpoint writer) is covered.
-        if (a.group_id < 0 || a.group_id > 0xFFFF) {
-            fprintf(stderr, "Error: group_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.group_id);
-            return {AssignmentReadStatus::error, {}};
-        }
-        if (a.mask_id < 0 || a.mask_id > 0xFFFF) {
-            fprintf(stderr, "Error: mask_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.mask_id);
-            return {AssignmentReadStatus::error, {}};
-        }
-        if (fread(&a.mask_type, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-
-        if (a.mask_type == 0) {
-            if (fread(&a.skip, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        } else if (a.mask_type == 1) {
-            int32_t n_ranges = 0;
-            if (fread(&n_ranges, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-            if (n_ranges < 0 || n_ranges > MAX_RANGES) {
-                fprintf(stderr, "Error: n_ranges %d out of range [0, %d]\n", n_ranges, MAX_RANGES);
-                return {AssignmentReadStatus::error, {}};
-            }
-            a.ranges.resize(n_ranges);
-            for (int32_t r = 0; r < n_ranges; r++) {
-                int32_t start = 0, end = 0;
-                if (fread(&start, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-                if (fread(&end, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-                if (start < 0 || end < 0) {
-                    fprintf(stderr, "Error: assignment range [%d, %d) has negative bound  -  corrupt assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                if (start > end) {
-                    fprintf(stderr, "Error: assignment range [%d, %d) has start > end  -  corrupt assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                if (start == end) {
-                    // compute_masked_mean treats start >= end as a hard error, so
-                    // an empty range would abort the entire run deep in the kernel.
-                    // Reject it here at read time with a clear diagnostic instead.
-                    fprintf(stderr, "Error: assignment range [%d, %d) is empty (start == end)  -  "
-                                    "degenerate token span in assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                a.ranges[r] = {start, end};
-            }
-        } else {
-            fprintf(stderr, "Error: unknown mask_type %d\n", a.mask_type);
-            return {AssignmentReadStatus::error, {}};
-        }
-    }
-    return {AssignmentReadStatus::ok, std::move(assignments)};
 }
 
 // -- Raw Mode (debug/parity) --------------------------------------------
@@ -1163,6 +875,13 @@ static int run_raw(const Args& args) {
         fprintf(stderr, "Error: cannot open output file %s\n", tmp_path.c_str());
         return 1;
     }
+    // Shared error cleanup: close the temp file and remove it so a failed
+    // run never leaves a stray .tmp that a later run could mistake for
+    // progress. Every error path below returns 1 after calling this.
+    auto fail_cleanup = [&]() {
+        out.reset();
+        std::remove(tmp_path.c_str());
+    };
     fprintf(stderr, "Writing output to %s\n", args.output_path);
 
     // Prompt count from the single pre-scan; the TOCTOU guard below still
@@ -1172,8 +891,7 @@ static int run_raw(const Args& args) {
     // Global header
     if (fwrite(&n_prompts_total, sizeof(int32_t), 1, out) != 1) {
         fprintf(stderr, "Error: failed to write raw output header\n");
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
 
@@ -1199,15 +917,13 @@ static int run_raw(const Args& args) {
         auto tokens = tokenize(vocab, line, /*add_bos=*/!args.no_bos);
         if (tokens.empty()) {
             fprintf(stderr, "Error: prompt %d tokenized to empty\n", prompt_idx);
-            out.reset();
-            std::remove(tmp_path.c_str());
+            fail_cleanup();
             return 1;
         }
         if ((int)tokens.size() > n_ctx) {
             fprintf(stderr, "Error: prompt %d has %zu tokens, exceeds n_ctx=%d\n",
                     prompt_idx, tokens.size(), n_ctx);
-            out.reset();
-            std::remove(tmp_path.c_str());
+            fail_cleanup();
             return 1;
         }
 
@@ -1237,8 +953,7 @@ static int run_raw(const Args& args) {
     // would certify it as complete.
     if (fin.bad()) {
         fprintf(stderr, "Error: I/O error reading prompts file mid-run (bad stream) at prompt %d\n", prompt_idx);
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
     // Position-based completeness check (TOCTOU guard, mirrors run_batch):
@@ -1249,8 +964,7 @@ static int run_raw(const Args& args) {
     if (prompt_idx != n_prompts_total) {
         fprintf(stderr, "Error: processed %d prompts but counted %d  -  prompts file changed between passes\n",
                 prompt_idx, n_prompts_total);
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
 
@@ -1265,8 +979,7 @@ static int run_raw(const Args& args) {
     // on POSIX), so a kill mid-write can never leave a truncated raw dump.
     if (!out.sync()) {   // fflush + fsync(fileno): check for disk-full / I/O errors
         fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", tmp_path.c_str());
-        out.reset();
-        std::remove(tmp_path.c_str());
+        fail_cleanup();
         return 1;
     }
     out.reset();  // fclose before rename
@@ -1281,359 +994,369 @@ static int run_raw(const Args& args) {
 
 // -- Batch-Accumulate Output Writer -------------------------------------
 
-/**
- * Write accumulator state to an open FILE* in binary accumulator format.
- * Shared core used by both write_batch_output() and write_checkpoint().
- * Returns false on write error.
- */
-static bool _write_accumulator_to_file(
-    const AccumulatorMap& accumulators,
-    FILE* out,
-    int32_t n_embd,
-    bool write_sum = false
+// -- Async prefetch pipeline (TU scope) ----------------------------------
+//
+// Producer-consumer: the producer thread does file I/O + tokenization for
+// prompt N+1 while the GPU processes prompt N. The consumer (main thread)
+// owns the llama_context exclusively -- only it calls decode/extract.
+
+struct PrefetchedPrompt {
+    int prompt_idx = -1;
+    std::vector<llama_token> tokens;
+    std::vector<Assignment> assignments;
+    bool skip = false;  // tokenization failed or exceeds ctx
+    bool error = false; // set by producer on assignment read failure
+};
+
+struct PrefetchQueue {
+    std::queue<PrefetchedPrompt> queue;
+    std::mutex mtx;
+    std::condition_variable cv;          // consumer waits: queue non-empty or producer done
+    std::condition_variable cv_space;    // producer waits: queue has space
+    std::atomic<bool> producer_done{false};
+    std::atomic<int> n_produced{0};
+};
+
+// Backpressure: cap queue depth to bound memory usage.
+// Each item holds tokens + assignments (~2KB typical, up to ~50KB for long prompts).
+// 64 items -> max ~3MB queued, prevents OOM on 200K-prompt runs where
+// tokenization outpaces GPU decode.
+static constexpr size_t MAX_PREFETCH = 64;
+
+// Checked fwrite for the per-record sidecar. On failure: print error, signal
+// producer to stop, join the producer thread, remove the per-record temp file
+// (a leftover .records.bin.tmp would be picked up by a subsequent run's
+// parser), and return false; the caller propagates (return 1).
+// All state is passed explicitly; no implicit scope capture.
+static inline bool records_write(
+    const void* ptr, size_t size, size_t count, FILE* fp,
+    PrefetchQueue& pfq, std::thread& producer_thread,
+    const std::string& records_temp_path
 ) {
-    // Collect and sort flat keys for deterministic output.
-    // Key layout: group_id (bits 32-63) | mask_id (bits 16-31) | layer_idx (bits 0-15)
-    // Sorting the full 64-bit key yields: group_id ASC, mask_id ASC, layer_idx ASC.
-    std::vector<uint64_t> flat_keys;
-    flat_keys.reserve(accumulators.size());
-    for (const auto& [key, _] : accumulators) flat_keys.push_back(key);
-    std::sort(flat_keys.begin(), flat_keys.end());
-
-    // Compute n_layers (max layer_idx + 1)
-    int32_t max_layer = 0;
-    for (uint64_t key : flat_keys) {
-        int32_t group_id, mask_id, layer_idx;
-        decode_accum_key(key, group_id, mask_id, layer_idx);
-        if (layer_idx > max_layer) max_layer = layer_idx;
-    }
-
-    // Build unique (group_id, mask_id) pairs, each with its sorted layer indices.
-    // Since flat_keys is sorted, sequential iteration naturally groups identical
-    // (group, mask) pairs contiguously and layers arrive in ascending order.
-    struct GroupMask {
-        int32_t group_id;
-        int32_t mask_id;
-        std::vector<int32_t> layer_indices;
-    };
-    std::vector<GroupMask> gm_pairs;
-
-    for (uint64_t key : flat_keys) {
-        int32_t group_id, mask_id, layer_idx;
-        decode_accum_key(key, group_id, mask_id, layer_idx);
-
-        bool new_pair = gm_pairs.empty()
-            || gm_pairs.back().group_id != group_id
-            || gm_pairs.back().mask_id   != mask_id;
-        if (new_pair) {
-            gm_pairs.push_back({group_id, mask_id, {}});
+    if (fwrite(ptr, size, count, fp) != count) {
+        fprintf(stderr, "Error: per-record write failed at %s:%d\n",
+                __FILE__, __LINE__);
+        {
+            std::lock_guard<std::mutex> lk(pfq.mtx);
+            pfq.producer_done = true;
         }
-        gm_pairs.back().layer_indices.push_back(layer_idx);
+        pfq.cv_space.notify_all();
+        producer_thread.join();
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
+        return false;
     }
+    return true;
+}
 
-    // Count distinct groups (first element of each new group in gm_pairs)
-    int32_t n_groups = 0;
+
+// Signal the producer to stop, join it, and remove the per-record temp file
+// (a leftover .records.bin.tmp would be picked up by a subsequent run's
+// parser). Inline function, explicit args -- no implicit scope capture.
+static inline void stop_producer_and_join(
+    PrefetchQueue& pfq,
+    std::thread& producer_thread,
+    const std::string& records_temp_path
+) {
     {
-        int32_t prev_group = -1;
-        for (const auto& gm : gm_pairs) {
-            if (gm.group_id != prev_group) { n_groups++; prev_group = gm.group_id; }
-        }
+        std::lock_guard<std::mutex> lk(pfq.mtx);
+        pfq.producer_done = true;
     }
-
-    // Write header
-    int32_t magic = OUTPUT_MAGIC;
-    CHECKED_WRITE(&magic, sizeof(int32_t), 1, out);
-    CHECKED_WRITE(&n_groups, sizeof(int32_t), 1, out);
-    int32_t n_layers = max_layer + 1;
-    CHECKED_WRITE(&n_layers, sizeof(int32_t), 1, out);
-    CHECKED_WRITE(&n_embd, sizeof(int32_t), 1, out);
-
-    // Write per-group data: iterate over groups, and within each group
-    // over its (group, mask) pairs. Each mask block is emitted exactly once.
-    std::vector<float> mean(n_embd);
-    size_t gm_idx = 0;
-
-    while (gm_idx < gm_pairs.size()) {
-        int32_t group_id = gm_pairs[gm_idx].group_id;
-
-        // Count how many mask pairs belong to this group
-        int32_t n_masks = 0;
-        size_t mask_start = gm_idx;
-        while (gm_idx < gm_pairs.size() && gm_pairs[gm_idx].group_id == group_id) {
-            n_masks++;
-            gm_idx++;
-        }
-
-        CHECKED_WRITE(&group_id, sizeof(int32_t), 1, out);
-        CHECKED_WRITE(&n_masks, sizeof(int32_t), 1, out);
-
-        for (size_t mi = mask_start; mi < mask_start + (size_t)n_masks; mi++) {
-            const auto& gm = gm_pairs[mi];
-            CHECKED_WRITE(&gm.mask_id, sizeof(int32_t), 1, out);
-
-            int32_t n_layers_data = (int32_t)gm.layer_indices.size();
-            CHECKED_WRITE(&n_layers_data, sizeof(int32_t), 1, out);
-
-            for (int32_t li : gm.layer_indices) {
-                uint64_t layer_key = make_accum_key(group_id, gm.mask_id, li);
-                const auto& av = accumulators.at(layer_key);
-                CHECKED_WRITE(&li, sizeof(int32_t), 1, out);
-                CHECKED_WRITE(&av.count, sizeof(int32_t), 1, out);
-
-                if (write_sum) {
-                    // Checkpoint format (v2+): write raw sum directly to avoid
-                    // precision loss from mean=sum/count then sum=mean*count roundtrip.
-                    if (av.count > 0 && !av.sum.empty()) {
-                        CHECKED_WRITE(av.sum.data(), sizeof(float), n_embd, out);
-                    } else {
-                        std::fill(mean.begin(), mean.end(), 0.0f);
-                        CHECKED_WRITE(mean.data(), sizeof(float), n_embd, out);
-                    }
-                } else {
-                    // Output format: write mean = sum / count for downstream consumers.
-                    if (av.count > 0 && !av.sum.empty()) {
-                        float inv = 1.0f / (float)av.count;
-                        for (int d = 0; d < n_embd; d++) mean[d] = av.sum[d] * inv;
-                    } else {
-                        std::fill(mean.begin(), mean.end(), 0.0f);
-                    }
-                    CHECKED_WRITE(mean.data(), sizeof(float), n_embd, out);
-                }
-            }
-        }
-    }
-    return true;
+    pfq.cv_space.notify_all();
+    producer_thread.join();
+    if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
 }
 
-/**
- * Write accumulated means to output.bin (binary accumulator format).
- */
-static bool write_batch_output(
-    const AccumulatorMap& accumulators,
-    const char* output_path,
-    int32_t n_embd
-) {
-    // Write to a temp file then atomically rename, so a crash/disk-full during
-    // the final write can never leave a truncated output.bin in place (the
-    // checkpoint code below uses the same pattern). A truncated final output
-    // would be silently misread by the Python parser on the next run.
-    std::string temp_path = std::string(output_path) + ".tmp";
-    FilePtr out(fopen(temp_path.c_str(), "wb"));
-    if (!out) {
-        fprintf(stderr, "Error: cannot open output file %s\n", temp_path.c_str());
-        return false;
+// -- Generation-based extraction -----------------------------------------
+//
+// If --generate N is set, autoregressively generate N tokens and extract
+// hidden states from the GENERATED tokens only. This contrasts with the
+// default comprehension-based mode, which reads hidden states from the
+// INPUT tokens of a single forward pass: here the model's own output
+// tokens are the span whose representations are captured.
+// Extracted verbatim from run_batch's consumer loop (pure code motion).
+// Returns 0 on success (caller runs the shared tail); 1 on error (caller
+// stops the producer and returns 1).
+
+struct GenContext {
+    LlamaContext& ctx;
+    llama_batch& batch;
+    const Args& args;
+    const std::vector<Assignment>& assignments;
+    int prompt_idx;
+    int n_tokens;
+    int32_t n_embd;
+    int32_t n_ctx;
+    const std::vector<int32_t>& target_layers;
+    std::vector<float*>& layer_ptrs;
+    std::vector<float>& mean_buf;
+    AccumulatorMap& accumulators;
+};
+
+static int generate_assignment(GenContext& g) {
+    LlamaContext& ctx = g.ctx;
+    llama_batch& batch = g.batch;
+    const Args& args = g.args;
+    const auto& assignments = g.assignments;
+    const int prompt_idx = g.prompt_idx;
+    const int n_tokens = g.n_tokens;
+    const int32_t n_embd = g.n_embd;
+    const int32_t n_ctx = g.n_ctx;
+    const std::vector<int32_t>& target_layers = g.target_layers;
+    std::vector<float*>& layer_ptrs = g.layer_ptrs;
+    std::vector<float>& mean_buf = g.mean_buf;
+    AccumulatorMap& accumulators = g.accumulators;
+    int ret = 0;
+
+    // --generate + --save-per-record is unsupported: the per-record
+    // sidecar records are written by the comprehension block below, which
+    // this path skips via `continue`. Fail loud rather than emit a
+    // header-only sidecar that silently produces zero .pt files.
+    if (args.save_per_record) {
+        fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
+                "(per-record records are not written in generation mode)\n");
+            return 1;
     }
-    bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
-    if (ok) {
-        if (!out.sync()) {  // flush + fsync: check for failures before rename
-            fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", temp_path.c_str());
-            out.reset();
-            std::remove(temp_path.c_str());
-            return false;
+    // Generation mode means over ALL generated tokens. Assignments
+    // with skip>0 or ranges (mask_type==1) have no defined semantics here
+    // since there is no pre-written content span to mask. Fail loud.
+    for (const auto& a : assignments) {
+        if (a.skip > 0 || a.mask_type == 1) {
+            fprintf(stderr, "Error: --generate does not support assignment skip/ranges "
+                    "(group=%d mask=%d has skip=%d mask_type=%d). Use skip=0, mask_type=0 "
+                    "for generation-based extraction.\n",
+                    a.group_id, a.mask_id, a.skip, a.mask_type);
+                    return 1;
         }
-        out.reset();  // close file before rename
-        if (rename(temp_path.c_str(), output_path) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
-            return false;
+    }
+    // Accumulate hidden states from generated tokens into per-layer buffers.
+    // We reuse mean_buf for per-token accumulation and a separate gen_accum
+    // buffer for the running sum.
+    // These were `static thread_local`, implying per-thread
+    // safety. run_batch is single-consumer, so thread_local adds no
+    // protection and only misleads a reader into thinking parallel
+    // generation is safe. Plain function-scope static keeps the
+    // perf benefit (one allocation, reused via resize/fill) without
+    // the false concurrency implication.
+    static std::vector<float> gen_accum;
+    static std::vector<int64_t> gen_count;
+    const size_t n_layers_total = target_layers.size();
+    // Sanity-bound the accumulation buffer before allocating. n_layers_total
+    // and n_embd come from the loaded model (target_layers is validated
+    // against the model's layer count; n_embd is the model's embedding dim),
+    // so the product is normally small (e.g. 42 layers x 2560 embd = 107K
+    // floats). Guard against a corrupt/absurd configuration that would request
+    // a multi-GB allocation: resize() throws std::bad_alloc on failure and
+    // this block has no surrounding try, so an unbounded resize would call
+    // std::terminate. 256M floats (1 GB) is far above any real model's
+    // layer*embd product.
+    constexpr size_t MAX_GEN_ACCUM_FLOATS = 256ull * 1024 * 1024;  // 1 GB
+    if (n_layers_total > 0 && (size_t)n_embd > MAX_GEN_ACCUM_FLOATS / n_layers_total) {
+        fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
+                "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
+                n_layers_total, n_embd);
+            return 1;
+    }
+    gen_accum.resize(n_layers_total * n_embd, 0.0f);
+    gen_count.assign(n_layers_total, 0);
+    std::fill(gen_accum.begin(), gen_accum.end(), 0.0f);
+
+    int cur_pos = n_tokens;  // next position after prompt
+    llama_token next_token = LLAMA_TOKEN_NULL;
+
+    // Build sampler chain for generation. Default (temperature=0) is greedy,
+    // which is deterministic but divergent across CUDA/Vulkan backends because
+    // small logit differences flip the argmax. temperature > 0 adds stochasticity
+    // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
+    // The chain is built PER PROMPT (deliberate): llama_sampler_init_dist(0)
+    // seeds a fresh RNG per prompt so sampled trajectories are reproducible
+    // per-prompt. Hoisting the chain out of the loop would change RNG
+    // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
+    // Named gen_vocab to avoid shadowing the session-level vocab.
+    const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
+    int n_vocab = llama_vocab_n_tokens(gen_vocab);
+    LlamaSampler sampler_owner;
+    // Chain is built when temperature > 0 OR when any secondary
+    // sampling parameter is non-default: --repeat-penalty/--top-k/
+    // --top-p must not be silently dropped at temperature=0 (the
+    // documented greedy default). A temp(0) tail converts the chain
+    // to greedy argmax AFTER penalties/top-k/top-p are applied, so
+    // "greedy with repeat penalty" behaves as documented. Pure
+    // defaults (all zero) keep the fast manual-argmax path.
+    const bool want_sampling_chain = args.temperature > 0.0f
+        || args.repeat_penalty > 1.0f
+        || args.top_k > 0
+        || args.top_p < 1.0f;
+    if (want_sampling_chain) {
+        llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+        sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
+        if (args.repeat_penalty > 1.0f) {
+            // upstream API change (2026-08): llama_sampler_init_penalties now
+            // takes n_vocab first to bound the repeat-scan range.
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, REPEAT_PENALTY_LAST_N, args.repeat_penalty, 0.0f, 0.0f));
         }
-        fprintf(stderr, "Output: written to %s\n", output_path);
-    }
-    return ok;
-}
-
-// -- Checkpoint / Resume ------------------------------------------------
-
-static constexpr int32_t CHECKPOINT_VERSION = 2;
-static constexpr int32_t CHECKPOINT_VERSION_V1 = 1;  // legacy: stored mean, restored via sum=mean*count
-
-/**
- * Write checkpoint: version + n_iterated + accumulator state (binary accumulator format).
- * The checkpoint file is output_path + ".checkpoint".
- */
-static bool write_checkpoint(
-    const AccumulatorMap& accumulators,
-    const char* output_path,
-    int32_t n_embd,
-    int32_t n_iterated
-) {
-    std::string ckpt_path = std::string(output_path) + ".checkpoint";
-    std::string temp_path = ckpt_path + ".tmp";
-
-    // Write to temporary file first
-    FilePtr f(fopen(temp_path.c_str(), "wb"));
-    if (!f) {
-        fprintf(stderr, "Error: cannot write checkpoint to %s\n", temp_path.c_str());
-        return false;
-    }
-    CHECKED_WRITE(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f);
-    CHECKED_WRITE(&n_iterated, sizeof(int32_t), 1, f);
-    bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
-    if (ok) {
-        if (!f.sync()) {  // flush + fsync: check for failures before rename
-            fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
-            f.reset();
-            std::remove(temp_path.c_str());
-            return false;
+        if (args.top_k > 0) {
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
         }
-        f.reset();  // close file before rename
-        // Atomic rename: temp -> final
-        if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), ckpt_path.c_str());
-            return false;
+        if (args.top_p < 1.0f) {
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
         }
-        fprintf(stderr, "Checkpoint saved: %d prompts -> %s\n", n_iterated, ckpt_path.c_str());
+        llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
+        llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism
     }
-    return ok;
-}
+    llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
 
-/**
- * Read checkpoint: restore accumulator state and return n_iterated (skip count).
- * Returns false if checkpoint doesn't exist or is corrupt.
- */
-static bool read_checkpoint(
-    const char* output_path,
-    AccumulatorMap& accumulators,
-    int32_t& n_iterated,
-    int32_t expected_n_embd
-) {
-    std::string ckpt_path = std::string(output_path) + ".checkpoint";
-    FilePtr f(fopen(ckpt_path.c_str(), "rb"));
-    if (!f) return false;  // no checkpoint -- fresh start
-
-    // Read and validate checkpoint version
-    int32_t version = 0;
-    if (fread(&version, sizeof(int32_t), 1, f) != 1) return false;
-    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V1) {
-        fprintf(stderr, "Error: checkpoint version mismatch (got %d, expected %d) - incompatible checkpoint format\n",
-                version, CHECKPOINT_VERSION);
-        return false;
-    }
-    // v1 checkpoints stored mean (sum/count); v2 stores raw sum (no precision loss).
-    // The read loop below branches on version to restore sums correctly.
-    const bool is_v1 = (version == CHECKPOINT_VERSION_V1);
-
-    // Read n_iterated
-    if (fread(&n_iterated, sizeof(int32_t), 1, f) != 1) return false;
-
-    // R4-R6: Validate n_iterated to prevent negative loop counts
-    if (n_iterated < 0) {
-        fprintf(stderr, "Error: checkpoint contains invalid n_iterated=%d (would cause infinite loop)\n", n_iterated);
-        return false;
-    }
-
-    // Read accumulator state (binary accumulator format)
-    int32_t magic = 0;
-    if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != OUTPUT_MAGIC) {
-        return false;
-    }
-    int32_t n_groups = 0, n_layers = 0, n_embd = 0;
-    if (fread(&n_groups, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_layers, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_embd, sizeof(int32_t), 1, f) != 1) return false;
-
-    // Validate checkpoint dimensions to prevent OOM from corrupt data
-    if (n_groups < 0 || n_groups > MAX_GROUPS) {
-        fprintf(stderr, "Error: checkpoint n_groups=%d out of range [0, %d] - corrupt checkpoint\n", n_groups, MAX_GROUPS);
-        return false;
-    }
-    if (n_layers < 0 || n_layers > MAX_LAYERS) {
-        fprintf(stderr, "Error: checkpoint n_layers=%d out of range [0, %d] - corrupt checkpoint\n", n_layers, MAX_LAYERS);
-        return false;
-    }
-
-    // Validate n_embd matches the model being used
-    if (n_embd != expected_n_embd) {
-        fprintf(stderr, "Error: checkpoint n_embd=%d does not match model n_embd=%d - checkpoint is from a different model\n",
-                n_embd, expected_n_embd);
-        return false;
-    }
-
-    for (int32_t g = 0; g < n_groups; g++) {
-        int32_t group_id = 0, n_masks = 0;
-        if (fread(&group_id, sizeof(int32_t), 1, f) != 1) return false;
-        if (fread(&n_masks, sizeof(int32_t), 1, f) != 1) return false;
-
-        // Validate group_id fits in 16-bit range (matches the parse-site bounds check in read_prompt_assignments)
-        if (group_id < 0 || group_id > 0xFFFF) {
-            fprintf(stderr, "Error: checkpoint contains group_id=%d out of range [0, 65535] - corrupt checkpoint\n", group_id);
-            return false;
+    for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
+        // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
+        // writes/reads OOB KV state, the exact fault class that hard-locks
+        // the GPU. Without this, a long prompt + large --generate (or a model
+        // that never emits EOS) overruns the context window.
+        if (cur_pos >= n_ctx) {
+            fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d: stopping\n",
+                    n_ctx, gen_step, prompt_idx);
+            break;
         }
-
-        // Validate n_masks to prevent unbounded loop on corrupt checkpoint
-        if (n_masks < 0 || n_masks > MAX_MASKS) {
-            fprintf(stderr, "Error: checkpoint contains n_masks=%d out of range [0, %d] - corrupt checkpoint\n", n_masks, MAX_MASKS);
-            return false;
-        }
-
-        for (int32_t m = 0; m < n_masks; m++) {
-            int32_t mask_id = 0, n_layers_data = 0;
-            if (fread(&mask_id, sizeof(int32_t), 1, f) != 1) return false;
-            if (fread(&n_layers_data, sizeof(int32_t), 1, f) != 1) return false;
-
-            if (mask_id < 0 || mask_id > 0xFFFF) {
-                fprintf(stderr, "Error: checkpoint contains mask_id=%d out of range [0, 65535] - corrupt checkpoint\n", mask_id);
-                return false;
-            }
-
-            // Validate n_layers_data to prevent unbounded loop on corrupt checkpoint
-            if (n_layers_data < 0 || n_layers_data > MAX_LAYERS) {
-                fprintf(stderr, "Error: checkpoint contains n_layers_data=%d out of range [0, %d] - corrupt checkpoint\n", n_layers_data, MAX_LAYERS);
-                return false;
-            }
-
-            for (int32_t l = 0; l < n_layers_data; l++) {
-                int32_t layer_idx = 0, count = 0;
-                if (fread(&layer_idx, sizeof(int32_t), 1, f) != 1) return false;
-                if (fread(&count, sizeof(int32_t), 1, f) != 1) return false;
-
-                // Validate layer_idx and count to prevent silent corruption
-                if (layer_idx < 0 || layer_idx > 0xFFFF) {
-                    fprintf(stderr, "Error: checkpoint contains layer_idx=%d out of range [0, 65535] - corrupt checkpoint\n", layer_idx);
-                    return false;
+        // Sample first token from prefill's last position
+        if (gen_step == 0) {
+            if (sampler) {
+                next_token = llama_sampler_sample(sampler, ctx, n_tokens - 1);
+            } else {
+                // Greedy fallback (temperature=0): argmax
+                float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
+                if (!token_logits) {
+                    fprintf(stderr, "Error: no logits available for generation sampling\n");
+                                    return 1;
                 }
-                if (count < 0) {
-                    fprintf(stderr, "Error: checkpoint contains count=%d (negative) - corrupt checkpoint\n", count);
-                    return false;
+                next_token = 0;
+                float best_val = token_logits[0];
+                for (int v = 1; v < n_vocab; v++) {
+                    if (token_logits[v] > best_val) {
+                        best_val = token_logits[v];
+                        next_token = v;
+                    }
                 }
-                // Upper-bound count: a single (group,mask,layer) accumulator can
-                // receive at most one increment per (prompt, assignment) pair, so
-                // its count cannot exceed n_iterated prompts * MAX_ASSIGNMENTS.
-                // An unbounded count here is later used as a DIVISOR (write: 1/count)
-                // and a v1 MULTIPLIER (sum *= count), so a corrupt huge value would
-                // silently produce garbage means. Use int64 to avoid overflow in the
-                // bound computation.
-                if ((int64_t)count > (int64_t)n_iterated * MAX_ASSIGNMENTS) {
-                    fprintf(stderr, "Error: checkpoint contains count=%d exceeding max %lld (n_iterated=%d * MAX_ASSIGNMENTS=%d) - corrupt checkpoint\n",
-                            count, (long long)((int64_t)n_iterated * MAX_ASSIGNMENTS), n_iterated, MAX_ASSIGNMENTS);
-                    return false;
-                }
-
-                // Use flat key for single-level map lookup
-                uint64_t key = make_accum_key(group_id, mask_id, layer_idx);
-                auto& av = accumulators[key];
-                av.count = count;
-                av.sum.resize(n_embd);
-                if (is_v1) {
-                    // v1 format: stored mean = sum/count. Read mean, then multiply
-                    // by count to restore sum. Introduces ~1 ULP error per dimension.
-                    if (fread(av.sum.data(), sizeof(float), n_embd, f) != (size_t)n_embd) {
-                        return false;
-                    }
-                    if (count > 0) {
-                        for (int d = 0; d < n_embd; d++) av.sum[d] *= (float)count;
-                    }
-                } else {
-                    // v2+ format: stores raw sum directly (no precision loss).
-                    if (fread(av.sum.data(), sizeof(float), n_embd, f) != (size_t)n_embd) {
-                        return false;
-                    }
+                // If all logits are NaN, every comparison is false,
+                // so next_token stays 0 and NaN propagates into the
+                // hidden-state accumulation silently. Detect and abort.
+                if (std::isnan(best_val)) {
+                    fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                    "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                                    return 1;
                 }
             }
         }
+
+        // Check for EOS
+        if (llama_vocab_is_eog(llama_model_get_vocab(llama_get_model(ctx)), next_token)) {
+            break;
+        }
+
+        // Decode single generated token with logits enabled for next step
+        batch.n_tokens = 1;
+        batch.token[0] = next_token;
+        batch.pos[0] = cur_pos;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = (gen_step < args.generate_tokens - 1) ? 1 : 0;
+
+        ret = llama_decode(ctx, batch);
+        if (ret != 0) {
+            fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
+                    gen_step, prompt_idx, ret);
+                    return 1;
+        }
+        cur_pos++;
+
+        // Extract hidden states from this generated token
+        if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
+            fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
+                    return 1;
+        }
+
+        // Accumulate: each layer has 1 token x n_embd floats.
+        // Skip the first args.token_skip generated tokens (matching
+        // comprehension-mode behavior): the initial generated tokens
+        // are "warm-up" content that dilutes the concept signal and
+        // amplifies cross-backend divergence (the first ~50 tokens of
+        // greedy decoding diverge most across CUDA/Vulkan backends).
+        if (gen_step >= args.token_skip) {
+            for (size_t li = 0; li < n_layers_total; li++) {
+                float* data = layer_ptrs[li];
+                if (data) {
+                    float* accum_ptr = &gen_accum[li * n_embd];
+                    HS_SIMD
+                    for (int d = 0; d < n_embd; d++) {
+                        accum_ptr[d] += data[d];
+                    }
+                    gen_count[li]++;
+                }
+            }
+        }
+
+        // Sample next token from this step's logits (for next iteration)
+        if (gen_step < args.generate_tokens - 1) {
+            if (sampler) {
+                next_token = llama_sampler_sample(sampler, ctx, 0);
+            } else {
+                // Greedy fallback
+                float* gen_logits = llama_get_logits_ith(ctx, 0);
+                if (gen_logits) {
+                    next_token = 0;
+                    float best_val = gen_logits[0];
+                    for (int v = 1; v < n_vocab; v++) {
+                        if (gen_logits[v] > best_val) {
+                            best_val = gen_logits[v];
+                            next_token = v;
+                        }
+                    }
+                    // NaN guard (same as the token_logits argmax above).
+                    // If every logit is NaN, no comparison is true and
+                    // next_token stays 0, propagating NaN into accumulation.
+                    if (std::isnan(best_val)) {
+                        fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                        "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                                            return 1;
+                    }
+                }
+            }
+        }
     }
 
-    fprintf(stderr, "Checkpoint restored: %d prompts already processed\n", n_iterated);
-    return true;
+    // Compute means from generated tokens and accumulate into the assignment buffers
+    // (same path as comprehension mode, but using gen_accum instead of masked mean)
+    // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
+    // accumulation, so counts can differ across layers.
+    for (const auto& assign : assignments) {
+        for (size_t li = 0; li < target_layers.size(); li++) {
+            int64_t n_gen = gen_count[li];
+            if (n_gen == 0) continue;  // layer had no valid hidden states
+            float* accum_ptr = &gen_accum[li * n_embd];
+            // Divide by count to get mean
+            float inv = 1.0f / (float)n_gen;
+            HS_SIMD
+            for (int d = 0; d < n_embd; d++) {
+                mean_buf[d] = accum_ptr[d] * inv;
+            }
+            // Accumulate into the group/mask/layer accumulator.
+            // Use target_layers[li] (the REAL layer number), matching the
+            // comprehension accumulation loop. Using the loop index `li`
+            // would silently mislabel layers in the binary accumulator output.
+            uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
+            auto& acc = accumulators[acc_key];
+            if (acc.sum.empty()) {
+                acc.sum.assign(mean_buf.data(), mean_buf.data() + n_embd);
+                acc.count = 1;
+            } else {
+                HS_SIMD
+                for (int d = 0; d < n_embd; d++) {
+                    acc.sum[d] += mean_buf[d];
+                }
+                acc.count++;
+            }
+        }
+    }
+
+
+    return 0;
 }
 
 // -- Batch-Accumulate Mode ----------------------------------------------
@@ -1784,33 +1507,12 @@ static int run_batch(const Args& args) {
                 records_path.c_str(), n_embd, n_target_layers);
     }
 
-    // -- Async prefetch pipeline --
-    // Producer-consumer: the producer thread does file I/O + tokenization for
-    // prompt N+1 while the GPU processes prompt N. The consumer (main thread)
-    // owns the llama_context exclusively -- only it calls decode/extract.
-
-    struct PrefetchedPrompt {
-        int prompt_idx = -1;
-        std::vector<llama_token> tokens;
-        std::vector<Assignment> assignments;
-        bool skip = false;  // tokenization failed or exceeds ctx
-        bool error = false; // set by producer on assignment read failure
-    };
-
-    struct PrefetchQueue {
-        std::queue<PrefetchedPrompt> queue;
-        std::mutex mtx;
-        std::condition_variable cv;          // consumer waits: queue non-empty or producer done
-        std::condition_variable cv_space;    // producer waits: queue has space
-        std::atomic<bool> producer_done{false};
-        std::atomic<int> n_produced{0};
-    };
 
     // Backpressure: cap queue depth to bound memory usage.
     // Each item holds tokens + assignments (~2KB typical, up to ~50KB for long prompts).
     // 64 items -> max ~3MB queued, prevents OOM on 200K-prompt runs where
     // tokenization outpaces GPU decode.
-    const size_t MAX_PREFETCH = 64;
+
 
     PrefetchQueue pfq;
 
@@ -1966,7 +1668,7 @@ static int run_batch(const Args& args) {
 
         if (pp.error) {
             fprintf(stderr, "Error: assignment read failed\n");
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
 
@@ -1983,7 +1685,7 @@ static int run_batch(const Args& args) {
                 fprintf(stderr, "Error: prompt %d has %zu tokens, exceeds n_ctx=%d\n",
                         pp.prompt_idx, pp.tokens.size(), n_ctx);
             }
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
 
@@ -2016,7 +1718,7 @@ static int run_batch(const Args& args) {
         int ret = llama_decode(ctx, batch);
         if (ret != 0) {
             fprintf(stderr, "Error: decode failed for prompt %d (ret=%d)\n", prompt_idx, ret);
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
 
@@ -2029,263 +1731,15 @@ static int run_batch(const Args& args) {
         // default comprehension-based mode, which reads hidden states from the
         // INPUT tokens of a single forward pass: here the model's own output
         // tokens are the span whose representations are captured.
+        // -- Generation-based extraction (generate_assignment) --
         if (args.generate_tokens > 0) {
-            // --generate + --save-per-record is unsupported: the per-record
-            // sidecar records are written by the comprehension block below, which
-            // this path skips via `continue`. Fail loud rather than emit a
-            // header-only sidecar that silently produces zero .pt files.
-            if (args.save_per_record) {
-                fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
-                        "(per-record records are not written in generation mode)\n");
-                STOP_PRODUCER_AND_JOIN();
+            GenContext g{ctx, batch, args, assignments, prompt_idx, n_tokens,
+                         n_embd, n_ctx, target_layers, layer_ptrs, mean_buf,
+                         accumulators};
+            if (generate_assignment(g) != 0) {
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
-            // Generation mode means over ALL generated tokens. Assignments
-            // with skip>0 or ranges (mask_type==1) have no defined semantics here
-            // since there is no pre-written content span to mask. Fail loud.
-            for (const auto& a : assignments) {
-                if (a.skip > 0 || a.mask_type == 1) {
-                    fprintf(stderr, "Error: --generate does not support assignment skip/ranges "
-                            "(group=%d mask=%d has skip=%d mask_type=%d). Use skip=0, mask_type=0 "
-                            "for generation-based extraction.\n",
-                            a.group_id, a.mask_id, a.skip, a.mask_type);
-                    STOP_PRODUCER_AND_JOIN();
-                    return 1;
-                }
-            }
-            // Accumulate hidden states from generated tokens into per-layer buffers.
-            // We reuse mean_buf for per-token accumulation and a separate gen_accum
-            // buffer for the running sum.
-            // These were `static thread_local`, implying per-thread
-            // safety. run_batch is single-consumer, so thread_local adds no
-            // protection and only misleads a reader into thinking parallel
-            // generation is safe. Plain function-scope static keeps the
-            // perf benefit (one allocation, reused via resize/fill) without
-            // the false concurrency implication.
-            static std::vector<float> gen_accum;
-            static std::vector<int64_t> gen_count;
-            const size_t n_layers_total = target_layers.size();
-            // Sanity-bound the accumulation buffer before allocating. n_layers_total
-            // and n_embd come from the loaded model (target_layers is validated
-            // against the model's layer count; n_embd is the model's embedding dim),
-            // so the product is normally small (e.g. 42 layers x 2560 embd = 107K
-            // floats). Guard against a corrupt/absurd configuration that would request
-            // a multi-GB allocation: resize() throws std::bad_alloc on failure and
-            // this block has no surrounding try, so an unbounded resize would call
-            // std::terminate. 256M floats (1 GB) is far above any real model's
-            // layer*embd product.
-            constexpr size_t MAX_GEN_ACCUM_FLOATS = 256ull * 1024 * 1024;  // 1 GB
-            if (n_layers_total > 0 && (size_t)n_embd > MAX_GEN_ACCUM_FLOATS / n_layers_total) {
-                fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
-                        "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
-                        n_layers_total, n_embd);
-                STOP_PRODUCER_AND_JOIN();
-                return 1;
-            }
-            gen_accum.resize(n_layers_total * n_embd, 0.0f);
-            gen_count.assign(n_layers_total, 0);
-            std::fill(gen_accum.begin(), gen_accum.end(), 0.0f);
-
-            int cur_pos = n_tokens;  // next position after prompt
-            llama_token next_token = LLAMA_TOKEN_NULL;
-
-            // Build sampler chain for generation. Default (temperature=0) is greedy,
-            // which is deterministic but divergent across CUDA/Vulkan backends because
-            // small logit differences flip the argmax. temperature > 0 adds stochasticity
-            // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
-            // The chain is built PER PROMPT (deliberate): llama_sampler_init_dist(0)
-            // seeds a fresh RNG per prompt so sampled trajectories are reproducible
-            // per-prompt. Hoisting the chain out of the loop would change RNG
-            // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
-            // Named gen_vocab to avoid shadowing the session-level vocab.
-            const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
-            int n_vocab = llama_vocab_n_tokens(gen_vocab);
-            LlamaSampler sampler_owner;
-            // Chain is built when temperature > 0 OR when any secondary
-            // sampling parameter is non-default: --repeat-penalty/--top-k/
-            // --top-p must not be silently dropped at temperature=0 (the
-            // documented greedy default). A temp(0) tail converts the chain
-            // to greedy argmax AFTER penalties/top-k/top-p are applied, so
-            // "greedy with repeat penalty" behaves as documented. Pure
-            // defaults (all zero) keep the fast manual-argmax path.
-            const bool want_sampling_chain = args.temperature > 0.0f
-                || args.repeat_penalty > 1.0f
-                || args.top_k > 0
-                || args.top_p < 1.0f;
-            if (want_sampling_chain) {
-                llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
-                sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
-                if (args.repeat_penalty > 1.0f) {
-                    // upstream API change (2026-08): llama_sampler_init_penalties now
-                    // takes n_vocab first to bound the repeat-scan range.
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, REPEAT_PENALTY_LAST_N, args.repeat_penalty, 0.0f, 0.0f));
-                }
-                if (args.top_k > 0) {
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
-                }
-                if (args.top_p < 1.0f) {
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
-                }
-                llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
-                llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism
-            }
-            llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
-
-            for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
-                // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
-                // writes/reads OOB KV state, the exact fault class that hard-locks
-                // the GPU. Without this, a long prompt + large --generate (or a model
-                // that never emits EOS) overruns the context window.
-                if (cur_pos >= n_ctx) {
-                    fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d: stopping\n",
-                            n_ctx, gen_step, prompt_idx);
-                    break;
-                }
-                // Sample first token from prefill's last position
-                if (gen_step == 0) {
-                    if (sampler) {
-                        next_token = llama_sampler_sample(sampler, ctx, n_tokens - 1);
-                    } else {
-                        // Greedy fallback (temperature=0): argmax
-                        float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
-                        if (!token_logits) {
-                            fprintf(stderr, "Error: no logits available for generation sampling\n");
-                            STOP_PRODUCER_AND_JOIN();
-                            return 1;
-                        }
-                        next_token = 0;
-                        float best_val = token_logits[0];
-                        for (int v = 1; v < n_vocab; v++) {
-                            if (token_logits[v] > best_val) {
-                                best_val = token_logits[v];
-                                next_token = v;
-                            }
-                        }
-                        // If all logits are NaN, every comparison is false,
-                        // so next_token stays 0 and NaN propagates into the
-                        // hidden-state accumulation silently. Detect and abort.
-                        if (std::isnan(best_val)) {
-                            fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
-                                            "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                            STOP_PRODUCER_AND_JOIN();
-                            return 1;
-                        }
-                    }
-                }
-
-                // Check for EOS
-                if (llama_vocab_is_eog(llama_model_get_vocab(llama_get_model(ctx)), next_token)) {
-                    break;
-                }
-
-                // Decode single generated token with logits enabled for next step
-                batch.n_tokens = 1;
-                batch.token[0] = next_token;
-                batch.pos[0] = cur_pos;
-                batch.n_seq_id[0] = 1;
-                batch.seq_id[0][0] = 0;
-                batch.logits[0] = (gen_step < args.generate_tokens - 1) ? 1 : 0;
-
-                ret = llama_decode(ctx, batch);
-                if (ret != 0) {
-                    fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
-                            gen_step, prompt_idx, ret);
-                    STOP_PRODUCER_AND_JOIN();
-                    return 1;
-                }
-                cur_pos++;
-
-                // Extract hidden states from this generated token
-                if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
-                    fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
-                    STOP_PRODUCER_AND_JOIN();
-                    return 1;
-                }
-
-                // Accumulate: each layer has 1 token x n_embd floats.
-                // Skip the first args.token_skip generated tokens (matching
-                // comprehension-mode behavior): the initial generated tokens
-                // are "warm-up" content that dilutes the concept signal and
-                // amplifies cross-backend divergence (the first ~50 tokens of
-                // greedy decoding diverge most across CUDA/Vulkan backends).
-                if (gen_step >= args.token_skip) {
-                    for (size_t li = 0; li < n_layers_total; li++) {
-                        float* data = layer_ptrs[li];
-                        if (data) {
-                            float* accum_ptr = &gen_accum[li * n_embd];
-                            HS_SIMD
-                            for (int d = 0; d < n_embd; d++) {
-                                accum_ptr[d] += data[d];
-                            }
-                            gen_count[li]++;
-                        }
-                    }
-                }
-
-                // Sample next token from this step's logits (for next iteration)
-                if (gen_step < args.generate_tokens - 1) {
-                    if (sampler) {
-                        next_token = llama_sampler_sample(sampler, ctx, 0);
-                    } else {
-                        // Greedy fallback
-                        float* gen_logits = llama_get_logits_ith(ctx, 0);
-                        if (gen_logits) {
-                            next_token = 0;
-                            float best_val = gen_logits[0];
-                            for (int v = 1; v < n_vocab; v++) {
-                                if (gen_logits[v] > best_val) {
-                                    best_val = gen_logits[v];
-                                    next_token = v;
-                                }
-                            }
-                            // NaN guard (same as the token_logits argmax above).
-                            // If every logit is NaN, no comparison is true and
-                            // next_token stays 0, propagating NaN into accumulation.
-                            if (std::isnan(best_val)) {
-                                fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
-                                                "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                                STOP_PRODUCER_AND_JOIN();
-                                return 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Compute means from generated tokens and accumulate into the assignment buffers
-            // (same path as comprehension mode, but using gen_accum instead of masked mean)
-            // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
-            // accumulation, so counts can differ across layers.
-            for (const auto& assign : assignments) {
-                for (size_t li = 0; li < target_layers.size(); li++) {
-                    int64_t n_gen = gen_count[li];
-                    if (n_gen == 0) continue;  // layer had no valid hidden states
-                    float* accum_ptr = &gen_accum[li * n_embd];
-                    // Divide by count to get mean
-                    float inv = 1.0f / (float)n_gen;
-                    HS_SIMD
-                    for (int d = 0; d < n_embd; d++) {
-                        mean_buf[d] = accum_ptr[d] * inv;
-                    }
-                    // Accumulate into the group/mask/layer accumulator.
-                    // Use target_layers[li] (the REAL layer number), matching the
-                    // comprehension accumulation loop. Using the loop index `li`
-                    // would silently mislabel layers in the binary accumulator output.
-                    uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
-                    auto& acc = accumulators[acc_key];
-                    if (acc.sum.empty()) {
-                        acc.sum.assign(mean_buf.data(), mean_buf.data() + n_embd);
-                        acc.count = 1;
-                    } else {
-                        HS_SIMD
-                        for (int d = 0; d < n_embd; d++) {
-                            acc.sum[d] += mean_buf[d];
-                        }
-                        acc.count++;
-                    }
-                }
-            }
-
             // Skip the normal comprehension-mode extraction below.
             // The shared tail does the bookkeeping (counters, checkpoint,
             // progress) identically to the comprehension path.
@@ -2300,7 +1754,7 @@ static int run_batch(const Args& args) {
                 prof_count++;
             }
             if (!after_prompt_done()) {
-                STOP_PRODUCER_AND_JOIN();
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
             continue;
@@ -2310,14 +1764,14 @@ static int run_batch(const Args& args) {
         auto t_extract_start = std::chrono::steady_clock::now();
         if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
             fprintf(stderr, "Error: llama_get_hidden_states_batch failed\n");
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
 
         int n_hidden = llama_get_hidden_state_n_tokens(ctx);
         if (n_hidden <= 0) {
             fprintf(stderr, "Error: decode produced no hidden state tokens for prompt %d\n", pp.prompt_idx);
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
         auto t_extract_end = std::chrono::steady_clock::now();
@@ -2327,12 +1781,12 @@ static int run_batch(const Args& args) {
         for (const auto& assign : assignments) {
             if (assign.group_id < 0 || assign.group_id > 0xFFFF) {
                 fprintf(stderr, "Error: group_id %d exceeds 16-bit range\n", assign.group_id);
-                STOP_PRODUCER_AND_JOIN();
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
             if (assign.mask_id < 0 || assign.mask_id > 0xFFFF) {
                 fprintf(stderr, "Error: mask_id %d exceeds 16-bit range\n", assign.mask_id);
-                STOP_PRODUCER_AND_JOIN();
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
 
@@ -2354,7 +1808,7 @@ static int run_batch(const Args& args) {
                 float* data = layer_ptrs[li];
                 if (!data) {
                     fprintf(stderr, "Error: null hidden state for layer %d\n", target_layers[li]);
-                    STOP_PRODUCER_AND_JOIN();
+                    stop_producer_and_join(pfq, producer_thread, records_temp_path);
                     return 1;
                 }
 
@@ -2362,7 +1816,7 @@ static int run_batch(const Args& args) {
                 int64_t tokens_in_mask = compute_masked_mean(data, n_hidden, n_embd, *ranges_ptr, mean_buf.data());
                 if (tokens_in_mask < 0) {
                     fprintf(stderr, "Error: compute_masked_mean failed for prompt %d\n", pp.prompt_idx);
-                    STOP_PRODUCER_AND_JOIN();
+                    stop_producer_and_join(pfq, producer_thread, records_temp_path);
                     return 1;
                 }
                 if (tokens_in_mask == 0) continue;
@@ -2376,14 +1830,14 @@ static int run_batch(const Args& args) {
 
                 if (args.save_per_record && records_closer) {
                     FILE* records_fp = records_closer.fp;
-                    RECORDS_WRITE(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
+                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                     int32_t gid = assign.group_id;
                     int32_t mid = assign.mask_id;
                     int32_t layer_idx = target_layers[li];
-                    RECORDS_WRITE(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread);
-                    RECORDS_WRITE(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread);
+                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                 }
             }
         }
@@ -2399,7 +1853,7 @@ static int run_batch(const Args& args) {
         }
 
         if (!after_prompt_done()) {
-            STOP_PRODUCER_AND_JOIN();
+            stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
     }
@@ -2520,279 +1974,6 @@ static int run_batch(const Args& args) {
  * Run synthetic known-value tests on compute_masked_mean() with no model loaded.
  * Exits 0 on pass, 1 on fail.
  */
-static int run_self_test() {
-    fprintf(stderr, "Running compute_masked_mean self-tests...\n\n");
-
-    int passed = 0;
-    const int total = 17;
-    bool all_ok = true;
-
-    // All tests use data layout: 3 tokens x 2 dims, row-major
-    // data[0..5] = {1, 2, 3, 4, 5, 6}
-    //   token0 = [1, 2], token1 = [3, 4], token2 = [5, 6]
-    float data1[6] = {1, 2, 3, 4, 5, 6};
-
-    // Test 1: single contiguous range = mean over all tokens
-    {
-        std::vector<std::pair<int,int>> ranges = {{0, 3}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        // dim0: (1+3+5)/3 = 3.0   dim1: (2+4+6)/3 = 4.0
-        bool ok = (count == 3)
-               && (std::abs(out[0] - 3.0f) < 1e-6f)
-               && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 1 (single contiguous range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 2: skip first token
-    {
-        std::vector<std::pair<int,int>> ranges = {{1, 3}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        // dim0: (3+5)/2 = 4.0   dim1: (4+6)/2 = 5.0
-        bool ok = (count == 2)
-               && (std::abs(out[0] - 4.0f) < 1e-6f)
-               && (std::abs(out[1] - 5.0f) < 1e-6f);
-        fprintf(stderr, "  Test 2 (skip first token): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 3: non-contiguous ranges (non-contiguous selection: tokens 0 and 2, skip 1)
-    {
-        std::vector<std::pair<int,int>> ranges = {{0, 1}, {2, 3}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        // dim0: (1+5)/2 = 3.0   dim1: (2+6)/2 = 4.0
-        bool ok = (count == 2)
-               && (std::abs(out[0] - 3.0f) < 1e-6f)
-               && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 3 (non-contiguous ranges): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 4: empty mask (zero ranges)
-    {
-        std::vector<std::pair<int,int>> ranges = {};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        // count should be 0, out stays zeroed
-        bool ok = (count == 0)
-               && (std::abs(out[0]) < 1e-6f)
-               && (std::abs(out[1]) < 1e-6f);
-        fprintf(stderr, "  Test 4 (empty mask): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 5: hard error  -  range end exceeds n_tokens (no soft clamp)
-    {
-        std::vector<std::pair<int,int>> ranges = {{0, 100}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 5 (hard error end > n_tokens): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 6: hard error  -  both start and end overshoot
-    {
-        std::vector<std::pair<int,int>> ranges = {{3, 5}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 6 (hard error overshoot range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 7: hard error  -  fully out-of-bounds
-    {
-        std::vector<std::pair<int,int>> ranges = {{50, 100}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 7 (hard error fully out-of-bounds): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 8: hard error  -  negative range
-    {
-        std::vector<std::pair<int,int>> ranges = {{-1, 3}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == -1);  // hard error
-        fprintf(stderr, "  Test 8 (hard error negative range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 9: hard error  -  inverted range (start > end)
-    {
-        std::vector<std::pair<int,int>> ranges = {{2, 1}};
-        float out[2] = {0, 0};
-        int count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == -1);  // hard error
-        fprintf(stderr, "  Test 9 (hard error inverted range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 10: compute_single_range_mean  -  basic mean
-    {
-        float out[2] = {0, 0};
-        int count = compute_single_range_mean(data1, 3, 2, 0, 3, out);
-        // dim0: (1+3+5)/3 = 3.0   dim1: (2+4+6)/3 = 4.0
-        bool ok = (count == 3)
-               && (std::abs(out[0] - 3.0f) < 1e-6f)
-               && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 10 (single-range basic mean): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 11: compute_single_range_mean  -  skip first token
-    {
-        float out[2] = {0, 0};
-        int count = compute_single_range_mean(data1, 3, 2, 1, 3, out);
-        // dim0: (3+5)/2 = 4.0   dim1: (4+6)/2 = 5.0
-        bool ok = (count == 2)
-               && (std::abs(out[0] - 4.0f) < 1e-6f)
-               && (std::abs(out[1] - 5.0f) < 1e-6f);
-        fprintf(stderr, "  Test 11 (single-range skip first): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 12: compute_single_range_mean  -  single token
-    {
-        float out[2] = {0, 0};
-        int count = compute_single_range_mean(data1, 3, 2, 1, 2, out);
-        // token1 = [3, 4]
-        bool ok = (count == 1)
-               && (std::abs(out[0] - 3.0f) < 1e-6f)
-               && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 12 (single-range single token): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 13: compute_single_range_mean  -  hard error (end > n_tokens)
-    {
-        float out[2] = {0, 0};
-        int count = compute_single_range_mean(data1, 3, 2, 0, 100, out);
-        bool ok = (count == -1);
-        fprintf(stderr, "  Test 13 (single-range hard error end > n_tokens): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 14: compute_single_range_mean  -  hard error (negative)
-    {
-        float out[2] = {0, 0};
-        int count = compute_single_range_mean(data1, 3, 2, -1, 3, out);
-        bool ok = (count == -1);
-        fprintf(stderr, "  Test 14 (single-range hard error negative): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 15: overlapping ranges  -  verify correct token deduplication
-    // ranges = {{0, 2}, {1, 3}} means tokens 0,1 and 1,2 -> token 1 counted twice
-    // dim0: (1+3) + (3+5) = 4 + 8 = 12, count = 4, mean = 3.0
-    // dim1: (2+4) + (4+6) = 6 + 10 = 16, count = 4, mean = 4.0
-    {
-        std::vector<std::pair<int,int>> ranges = {{0, 2}, {1, 3}};
-        float out[2] = {0, 0};
-        int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
-        bool ok = (count == 4)  // 2 + 2 tokens (token 1 counted twice)
-               && (std::abs(out[0] - 3.0f) < 1e-6f)  // (1+3+3+5)/4 = 12/4 = 3.0
-               && (std::abs(out[1] - 4.0f) < 1e-6f); // (2+4+4+6)/4 = 16/4 = 4.0
-        fprintf(stderr, "  Test 15 (overlapping ranges): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 16: key encode/decode roundtrip
-    // Verifies that make_accum_key and decode_accum_key are exact inverses
-    // for all valid (group_id, mask_id, layer_idx) combinations.
-    {
-        bool ok = true;
-        const int32_t test_cases[][3] = {
-            {0, 0, 0},       // minimum
-            {0xFFFF, 0xFFFF, 0xFFFF},  // maximum (16-bit each)
-            {42, 17, 5},     // typical
-            {1, 2, 3},       // small
-            {1000, 500, 99}, // medium
-        };
-        for (const auto& tc : test_cases) {
-            uint64_t key = make_accum_key(tc[0], tc[1], tc[2]);
-            int32_t g, m, l;
-            decode_accum_key(key, g, m, l);
-            if (g != tc[0] || m != tc[1] || l != tc[2]) {
-                fprintf(stderr, "  key roundtrip failed: (%d,%d,%d) -> key=%llu -> (%d,%d,%d)\n",
-                        tc[0], tc[1], tc[2], (unsigned long long)key, g, m, l);
-                ok = false;
-            }
-        }
-        // Verify key uniqueness: different inputs must produce different keys
-        uint64_t k1 = make_accum_key(1, 0, 0);
-        uint64_t k2 = make_accum_key(0, 1, 0);
-        uint64_t k3 = make_accum_key(0, 0, 1);
-        if (k1 == k2 || k1 == k3 || k2 == k3) ok = false;
-
-        fprintf(stderr, "  Test 16 (key encode/decode roundtrip): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
-    }
-
-    // Test 17: checkpoint write/read roundtrip
-    // Verifies that checkpoint format v2 (sum-based) survives a write+read
-    // cycle with zero precision loss.
-    {
-        AccumulatorMap test_acc;
-        // Create a few test entries with known sum values
-        uint64_t key1 = make_accum_key(0, 0, 0);
-        test_acc[key1].sum = {1.0f, 2.0f, 3.0f, 4.0f};
-        test_acc[key1].count = 10;
-        uint64_t key2 = make_accum_key(1, 2, 5);
-        test_acc[key2].sum = {0.1f, -0.2f, 0.3f, -0.4f};
-        test_acc[key2].count = 7;
-
-        // Write checkpoint to temp file - include PID to avoid collision
-        // between concurrent self-test runs (CI) and symlink attacks.
-        char test_ckpt_buf[256];
-        snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/hs_self_test_ckpt_%d.bin", (int)getpid());
-        const char* test_ckpt = test_ckpt_buf;
-        bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42);
-        if (!write_ok) {
-            fprintf(stderr, "  Test 17 (checkpoint roundtrip): FAIL (write failed)\n");
-            all_ok = false;
-        } else {
-            // Read it back
-            AccumulatorMap restored_acc;
-            int32_t n_iterated = 0;
-            bool read_ok = read_checkpoint(test_ckpt, restored_acc, n_iterated, 4);
-
-            bool ok = read_ok && (n_iterated == 42);
-            if (ok) {
-                // Verify sums match exactly (v2 format stores sum directly)
-                auto& av1 = restored_acc[key1];
-                auto& av2 = restored_acc[key2];
-                ok = (av1.count == 10) && (av2.count == 7);
-                for (int d = 0; d < 4 && ok; d++) {
-                    if (std::abs(av1.sum[d] - test_acc[key1].sum[d]) > 1e-6f) ok = false;
-                    if (std::abs(av2.sum[d] - test_acc[key2].sum[d]) > 1e-6f) ok = false;
-                }
-            }
-            fprintf(stderr, "  Test 17 (checkpoint roundtrip): %s\n", ok ? "PASS" : "FAIL");
-            if (ok) passed++; else all_ok = false;
-        }
-        // Cleanup
-        remove(test_ckpt);
-        remove((std::string(test_ckpt) + ".tmp").c_str());
-    }
-
-    fprintf(stderr, "\n%d/%d tests passed\n", passed, total);
-
-    if (all_ok) {
-        fprintf(stderr, "All self-tests passed\n");
-        return 0;
-    } else {
-        fprintf(stderr, "SELF-TEST FAILED\n");
-        return 1;
-    }
-}
-
 // -- Main ----------------------------------------------------------------
 
 int main(int argc, char** argv) {
