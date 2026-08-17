@@ -833,6 +833,20 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
             return false;
         }
     }
+    // Duplicate indices (including negatives aliasing the same slot, e.g.
+    // "17,-1" with n_slots=18) would accumulate the same layer twice into
+    // one accumulator -- silently wrong counts. Reject after resolution.
+    {
+        std::vector<int32_t> seen(n_slots, 0);
+        for (int32_t l : s.target_layers) {
+            if (seen[l]) {
+                fprintf(stderr, "Error: duplicate layer index %d in '%s' (after negative-index resolution)\n",
+                        l, args.layers_str);
+                return false;
+            }
+            seen[l] = 1;
+        }
+    }
     if (s.target_layers.empty()) {
         fprintf(stderr, "Error: no valid target layers\n");
         return false;
