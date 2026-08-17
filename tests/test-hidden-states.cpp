@@ -164,6 +164,25 @@ int main(int argc, char ** argv) {
         printf("Boundary check: layer n_layer+1 rejected (single: NULL, batch: -1, no partial write)\n");
     }
 
+    // API coverage: llama_model_supports_hidden_states + llama_model_arch_name
+    // (the server pre-checks via these; no test called them directly until now).
+    // This model carries a registry arch (extraction context was created above),
+    // so supports() must be true and arch_name() non-null and non-empty.
+    {
+        const bool supported = llama_model_supports_hidden_states(model);
+        const char * arch_name = llama_model_arch_name(model);
+        if (!supported) {
+            fprintf(stderr, "FAIL: llama_model_supports_hidden_states must be true for a registry arch with an extraction context\n");
+            return 1;
+        }
+        if (arch_name == nullptr || arch_name[0] == '\0') {
+            fprintf(stderr, "FAIL: llama_model_arch_name returned %s\n",
+                    arch_name == nullptr ? "NULL" : "empty string");
+            return 1;
+        }
+        printf("Supports hidden states: %s (arch: %s)\n", supported ? "true" : "false", arch_name);
+    }
+
     // Show some values from layer 0
     printf("Layer 0 first 10 values: ");
     float * hs0 = llama_get_hidden_state(ctx, 0);
