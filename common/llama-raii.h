@@ -68,3 +68,22 @@ struct LlamaBatch {
     LlamaBatch(const LlamaBatch &) = delete;
     LlamaBatch & operator=(const LlamaBatch &) = delete;
 };
+
+// Owns a llama_sampler chain. Used by hs-extract-batch's --generate path,
+// which builds a fresh chain per prompt (deliberate: per-prompt RNG state
+// keeps sampled trajectories byte-identical across runs).
+struct LlamaSampler {
+    llama_sampler * sampler;
+    LlamaSampler() : sampler(nullptr) {}
+    LlamaSampler(llama_sampler * s) : sampler(s) {}
+    ~LlamaSampler() { if (sampler) llama_sampler_free(sampler); }
+    LlamaSampler(const LlamaSampler &) = delete;
+    LlamaSampler & operator=(const LlamaSampler &) = delete;
+    LlamaSampler(LlamaSampler && other) noexcept : sampler(other.sampler) { other.sampler = nullptr; }
+    LlamaSampler & operator=(LlamaSampler && other) noexcept {
+        if (this != &other) { if (sampler) llama_sampler_free(sampler); sampler = other.sampler; other.sampler = nullptr; }
+        return *this;
+    }
+    operator llama_sampler *() const { return sampler; }
+    explicit operator bool() const { return sampler != nullptr; }
+};

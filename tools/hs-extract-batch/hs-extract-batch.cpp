@@ -2003,26 +2003,31 @@ static int run_batch(const Args& args) {
             // which is deterministic but divergent across CUDA/Vulkan backends because
             // small logit differences flip the argmax. temperature > 0 adds stochasticity
             // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
+            // The chain is built PER PROMPT (deliberate): llama_sampler_init_dist(0)
+            // seeds a fresh RNG per prompt so sampled trajectories are reproducible
+            // per-prompt. Hoisting the chain out of the loop would change RNG
+            // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
             const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
             int n_vocab = llama_vocab_n_tokens(vocab);
-            llama_sampler * sampler = nullptr;
+            LlamaSampler sampler_owner;
             if (args.temperature > 0.0f) {
                 llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
-                sampler = llama_sampler_chain_init(sparams);
+                sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
                 if (args.repeat_penalty > 1.0f) {
                     // upstream API change (2026-08): llama_sampler_init_penalties now
                     // takes n_vocab first to bound the repeat-scan range.
-                    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(n_vocab, 64, args.repeat_penalty, 0.0f, 0.0f));
+                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, 64, args.repeat_penalty, 0.0f, 0.0f));
                 }
                 if (args.top_k > 0) {
-                    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(args.top_k));
+                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
                 }
                 if (args.top_p < 1.0f) {
-                    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(args.top_p, 1));
+                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
                 }
-                llama_sampler_chain_add(sampler, llama_sampler_init_temp(args.temperature));
-                llama_sampler_chain_add(sampler, llama_sampler_init_dist(0));  // seed=0 for determinism with temperature
+                llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
+                llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism with temperature
             }
+            llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
 
             for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
                 // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
@@ -2043,7 +2048,6 @@ static int run_batch(const Args& args) {
                         float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
                         if (!token_logits) {
                             fprintf(stderr, "Error: no logits available for generation sampling\n");
-                            if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                             STOP_PRODUCER_AND_JOIN();
                             return 1;
                         }
@@ -2061,7 +2065,6 @@ static int run_batch(const Args& args) {
                         if (std::isnan(best_val)) {
                             fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
                                             "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                            if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                             STOP_PRODUCER_AND_JOIN();
                             return 1;
                         }
@@ -2085,7 +2088,6 @@ static int run_batch(const Args& args) {
                 if (ret != 0) {
                     fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
                             gen_step, prompt_idx, ret);
-                    if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                     STOP_PRODUCER_AND_JOIN();
                     return 1;
                 }
@@ -2094,7 +2096,6 @@ static int run_batch(const Args& args) {
                 // Extract hidden states from this generated token
                 if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
                     fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
-                    if (sampler) { llama_sampler_free(sampler); sampler = nullptr; }
                     STOP_PRODUCER_AND_JOIN();
                     return 1;
                 }
@@ -2147,12 +2148,6 @@ static int run_batch(const Args& args) {
                         }
                     }
                 }
-            }
-
-            // Cleanup sampler
-            if (sampler) {
-                llama_sampler_free(sampler);
-                sampler = nullptr;
             }
 
             // Compute means from generated tokens and accumulate into the assignment buffers
