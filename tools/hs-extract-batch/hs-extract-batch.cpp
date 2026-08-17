@@ -841,7 +841,7 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
         for (int32_t l : s.target_layers) {
             if (seen[l]) {
                 fprintf(stderr, "Error: duplicate layer index %d in '%s' (after negative-index resolution)\n",
-                        l, args.layers_str);
+                        l, args.layers_str.c_str());
                 return false;
             }
             seen[l] = 1;
