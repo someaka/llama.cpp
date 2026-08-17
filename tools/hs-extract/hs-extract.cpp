@@ -238,6 +238,29 @@ int main(int argc, char ** argv) {
 
     fprintf(stderr, "%s: model loaded, n_layers=%d, n_embd=%d\n", __func__, n_layers, n_embd);
 
+    // Tokenize FIRST (needs only the vocab): the context is then sized to the
+    // actual token count instead of a hardcoded 2048.
+    std::vector<llama_token> tokens;
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    if (raw_mode) {
+        tokens = parse_raw_tokens(prompt_text, vocab);
+        if (tokens.empty()) {
+            return 1;
+        }
+        fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
+    } else {
+        const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
+        std::string prompt(prompt_text);
+        tokens = common_tokenize(vocab, prompt, add_bos, true);
+        fprintf(stderr, "%s: tokenized prompt into %zu tokens\n", __func__, tokens.size());
+    }
+
+    if (tokens.empty()) {
+        fprintf(stderr, "error: no tokens to process\n");
+        return 1;
+    }
+
     llama_context_params ctx_params = llama_context_default_params();
     // Size the context to the work, not a hardcoded 2048: auto = token count
     // (+ headroom zero: decode is single-shot), capped at n_ctx_train; or the
@@ -280,27 +303,6 @@ int main(int argc, char ** argv) {
     LlamaContext ctx(llama_init_from_model(model, ctx_params));
     if (!ctx) {
         fprintf(stderr, "error: failed to create context\n");
-        return 1;
-    }
-
-    std::vector<llama_token> tokens;
-
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-    if (raw_mode) {
-        tokens = parse_raw_tokens(prompt_text, vocab);
-        if (tokens.empty()) {
-            return 1;
-        }
-        fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
-    } else {
-        const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
-        std::string prompt(prompt_text);
-        tokens = common_tokenize(vocab, prompt, add_bos, true);
-        fprintf(stderr, "%s: tokenized prompt into %zu tokens\n", __func__, tokens.size());
-    }
-
-    if (tokens.empty()) {
-        fprintf(stderr, "error: no tokens to process\n");
         return 1;
     }
 
