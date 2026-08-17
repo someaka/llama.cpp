@@ -1830,6 +1830,37 @@ static int run_batch(const Args& args) {
 
     std::thread producer_thread(producer);
 
+    // Shared per-prompt tail: bump counters, checkpoint on interval, print
+    // progress on interval. Used by both the generation path and the
+    // comprehension path so their bookkeeping stays identical. Returns false
+    // if the checkpoint write failed (caller must stop with the producer
+    // joined and return 1).
+    auto after_prompt_done = [&]() -> bool {
+        prompt_idx++;
+        n_processed++;
+
+        if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
+            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx)) {
+                fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
+                return false;
+            }
+        }
+
+        if (n_processed % PROGRESS_INTERVAL == 0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+            float pps = n_processed * 1000.0f / (elapsed > 0 ? elapsed : 1);
+            if (skip_count > 0) {
+                fprintf(stderr, "Position %d/%d (%d new since resume, %.2f prompts/sec)\n",
+                        prompt_idx, n_prompts_expected, n_processed, pps);
+            } else {
+                fprintf(stderr, "Processed %d/%d prompts (%.2f prompts/sec)\n",
+                        prompt_idx, n_prompts_expected, pps);
+            }
+        }
+        return true;
+    };
+
     // Consumer (main thread): GPU decode + extract + accumulate
     while (true) {
         PrefetchedPrompt pp;
@@ -2159,30 +2190,11 @@ static int run_batch(const Args& args) {
             }
 
             // Skip the normal comprehension-mode extraction below.
-            // Replicate the comprehension path's bookkeeping so progress,
-            // checkpointing, and the final summary count work identically.
-            prompt_idx++;
-            n_processed++;
-
-            if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
-                if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx)) {
-                    fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
-                    STOP_PRODUCER_AND_JOIN();
-                    return 1;
-                }
-            }
-
-            if (n_processed % PROGRESS_INTERVAL == 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
-                float pps = n_processed * 1000.0f / (elapsed > 0 ? elapsed : 1);
-                if (skip_count > 0) {
-                    fprintf(stderr, "Position %d/%d (%d new since resume, %.2f prompts/sec)\n",
-                            prompt_idx, n_prompts_expected, n_processed, pps);
-                } else {
-                    fprintf(stderr, "Processed %d/%d prompts (%.2f prompts/sec)\n",
-                            prompt_idx, n_prompts_expected, pps);
-                }
+            // The shared tail does the bookkeeping (counters, checkpoint,
+            // progress) identically to the comprehension path.
+            if (!after_prompt_done()) {
+                STOP_PRODUCER_AND_JOIN();
+                return 1;
             }
             continue;
         }
@@ -2272,28 +2284,9 @@ static int run_batch(const Args& args) {
             prof_count++;
         }
 
-        prompt_idx++;
-        n_processed++;
-
-        if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
-            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx)) {
-                fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
-                STOP_PRODUCER_AND_JOIN();
-                return 1;
-            }
-        }
-
-        if (n_processed % PROGRESS_INTERVAL == 0) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
-            float pps = n_processed * 1000.0f / (elapsed > 0 ? elapsed : 1);
-            if (skip_count > 0) {
-                fprintf(stderr, "Position %d/%d (%d new since resume, %.2f prompts/sec)\n",
-                        prompt_idx, n_prompts_expected, n_processed, pps);
-            } else {
-                fprintf(stderr, "Processed %d/%d prompts (%.2f prompts/sec)\n",
-                        prompt_idx, n_prompts_expected, pps);
-            }
+        if (!after_prompt_done()) {
+            STOP_PRODUCER_AND_JOIN();
+            return 1;
         }
     }
 
