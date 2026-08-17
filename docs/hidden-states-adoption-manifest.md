@@ -121,7 +121,7 @@ reassignment that follows the final residual add listed below.
 | 35 | llama_model_glm4_moe | src/models/glm4-moe.cpp | 259 |
 | 36 | llama_model_glm_dsa | src/models/glm-dsa.cpp | 541 |
 | 37 | llama_model_gpt2 | src/models/gpt2.cpp | 125 |
-| 38 | llama_model_granite | src/models/granite.cpp | None |
+| 38 | llama_model_granite | src/models/granite.cpp | 306 (in build_layer_ffn helper) |
 | 39 | llama_model_grok | src/models/grok.cpp | 190 |
 | 40 | llama_model_grovemoe | src/models/grovemoe.cpp | 170 |
 | 41 | llama_model_hunyuan_moe | src/models/hunyuan-moe.cpp | 164 |
@@ -129,7 +129,7 @@ reassignment that follows the final residual add listed below.
 | 43 | llama_model_hy_v3 | src/models/hy-v3.cpp | 208 |
 | 44 | llama_model_internlm2 | src/models/internlm2.cpp | 115 |
 | 45 | llama_model_jais | src/models/jais.cpp | 110 |
-| 46 | llama_model_jais2 | src/models/jais2.cpp | None |
+| 46 | llama_model_jais2 | src/models/jais2.cpp | 140 |
 | 47 | llama_model_jamba | src/models/jamba.cpp | 177 |
 | 48 | llama_model_laguna | src/models/laguna.cpp | 316 |
 | 49 | llama_model_llada | src/models/llada.cpp | 136 |
@@ -185,12 +185,15 @@ reassignment that follows the final residual add listed below.
 | 99 | llama_model_talkie | src/models/talkie.cpp | 126 |
 | 100 | llama_model_xverse | src/models/xverse.cpp | 114 |
 
-Of the 103 CLASSIC builders, 4 are the reference adoption; 98 received the
-dormant `capture_layer_output()` call in the hs-arch-core sweep (2026-08-16,
-compile-verified, byte-identity on the supported archs preserved);
-1 (nanbeige) was skipped — no residual add before its loop-tail reassign,
-so the classic tail pattern does not hold there. Dormant calls are no-ops
-until the arch is added to the registry; per-adoption steps:
+Of the 126 builders reviewed, 100 are ADOPT and 26 are REFUSE. Of the 100
+ADOPT rows, 4 are the active registry references (llama, gemma, gemma4,
+qwen35); 95 carry the dormant `capture_layer_output()` call (the 2026-08-16
+hs-arch-core sweep, plus granite and jais2 restored to the adopt point after
+the manifest audit); 1 (nanbeige) was skipped — no residual add before its
+loop-tail reassign, so the classic tail pattern does not hold there. No
+REFUSE-listed builder carries a call; refusals are recorded above with named
+reasons and stay out until a per-builder semantic decision exists. Dormant
+calls are no-ops until the arch is added to the registry; per-adoption steps:
 
 1. read the builder's loop tail against this table (adopt point = loop
    bottom, after the final residual reassign);

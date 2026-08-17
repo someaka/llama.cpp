@@ -140,6 +140,8 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
         inpL = ggml_add(ctx0, cur, ffn_inp);
         inpL = build_cvec(inpL, il);
         cb(inpL, "l_out", il);
+
+        capture_layer_output(il, inpL);
     }
 
     // Final LayerNorm

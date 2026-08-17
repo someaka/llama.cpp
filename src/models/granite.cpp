@@ -171,6 +171,8 @@ llama_model_granite::graph::graph(
 
         // input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 
