@@ -68,9 +68,27 @@ Production tool for processing thousands of prompts:
 
 Debug/parity tool for extracting hidden states from a single prompt with JSON output.
 
-### 6. KV-Cells Optimization
+### 6. Test/Diagnostic Tools
+
+- `tools/hs-extract-batch-test`  -  warmup/toggle equivalence repro: verifies
+  CLI-style (extract on from creation) and server-style (warmup, toggle on,
+  memory clear) initialization produce identical hidden states. Both modes
+  run in fork CI.
+- `tools/hs-probe`  -  logits-equivalence probe: greedy next-token argmax +
+  top-8 logits must be identical with extraction on vs off (regression gate
+  for the output-projection pruning fix). Exits 2 on mismatch. Runs in fork CI.
+- `examples/hidden-states`  -  minimal public-API example (installed like
+  upstream siblings).
+- `tools/cvector-generator/*-gemma4.txt`  -  manual `--cvector-file` input
+  data for Gemma-4 cvector generation.
+
+### 7. KV-Cells Optimization
 
 Flat position-count table replacing `std::map` for O(1) lookup.
+
+### 8. Misc
+
+- `ggml/src/ggml-vulkan.cpp`: one-line debug-log change.
 
 ## CI
 
