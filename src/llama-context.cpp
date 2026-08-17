@@ -1220,6 +1220,16 @@ void llama_context::set_extract_hidden_states(bool value) {
                                  + llm_arch_name(model.arch) + "'");
     }
 
+    // Same refusal as context creation (see llama_init_from_model): the MTP
+    // draft graph variant does not install capture hooks, so enabling
+    // extraction on an MTP context would otherwise GGML_ABORT at first
+    // decode with a misleading "architecture ... does not call
+    // capture_layer_output" message on a REGISTERED arch (e.g. qwen35).
+    if (value && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+        throw std::runtime_error("hidden-state extraction is not supported for MTP draft contexts "
+                                 "(the MTP graph variant does not install capture hooks)");
+    }
+
     cparams.extract_hidden_states = value;
 
     // Toggling extraction changes the graph topology (adds/removes
