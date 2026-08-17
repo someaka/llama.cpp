@@ -35,7 +35,10 @@ Zero redundancy.
    output (`--save-per-record`); binary formats documented in README.
    Unknown flags and invalid flag combinations error at parse time.
 4. **`/hidden-states` server endpoint** (`tools/server/`): POST prompt →
-   per-layer vectors, no generation; mean-pooling + layer filtering;
+   per-layer vectors, no generation; three pooling modes (`last` default,
+   `skip_mean`, per-token `none` with a 25M-float DoS cap), `normalize`,
+   `skip_offset`, and `all_layers` request fields (full surface in
+   `tools/server/README.md` §901+);
    `--no-hidden-states` flag disables the route.
 5. **Tests + example** (`tests/test-hidden-states.{cpp,c}`,
    `examples/hidden-states/`): API contract tests + minimal end-to-end example.
