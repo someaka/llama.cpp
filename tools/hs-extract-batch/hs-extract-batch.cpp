@@ -1757,10 +1757,6 @@ static int run_batch(const Args& args) {
                 stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
-            if (!after_prompt_done()) {
-                stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                return 1;
-            }
             continue;
         }
 
