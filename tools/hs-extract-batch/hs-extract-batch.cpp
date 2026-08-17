@@ -1,14 +1,18 @@
 /*
  * Batch hidden-state extraction CLI.
  *
- * Three modes:
- *   Batch:     hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --batch --assignments <file> [flags]
- *   Raw:       hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --raw [flags]
- *   Self-test: hs-extract-batch --self-test
+ * Four modes:
+ *   Batch:      hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --batch --assignments <file> [flags]
+ *               (with --generate N: generation-based extraction, see generate_assignment())
+ *   Raw:        hs-extract-batch <model> <prompts.txt> [layers] <output.bin> --raw [flags]
+ *   Self-test:  hs-extract-batch --self-test
+ *   Generate:   hs-extract-batch ... --batch --generate N [sampling flags]
  *
  * Production mode is --batch: reads prompts.txt + assignments.bin, streams
  * one prompt at a time, computes masked means per assignment, accumulates
- * per group/mask/layer, writes output.bin with final means.
+ * per group/mask/layer, writes output.bin with final means. With --generate N
+ * it autoregressively generates N tokens per prompt and accumulates the
+ * hidden states of the generated tokens instead (generate_assignment()).
  *
  * --raw is a debug/parity mode that dumps per-prompt binary data.
  *
