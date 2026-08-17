@@ -1035,6 +1035,299 @@ static inline void stop_producer_and_join(
     if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
 }
 
+// -- Generation-based extraction -----------------------------------------
+//
+// If --generate N is set, autoregressively generate N tokens and extract
+// hidden states from the GENERATED tokens only. This contrasts with the
+// default comprehension-based mode, which reads hidden states from the
+// INPUT tokens of a single forward pass: here the model's own output
+// tokens are the span whose representations are captured.
+// Extracted verbatim from run_batch's consumer loop (pure code motion).
+// Returns 0 on success (caller runs the shared tail); 1 on error (caller
+// stops the producer and returns 1).
+
+struct GenContext {
+    LlamaContext& ctx;
+    llama_batch& batch;
+    const Args& args;
+    const std::vector<Assignment>& assignments;
+    int prompt_idx;
+    int n_tokens;
+    int32_t n_embd;
+    int32_t n_ctx;
+    const std::vector<int32_t>& target_layers;
+    std::vector<float*>& layer_ptrs;
+    std::vector<float>& mean_buf;
+    AccumulatorMap& accumulators;
+};
+
+static int generate_assignment(GenContext& g) {
+    LlamaContext& ctx = g.ctx;
+    llama_batch& batch = g.batch;
+    const Args& args = g.args;
+    const auto& assignments = g.assignments;
+    const int prompt_idx = g.prompt_idx;
+    const int n_tokens = g.n_tokens;
+    const int32_t n_embd = g.n_embd;
+    const int32_t n_ctx = g.n_ctx;
+    const std::vector<int32_t>& target_layers = g.target_layers;
+    std::vector<float*>& layer_ptrs = g.layer_ptrs;
+    std::vector<float>& mean_buf = g.mean_buf;
+    AccumulatorMap& accumulators = g.accumulators;
+    int ret = 0;
+
+    // --generate + --save-per-record is unsupported: the per-record
+    // sidecar records are written by the comprehension block below, which
+    // this path skips via `continue`. Fail loud rather than emit a
+    // header-only sidecar that silently produces zero .pt files.
+    if (args.save_per_record) {
+        fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
+                "(per-record records are not written in generation mode)\n");
+            return 1;
+    }
+    // Generation mode means over ALL generated tokens. Assignments
+    // with skip>0 or ranges (mask_type==1) have no defined semantics here
+    // since there is no pre-written content span to mask. Fail loud.
+    for (const auto& a : assignments) {
+        if (a.skip > 0 || a.mask_type == 1) {
+            fprintf(stderr, "Error: --generate does not support assignment skip/ranges "
+                    "(group=%d mask=%d has skip=%d mask_type=%d). Use skip=0, mask_type=0 "
+                    "for generation-based extraction.\n",
+                    a.group_id, a.mask_id, a.skip, a.mask_type);
+                    return 1;
+        }
+    }
+    // Accumulate hidden states from generated tokens into per-layer buffers.
+    // We reuse mean_buf for per-token accumulation and a separate gen_accum
+    // buffer for the running sum.
+    // These were `static thread_local`, implying per-thread
+    // safety. run_batch is single-consumer, so thread_local adds no
+    // protection and only misleads a reader into thinking parallel
+    // generation is safe. Plain function-scope static keeps the
+    // perf benefit (one allocation, reused via resize/fill) without
+    // the false concurrency implication.
+    static std::vector<float> gen_accum;
+    static std::vector<int64_t> gen_count;
+    const size_t n_layers_total = target_layers.size();
+    // Sanity-bound the accumulation buffer before allocating. n_layers_total
+    // and n_embd come from the loaded model (target_layers is validated
+    // against the model's layer count; n_embd is the model's embedding dim),
+    // so the product is normally small (e.g. 42 layers x 2560 embd = 107K
+    // floats). Guard against a corrupt/absurd configuration that would request
+    // a multi-GB allocation: resize() throws std::bad_alloc on failure and
+    // this block has no surrounding try, so an unbounded resize would call
+    // std::terminate. 256M floats (1 GB) is far above any real model's
+    // layer*embd product.
+    constexpr size_t MAX_GEN_ACCUM_FLOATS = 256ull * 1024 * 1024;  // 1 GB
+    if (n_layers_total > 0 && (size_t)n_embd > MAX_GEN_ACCUM_FLOATS / n_layers_total) {
+        fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
+                "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
+                n_layers_total, n_embd);
+            return 1;
+    }
+    gen_accum.resize(n_layers_total * n_embd, 0.0f);
+    gen_count.assign(n_layers_total, 0);
+    std::fill(gen_accum.begin(), gen_accum.end(), 0.0f);
+
+    int cur_pos = n_tokens;  // next position after prompt
+    llama_token next_token = LLAMA_TOKEN_NULL;
+
+    // Build sampler chain for generation. Default (temperature=0) is greedy,
+    // which is deterministic but divergent across CUDA/Vulkan backends because
+    // small logit differences flip the argmax. temperature > 0 adds stochasticity
+    // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
+    // The chain is built PER PROMPT (deliberate): llama_sampler_init_dist(0)
+    // seeds a fresh RNG per prompt so sampled trajectories are reproducible
+    // per-prompt. Hoisting the chain out of the loop would change RNG
+    // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
+    // Named gen_vocab to avoid shadowing the session-level vocab.
+    const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
+    int n_vocab = llama_vocab_n_tokens(gen_vocab);
+    LlamaSampler sampler_owner;
+    // Chain is built when temperature > 0 OR when any secondary
+    // sampling parameter is non-default: --repeat-penalty/--top-k/
+    // --top-p must not be silently dropped at temperature=0 (the
+    // documented greedy default). A temp(0) tail converts the chain
+    // to greedy argmax AFTER penalties/top-k/top-p are applied, so
+    // "greedy with repeat penalty" behaves as documented. Pure
+    // defaults (all zero) keep the fast manual-argmax path.
+    const bool want_sampling_chain = args.temperature > 0.0f
+        || args.repeat_penalty > 1.0f
+        || args.top_k > 0
+        || args.top_p < 1.0f;
+    if (want_sampling_chain) {
+        llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+        sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
+        if (args.repeat_penalty > 1.0f) {
+            // upstream API change (2026-08): llama_sampler_init_penalties now
+            // takes n_vocab first to bound the repeat-scan range.
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, REPEAT_PENALTY_LAST_N, args.repeat_penalty, 0.0f, 0.0f));
+        }
+        if (args.top_k > 0) {
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
+        }
+        if (args.top_p < 1.0f) {
+            llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
+        }
+        llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
+        llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism
+    }
+    llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
+
+    for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
+        // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
+        // writes/reads OOB KV state, the exact fault class that hard-locks
+        // the GPU. Without this, a long prompt + large --generate (or a model
+        // that never emits EOS) overruns the context window.
+        if (cur_pos >= n_ctx) {
+            fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d: stopping\n",
+                    n_ctx, gen_step, prompt_idx);
+            break;
+        }
+        // Sample first token from prefill's last position
+        if (gen_step == 0) {
+            if (sampler) {
+                next_token = llama_sampler_sample(sampler, ctx, n_tokens - 1);
+            } else {
+                // Greedy fallback (temperature=0): argmax
+                float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
+                if (!token_logits) {
+                    fprintf(stderr, "Error: no logits available for generation sampling\n");
+                                    return 1;
+                }
+                next_token = 0;
+                float best_val = token_logits[0];
+                for (int v = 1; v < n_vocab; v++) {
+                    if (token_logits[v] > best_val) {
+                        best_val = token_logits[v];
+                        next_token = v;
+                    }
+                }
+                // If all logits are NaN, every comparison is false,
+                // so next_token stays 0 and NaN propagates into the
+                // hidden-state accumulation silently. Detect and abort.
+                if (std::isnan(best_val)) {
+                    fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                    "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                                    return 1;
+                }
+            }
+        }
+
+        // Check for EOS
+        if (llama_vocab_is_eog(llama_model_get_vocab(llama_get_model(ctx)), next_token)) {
+            break;
+        }
+
+        // Decode single generated token with logits enabled for next step
+        batch.n_tokens = 1;
+        batch.token[0] = next_token;
+        batch.pos[0] = cur_pos;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0][0] = 0;
+        batch.logits[0] = (gen_step < args.generate_tokens - 1) ? 1 : 0;
+
+        ret = llama_decode(ctx, batch);
+        if (ret != 0) {
+            fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
+                    gen_step, prompt_idx, ret);
+                    return 1;
+        }
+        cur_pos++;
+
+        // Extract hidden states from this generated token
+        if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
+            fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
+                    return 1;
+        }
+
+        // Accumulate: each layer has 1 token x n_embd floats.
+        // Skip the first args.token_skip generated tokens (matching
+        // comprehension-mode behavior): the initial generated tokens
+        // are "warm-up" content that dilutes the concept signal and
+        // amplifies cross-backend divergence (the first ~50 tokens of
+        // greedy decoding diverge most across CUDA/Vulkan backends).
+        if (gen_step >= args.token_skip) {
+            for (size_t li = 0; li < n_layers_total; li++) {
+                float* data = layer_ptrs[li];
+                if (data) {
+                    float* accum_ptr = &gen_accum[li * n_embd];
+                    HS_SIMD
+                    for (int d = 0; d < n_embd; d++) {
+                        accum_ptr[d] += data[d];
+                    }
+                    gen_count[li]++;
+                }
+            }
+        }
+
+        // Sample next token from this step's logits (for next iteration)
+        if (gen_step < args.generate_tokens - 1) {
+            if (sampler) {
+                next_token = llama_sampler_sample(sampler, ctx, 0);
+            } else {
+                // Greedy fallback
+                float* gen_logits = llama_get_logits_ith(ctx, 0);
+                if (gen_logits) {
+                    next_token = 0;
+                    float best_val = gen_logits[0];
+                    for (int v = 1; v < n_vocab; v++) {
+                        if (gen_logits[v] > best_val) {
+                            best_val = gen_logits[v];
+                            next_token = v;
+                        }
+                    }
+                    // NaN guard (same as the token_logits argmax above).
+                    // If every logit is NaN, no comparison is true and
+                    // next_token stays 0, propagating NaN into accumulation.
+                    if (std::isnan(best_val)) {
+                        fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
+                                        "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
+                                            return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Compute means from generated tokens and accumulate into the assignment buffers
+    // (same path as comprehension mode, but using gen_accum instead of masked mean)
+    // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
+    // accumulation, so counts can differ across layers.
+    for (const auto& assign : assignments) {
+        for (size_t li = 0; li < target_layers.size(); li++) {
+            int64_t n_gen = gen_count[li];
+            if (n_gen == 0) continue;  // layer had no valid hidden states
+            float* accum_ptr = &gen_accum[li * n_embd];
+            // Divide by count to get mean
+            float inv = 1.0f / (float)n_gen;
+            HS_SIMD
+            for (int d = 0; d < n_embd; d++) {
+                mean_buf[d] = accum_ptr[d] * inv;
+            }
+            // Accumulate into the group/mask/layer accumulator.
+            // Use target_layers[li] (the REAL layer number), matching the
+            // comprehension accumulation loop. Using the loop index `li`
+            // would silently mislabel layers in the binary accumulator output.
+            uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
+            auto& acc = accumulators[acc_key];
+            if (acc.sum.empty()) {
+                acc.sum.assign(mean_buf.data(), mean_buf.data() + n_embd);
+                acc.count = 1;
+            } else {
+                HS_SIMD
+                for (int d = 0; d < n_embd; d++) {
+                    acc.sum[d] += mean_buf[d];
+                }
+                acc.count++;
+            }
+        }
+    }
+
+
+    return 0;
+}
+
 // -- Batch-Accumulate Mode ----------------------------------------------
 
 /**
@@ -1407,263 +1700,15 @@ static int run_batch(const Args& args) {
         // default comprehension-based mode, which reads hidden states from the
         // INPUT tokens of a single forward pass: here the model's own output
         // tokens are the span whose representations are captured.
+        // -- Generation-based extraction (generate_assignment) --
         if (args.generate_tokens > 0) {
-            // --generate + --save-per-record is unsupported: the per-record
-            // sidecar records are written by the comprehension block below, which
-            // this path skips via `continue`. Fail loud rather than emit a
-            // header-only sidecar that silently produces zero .pt files.
-            if (args.save_per_record) {
-                fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
-                        "(per-record records are not written in generation mode)\n");
+            GenContext g{ctx, batch, args, assignments, prompt_idx, n_tokens,
+                         n_embd, n_ctx, target_layers, layer_ptrs, mean_buf,
+                         accumulators};
+            if (generate_assignment(g) != 0) {
                 stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
-            // Generation mode means over ALL generated tokens. Assignments
-            // with skip>0 or ranges (mask_type==1) have no defined semantics here
-            // since there is no pre-written content span to mask. Fail loud.
-            for (const auto& a : assignments) {
-                if (a.skip > 0 || a.mask_type == 1) {
-                    fprintf(stderr, "Error: --generate does not support assignment skip/ranges "
-                            "(group=%d mask=%d has skip=%d mask_type=%d). Use skip=0, mask_type=0 "
-                            "for generation-based extraction.\n",
-                            a.group_id, a.mask_id, a.skip, a.mask_type);
-                    stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                    return 1;
-                }
-            }
-            // Accumulate hidden states from generated tokens into per-layer buffers.
-            // We reuse mean_buf for per-token accumulation and a separate gen_accum
-            // buffer for the running sum.
-            // These were `static thread_local`, implying per-thread
-            // safety. run_batch is single-consumer, so thread_local adds no
-            // protection and only misleads a reader into thinking parallel
-            // generation is safe. Plain function-scope static keeps the
-            // perf benefit (one allocation, reused via resize/fill) without
-            // the false concurrency implication.
-            static std::vector<float> gen_accum;
-            static std::vector<int64_t> gen_count;
-            const size_t n_layers_total = target_layers.size();
-            // Sanity-bound the accumulation buffer before allocating. n_layers_total
-            // and n_embd come from the loaded model (target_layers is validated
-            // against the model's layer count; n_embd is the model's embedding dim),
-            // so the product is normally small (e.g. 42 layers x 2560 embd = 107K
-            // floats). Guard against a corrupt/absurd configuration that would request
-            // a multi-GB allocation: resize() throws std::bad_alloc on failure and
-            // this block has no surrounding try, so an unbounded resize would call
-            // std::terminate. 256M floats (1 GB) is far above any real model's
-            // layer*embd product.
-            constexpr size_t MAX_GEN_ACCUM_FLOATS = 256ull * 1024 * 1024;  // 1 GB
-            if (n_layers_total > 0 && (size_t)n_embd > MAX_GEN_ACCUM_FLOATS / n_layers_total) {
-                fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
-                        "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
-                        n_layers_total, n_embd);
-                stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                return 1;
-            }
-            gen_accum.resize(n_layers_total * n_embd, 0.0f);
-            gen_count.assign(n_layers_total, 0);
-            std::fill(gen_accum.begin(), gen_accum.end(), 0.0f);
-
-            int cur_pos = n_tokens;  // next position after prompt
-            llama_token next_token = LLAMA_TOKEN_NULL;
-
-            // Build sampler chain for generation. Default (temperature=0) is greedy,
-            // which is deterministic but divergent across CUDA/Vulkan backends because
-            // small logit differences flip the argmax. temperature > 0 adds stochasticity
-            // that, combined with repeat_penalty, stabilizes cross-backend trajectories.
-            // The chain is built PER PROMPT (deliberate): llama_sampler_init_dist(0)
-            // seeds a fresh RNG per prompt so sampled trajectories are reproducible
-            // per-prompt. Hoisting the chain out of the loop would change RNG
-            // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
-            // Named gen_vocab to avoid shadowing the session-level vocab.
-            const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
-            int n_vocab = llama_vocab_n_tokens(gen_vocab);
-            LlamaSampler sampler_owner;
-            // Chain is built when temperature > 0 OR when any secondary
-            // sampling parameter is non-default: --repeat-penalty/--top-k/
-            // --top-p must not be silently dropped at temperature=0 (the
-            // documented greedy default). A temp(0) tail converts the chain
-            // to greedy argmax AFTER penalties/top-k/top-p are applied, so
-            // "greedy with repeat penalty" behaves as documented. Pure
-            // defaults (all zero) keep the fast manual-argmax path.
-            const bool want_sampling_chain = args.temperature > 0.0f
-                || args.repeat_penalty > 1.0f
-                || args.top_k > 0
-                || args.top_p < 1.0f;
-            if (want_sampling_chain) {
-                llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
-                sampler_owner = LlamaSampler(llama_sampler_chain_init(sparams));
-                if (args.repeat_penalty > 1.0f) {
-                    // upstream API change (2026-08): llama_sampler_init_penalties now
-                    // takes n_vocab first to bound the repeat-scan range.
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_penalties(n_vocab, REPEAT_PENALTY_LAST_N, args.repeat_penalty, 0.0f, 0.0f));
-                }
-                if (args.top_k > 0) {
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_k(args.top_k));
-                }
-                if (args.top_p < 1.0f) {
-                    llama_sampler_chain_add(sampler_owner, llama_sampler_init_top_p(args.top_p, 1));
-                }
-                llama_sampler_chain_add(sampler_owner, llama_sampler_init_temp(args.temperature));
-                llama_sampler_chain_add(sampler_owner, llama_sampler_init_dist(0));  // seed=0 for determinism
-            }
-            llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
-
-            for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
-                // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
-                // writes/reads OOB KV state, the exact fault class that hard-locks
-                // the GPU. Without this, a long prompt + large --generate (or a model
-                // that never emits EOS) overruns the context window.
-                if (cur_pos >= n_ctx) {
-                    fprintf(stderr, "Warning: generation reached n_ctx=%d at step %d for prompt %d: stopping\n",
-                            n_ctx, gen_step, prompt_idx);
-                    break;
-                }
-                // Sample first token from prefill's last position
-                if (gen_step == 0) {
-                    if (sampler) {
-                        next_token = llama_sampler_sample(sampler, ctx, n_tokens - 1);
-                    } else {
-                        // Greedy fallback (temperature=0): argmax
-                        float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
-                        if (!token_logits) {
-                            fprintf(stderr, "Error: no logits available for generation sampling\n");
-                            stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                            return 1;
-                        }
-                        next_token = 0;
-                        float best_val = token_logits[0];
-                        for (int v = 1; v < n_vocab; v++) {
-                            if (token_logits[v] > best_val) {
-                                best_val = token_logits[v];
-                                next_token = v;
-                            }
-                        }
-                        // If all logits are NaN, every comparison is false,
-                        // so next_token stays 0 and NaN propagates into the
-                        // hidden-state accumulation silently. Detect and abort.
-                        if (std::isnan(best_val)) {
-                            fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
-                                            "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                            stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                            return 1;
-                        }
-                    }
-                }
-
-                // Check for EOS
-                if (llama_vocab_is_eog(llama_model_get_vocab(llama_get_model(ctx)), next_token)) {
-                    break;
-                }
-
-                // Decode single generated token with logits enabled for next step
-                batch.n_tokens = 1;
-                batch.token[0] = next_token;
-                batch.pos[0] = cur_pos;
-                batch.n_seq_id[0] = 1;
-                batch.seq_id[0][0] = 0;
-                batch.logits[0] = (gen_step < args.generate_tokens - 1) ? 1 : 0;
-
-                ret = llama_decode(ctx, batch);
-                if (ret != 0) {
-                    fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
-                            gen_step, prompt_idx, ret);
-                    stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                    return 1;
-                }
-                cur_pos++;
-
-                // Extract hidden states from this generated token
-                if (llama_get_hidden_states_batch(ctx, target_layers.data(), target_layers.size(), layer_ptrs.data()) != 0) {
-                    fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
-                    stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                    return 1;
-                }
-
-                // Accumulate: each layer has 1 token x n_embd floats.
-                // Skip the first args.token_skip generated tokens (matching
-                // comprehension-mode behavior): the initial generated tokens
-                // are "warm-up" content that dilutes the concept signal and
-                // amplifies cross-backend divergence (the first ~50 tokens of
-                // greedy decoding diverge most across CUDA/Vulkan backends).
-                if (gen_step >= args.token_skip) {
-                    for (size_t li = 0; li < n_layers_total; li++) {
-                        float* data = layer_ptrs[li];
-                        if (data) {
-                            float* accum_ptr = &gen_accum[li * n_embd];
-                            HS_SIMD
-                            for (int d = 0; d < n_embd; d++) {
-                                accum_ptr[d] += data[d];
-                            }
-                            gen_count[li]++;
-                        }
-                    }
-                }
-
-                // Sample next token from this step's logits (for next iteration)
-                if (gen_step < args.generate_tokens - 1) {
-                    if (sampler) {
-                        next_token = llama_sampler_sample(sampler, ctx, 0);
-                    } else {
-                        // Greedy fallback
-                        float* gen_logits = llama_get_logits_ith(ctx, 0);
-                        if (gen_logits) {
-                            next_token = 0;
-                            float best_val = gen_logits[0];
-                            for (int v = 1; v < n_vocab; v++) {
-                                if (gen_logits[v] > best_val) {
-                                    best_val = gen_logits[v];
-                                    next_token = v;
-                                }
-                            }
-                            // NaN guard (same as the token_logits argmax above).
-                            // If every logit is NaN, no comparison is true and
-                            // next_token stays 0, propagating NaN into accumulation.
-                            if (std::isnan(best_val)) {
-                                fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
-                                                "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                                stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                                return 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Compute means from generated tokens and accumulate into the assignment buffers
-            // (same path as comprehension mode, but using gen_accum instead of masked mean)
-            // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
-            // accumulation, so counts can differ across layers.
-            for (const auto& assign : assignments) {
-                for (size_t li = 0; li < target_layers.size(); li++) {
-                    int64_t n_gen = gen_count[li];
-                    if (n_gen == 0) continue;  // layer had no valid hidden states
-                    float* accum_ptr = &gen_accum[li * n_embd];
-                    // Divide by count to get mean
-                    float inv = 1.0f / (float)n_gen;
-                    HS_SIMD
-                    for (int d = 0; d < n_embd; d++) {
-                        mean_buf[d] = accum_ptr[d] * inv;
-                    }
-                    // Accumulate into the group/mask/layer accumulator.
-                    // Use target_layers[li] (the REAL layer number), matching the
-                    // comprehension accumulation loop. Using the loop index `li`
-                    // would silently mislabel layers in the binary accumulator output.
-                    uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
-                    auto& acc = accumulators[acc_key];
-                    if (acc.sum.empty()) {
-                        acc.sum.assign(mean_buf.data(), mean_buf.data() + n_embd);
-                        acc.count = 1;
-                    } else {
-                        HS_SIMD
-                        for (int d = 0; d < n_embd; d++) {
-                            acc.sum[d] += mean_buf[d];
-                        }
-                        acc.count++;
-                    }
-                }
-            }
-
             // Skip the normal comprehension-mode extraction below.
             // The shared tail does the bookkeeping (counters, checkpoint,
             // progress) identically to the comprehension path.
@@ -1676,6 +1721,10 @@ static int run_batch(const Args& args) {
                 prof_total_kv     += std::chrono::duration<double, std::milli>(t_kv_end - t_kv_start).count();
                 prof_total_decode += std::chrono::duration<double, std::milli>(t_decode_end - t_decode_start).count();
                 prof_count++;
+            }
+            if (!after_prompt_done()) {
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
+                return 1;
             }
             if (!after_prompt_done()) {
                 stop_producer_and_join(pfq, producer_thread, records_temp_path);
