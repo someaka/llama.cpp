@@ -866,27 +866,47 @@ static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::st
 // -- Batch Mode Helpers -------------------------------------------------
 
 /**
- * Pre-scan prompts.txt to estimate max token count and auto-size n_ctx.
- * Uses chars / 3.5 as token estimate. Returns max(estimated_max + 64, 512).
+ * Single pre-scan of prompts.txt. Collects everything the pre-flight passes
+ * need: non-empty line count (header/validation) and max line length
+ * (auto-ctx estimate). One I/O pass serves run_raw, run_batch, and
+ * load_model_session (task-0 #10: was three separate scans).
  */
-static bool auto_size_ctx(const char* prompts_file, int32_t& n_ctx) {
+struct PromptsScan {
+    int32_t n_nonempty = 0;
+    size_t max_len = 0;
+};
+
+static bool scan_prompts_file(const char* prompts_file, PromptsScan& scan) {
     std::ifstream fin(prompts_file);
     if (!fin) {
-        fprintf(stderr, "Error: cannot open %s for ctx pre-scan\n", prompts_file);
+        fprintf(stderr, "Error: cannot open %s for pre-scan\n", prompts_file);
         return false;
     }
 
-    size_t max_len = 0;
     std::string line;
     while (std::getline(fin, line)) {
-        if (line.size() > max_len) max_len = line.size();
+        if (!line.empty()) scan.n_nonempty++;
+        if (line.size() > scan.max_len) scan.max_len = line.size();
     }
-
-    int32_t estimated = (int32_t)(max_len / CHARS_PER_TOKEN) + 64;
-    n_ctx = estimated > MIN_CTX_SIZE ? estimated : MIN_CTX_SIZE;
-    fprintf(stderr, "Auto-ctx: max line %zu chars -> estimated %d tokens -> n_ctx=%d\n",
-            max_len, (int)(max_len / CHARS_PER_TOKEN), n_ctx);
+    // getline returns false for both EOF and I/O error; a bad stream would
+    // under-count and under-size everything downstream.
+    if (fin.bad()) {
+        fprintf(stderr, "Error: I/O error reading prompts file during pre-scan (bad stream)\n");
+        return false;
+    }
     return true;
+}
+
+/**
+ * Auto-size n_ctx from a completed scan. Uses chars / 3.5 as token estimate.
+ * Returns max(estimated_max + 64, 512).
+ */
+static int32_t ctx_from_scan(const PromptsScan& scan) {
+    int32_t estimated = (int32_t)(scan.max_len / CHARS_PER_TOKEN) + 64;
+    int32_t n_ctx = estimated > MIN_CTX_SIZE ? estimated : MIN_CTX_SIZE;
+    fprintf(stderr, "Auto-ctx: max line %zu chars -> estimated %d tokens -> n_ctx=%d\n",
+            scan.max_len, (int)(scan.max_len / CHARS_PER_TOKEN), n_ctx);
+    return n_ctx;
 }
 
 /**
@@ -1052,7 +1072,7 @@ struct ModelSession {
 // Common prologue shared by run_raw and run_batch: load the model, validate
 // dimensions, resolve target layers, size the context, create the extraction
 // context. Returns false (with a stderr message) on failure.
-static bool load_model_session(const Args& args, ModelSession& s) {
+static bool load_model_session(const Args& args, const PromptsScan& scan, ModelSession& s) {
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = args.n_gpu_layers;
     s.model = LlamaModel(llama_model_load_from_file(args.model_path, mparams));
@@ -1094,8 +1114,8 @@ static bool load_model_session(const Args& args, ModelSession& s) {
     // Auto-size context or use --ctx-size
     if (args.ctx_size > 0) {
         s.n_ctx = args.ctx_size;
-    } else if (!auto_size_ctx(args.prompts_file, s.n_ctx)) {
-        return false;
+    } else {
+        s.n_ctx = ctx_from_scan(scan);
     }
     if (s.n_ctx > s.n_ctx_train) s.n_ctx = s.n_ctx_train;
     fprintf(stderr, "Using n_ctx=%d\n", s.n_ctx);
@@ -1121,8 +1141,10 @@ static bool load_model_session(const Args& args, ModelSession& s) {
 }
 
 static int run_raw(const Args& args) {
+    PromptsScan scan;
+    if (!scan_prompts_file(args.prompts_file, scan)) return 1;
     ModelSession ms;
-    if (!load_model_session(args, ms)) return 1;
+    if (!load_model_session(args, scan, ms)) return 1;
     // Local references keep the body unchanged from the pre-extraction code.
     LlamaModel& model = ms.model;
     LlamaContext& ctx = ms.ctx;
@@ -1143,23 +1165,9 @@ static int run_raw(const Args& args) {
     }
     fprintf(stderr, "Writing output to %s\n", args.output_path);
 
-    // Stream prompts.txt -- count lines for header first
-    // Two-pass: first count lines, then process
-    int32_t n_prompts_total = 0;
-    {
-        std::ifstream count_fin(args.prompts_file);
-        std::string line;
-        while (std::getline(count_fin, line)) {
-            if (!line.empty()) n_prompts_total++;
-        }
-        // getline returns false for both EOF and I/O error; a bad stream
-        // here would count a truncated file, and the header would then
-        // certify the truncated body as complete in the second pass.
-        if (count_fin.bad()) {
-            fprintf(stderr, "Error: I/O error reading prompts file during count pass (bad stream)\n");
-            return 1;
-        }
-    }
+    // Prompt count from the single pre-scan; the TOCTOU guard below still
+    // compares it against the processed count from the streaming pass.
+    int32_t n_prompts_total = scan.n_nonempty;
 
     // Global header
     if (fwrite(&n_prompts_total, sizeof(int32_t), 1, out) != 1) {
@@ -1641,8 +1649,10 @@ static bool read_checkpoint(
  */
 static int run_batch(const Args& args) {
     // -- Setup (RAII: destructors handle cleanup on all return paths) --
+    PromptsScan scan;
+    if (!scan_prompts_file(args.prompts_file, scan)) return 1;
     ModelSession ms;
-    if (!load_model_session(args, ms)) return 1;
+    if (!load_model_session(args, scan, ms)) return 1;
     // Local references keep the body unchanged from the pre-extraction code.
     LlamaModel& model = ms.model;
     LlamaContext& ctx = ms.ctx;
@@ -1684,27 +1694,16 @@ static int run_batch(const Args& args) {
         return 1;
     }
 
-    // Validate prompt count: assignments.bin and prompts.txt must agree.
-    // Without this, a mismatch between files from different pipeline runs
-    // causes silent desync (EOF or leftover assignments) with a generic
-    // error message instead of a clear upfront diagnostic.
-    {
-        std::ifstream count_fin(args.prompts_file);
-        if (!count_fin) {
-            fprintf(stderr, "Error: cannot re-open prompts file for line count\n");
-            return 1;
-        }
-        int32_t n_prompts_actual = 0;
-        std::string cline;
-        while (std::getline(count_fin, cline)) {
-            if (!cline.empty()) n_prompts_actual++;
-        }
-        if (n_prompts_actual != n_prompts_expected) {
-            fprintf(stderr, "Error: prompt count mismatch - assignments.bin expects %d prompts "
-                            "but prompts.txt has %d non-empty lines\n",
-                    n_prompts_expected, n_prompts_actual);
-            return 1;
-        }
+    // Validate prompt count: assignments.bin and prompts.txt must agree
+    // (count from the single pre-scan). Without this, a mismatch between
+    // files from different pipeline runs causes silent desync (EOF or
+    // leftover assignments) with a generic error message instead of a clear
+    // upfront diagnostic.
+    if (scan.n_nonempty != n_prompts_expected) {
+        fprintf(stderr, "Error: prompt count mismatch - assignments.bin expects %d prompts "
+                        "but prompts.txt has %d non-empty lines\n",
+                n_prompts_expected, scan.n_nonempty);
+        return 1;
     }
 
     // Validate n_embd if specified
