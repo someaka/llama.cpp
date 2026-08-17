@@ -1,7 +1,8 @@
 # Hidden-States Adoption Manifest - all architecture graph builders
 
 Generated 2026-08-16 from the exhaustive classification pass over src/models/
-(148 arch files after the 2026-08-17 upstream merge brought bailingmoe3;
+(148 arch files after the 2026-08-17 upstream syncs brought bailingmoe3
+(earlier same-day sync, 373336672, before the ec5368b2a merge);
 127 builders with graph loops classified; every row carries
 file:line evidence from source reads, not sampling).
 
