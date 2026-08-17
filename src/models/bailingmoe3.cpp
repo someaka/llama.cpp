@@ -382,6 +382,8 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
 
     ggml_tensor * cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);

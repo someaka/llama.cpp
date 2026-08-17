@@ -1,7 +1,8 @@
 # Hidden-States Adoption Manifest - all architecture graph builders
 
 Generated 2026-08-16 from the exhaustive classification pass over src/models/
-(147 arch files; 126 builders with graph loops classified; every row carries
+(148 arch files after the 2026-08-17 upstream merge brought bailingmoe3;
+127 builders with graph loops classified; every row carries
 file:line evidence from source reads, not sampling).
 
 
@@ -91,99 +92,100 @@ reassignment that follows the final residual add listed below.
 | 5 | llama_model_baichuan | src/models/baichuan.cpp | 130 |
 | 6 | llama_model_bailingmoe | src/models/bailingmoe.cpp | 155 |
 | 7 | llama_model_bailingmoe2 | src/models/bailingmoe2.cpp | 191 |
-| 8 | llama_model_bert | src/models/bert.cpp | 218 |
-| 9 | llama_model_bitnet | src/models/bitnet.cpp | 143 |
-| 10 | llama_model_bloom | src/models/bloom.cpp | 128 |
-| 11 | llama_model_chameleon | src/models/chameleon.cpp | 164 |
-| 12 | llama_model_chatglm | src/models/chatglm.cpp | 138 |
-| 13 | llama_model_codeshell | src/models/codeshell.cpp | 130 |
-| 14 | llama_model_cogvlm | src/models/cogvlm.cpp | 138 |
-| 15 | llama_model_dbrx | src/models/dbrx.cpp | 128 |
-| 16 | llama_model_deci | src/models/deci.cpp | 168 |
-| 17 | llama_model_deepseek | src/models/deepseek.cpp | 172 |
-| 18 | llama_model_deepseek2 | src/models/deepseek2.cpp | 692 |
-| 19 | llama_model_deepseek32 | src/models/deepseek32.cpp | 495 |
-| 20 | llama_model_dots1 | src/models/dots1.cpp | 171 |
-| 21 | llama_model_dream | src/models/dream.cpp | 116 |
-| 22 | llama_model_ernie4_5 | src/models/ernie4-5.cpp | 142 |
-| 23 | llama_model_ernie4_5_moe | src/models/ernie4-5-moe.cpp | 110 |
-| 24 | llama_model_eurobert | src/models/eurobert.cpp | 109 |
-| 25 | llama_model_exaone | src/models/exaone.cpp | 113 |
-| 26 | llama_model_exaone4 | src/models/exaone4.cpp | 169 |
-| 27 | llama_model_exaone_moe | src/models/exaone-moe.cpp | 221 |
-| 28 | llama_model_gemma | src/models/gemma.cpp | 115 |
-| 29 | llama_model_gemma2 | src/models/gemma2.cpp | 148 |
-| 30 | llama_model_gemma3 | src/models/gemma3.cpp | 192 |
-| 31 | llama_model_gemma4 | src/models/gemma4.cpp | 361 |
-| 32 | llama_model_gemma4_assistant | src/models/gemma4-assistant.cpp | 181 |
-| 33 | llama_model_gemma_embedding | src/models/gemma-embedding.cpp | 161 |
-| 34 | llama_model_glm4 | src/models/glm4.cpp | 169 |
-| 35 | llama_model_glm4_moe | src/models/glm4-moe.cpp | 259 |
-| 36 | llama_model_glm_dsa | src/models/glm-dsa.cpp | 541 |
-| 37 | llama_model_gpt2 | src/models/gpt2.cpp | 125 |
-| 38 | llama_model_granite | src/models/granite.cpp | 306 (in build_layer_ffn helper) |
-| 39 | llama_model_grok | src/models/grok.cpp | 190 |
-| 40 | llama_model_grovemoe | src/models/grovemoe.cpp | 170 |
-| 41 | llama_model_hunyuan_moe | src/models/hunyuan-moe.cpp | 164 |
-| 42 | llama_model_hunyuan_vl | src/models/hunyuan-vl.cpp | 167 |
-| 43 | llama_model_hy_v3 | src/models/hy-v3.cpp | 208 |
-| 44 | llama_model_internlm2 | src/models/internlm2.cpp | 115 |
-| 45 | llama_model_jais | src/models/jais.cpp | 110 |
-| 46 | llama_model_jais2 | src/models/jais2.cpp | 140 |
-| 47 | llama_model_jamba | src/models/jamba.cpp | 177 |
-| 48 | llama_model_laguna | src/models/laguna.cpp | 316 |
-| 49 | llama_model_llada | src/models/llada.cpp | 136 |
-| 50 | llama_model_llada_moe | src/models/llada-moe.cpp | 139 |
-| 51 | llama_model_llama | src/models/llama.cpp | 220 |
-| 52 | llama_model_llama4 | src/models/llama4.cpp | 245 |
-| 53 | llama_model_maincoder | src/models/maincoder.cpp | 127 |
-| 54 | llama_model_mellum | src/models/mellum.cpp | 197 |
-| 55 | llama_model_mimo2 | src/models/mimo2.cpp | 225 |
-| 56 | llama_model_minicpm3 | src/models/minicpm3.cpp | 231 |
-| 57 | llama_model_minimax_01 | src/models/minimax-01.cpp | 494 |
-| 58 | llama_model_minimax_m2 | src/models/minimax-m2.cpp | 144 |
-| 59 | llama_model_minimax_m3 | src/models/minimax-m3.cpp | 582 |
-| 60 | llama_model_mistral3 | src/models/mistral3.cpp | 210 |
-| 61 | llama_model_modern_bert | src/models/modern-bert.cpp | 159 |
-| 62 | llama_model_mpt | src/models/mpt.cpp | 148 |
-| 63 | llama_model_muse_glimmer | src/models/muse-glimmer.cpp | 175 |
-| 64 | llama_model_nanbeige | src/models/nanbeige.cpp | 155 |
-| 65 | llama_model_nemotron | src/models/nemotron.cpp | 125 |
-| 66 | llama_model_neo_bert | src/models/neo-bert.cpp | 119 |
-| 67 | llama_model_olmo | src/models/olmo.cpp | 117 |
-| 68 | llama_model_olmo2 | src/models/olmo2.cpp | 182 |
-| 69 | llama_model_olmoe | src/models/olmoe.cpp | 150 |
-| 70 | llama_model_openai_moe | src/models/openai-moe.cpp | 147 |
-| 71 | llama_model_openelm | src/models/openelm.cpp | 148 |
-| 72 | llama_model_orion | src/models/orion.cpp | 117 |
-| 73 | llama_model_paddleocr | src/models/paddleocr.cpp | 85 |
-| 74 | llama_model_pangu_embed | src/models/pangu-embed.cpp | 132 |
-| 75 | llama_model_phi2 | src/models/phi2.cpp | 117 |
-| 76 | llama_model_phi3 | src/models/phi3.cpp | 166 |
-| 77 | llama_model_plamo | src/models/plamo.cpp | 112 |
-| 78 | llama_model_plamo3 | src/models/plamo3.cpp | 174 |
-| 79 | llama_model_plm | src/models/plm.cpp | 191 |
-| 80 | llama_model_pockettts | src/models/pockettts.cpp | 123 |
-| 81 | llama_model_qwen | src/models/qwen.cpp | 116 |
-| 82 | llama_model_qwen2 | src/models/qwen2.cpp | 127 |
-| 83 | llama_model_qwen2moe | src/models/qwen2moe.cpp | 170 |
-| 84 | llama_model_qwen2vl | src/models/qwen2vl.cpp | 119 |
-| 85 | llama_model_qwen3 | src/models/qwen3.cpp | 135 |
-| 86 | llama_model_qwen35 | src/models/qwen35.cpp | 199 |
-| 87 | llama_model_qwen3moe | src/models/qwen3moe.cpp | 155 |
-| 88 | llama_model_qwen3vl | src/models/qwen3vl.cpp | 154 |
-| 89 | llama_model_qwen3vlmoe | src/models/qwen3vlmoe.cpp | 166 |
-| 90 | llama_model_refact | src/models/refact.cpp | 136 |
-| 91 | llama_model_rnd1 | src/models/rnd1.cpp | 153 |
-| 92 | llama_model_seed_oss | src/models/seed-oss.cpp | 126 |
-| 93 | llama_model_smallthinker | src/models/smallthinker.cpp | 166 |
-| 94 | llama_model_smollm3 | src/models/smollm3.cpp | 127 |
-| 95 | llama_model_stablelm | src/models/stablelm.cpp | 147 |
-| 96 | llama_model_starcoder | src/models/starcoder.cpp | 123 |
-| 97 | llama_model_starcoder2 | src/models/starcoder2.cpp | 134 |
-| 98 | llama_model_step35 | src/models/step35.cpp | 340 |
-| 99 | llama_model_talkie | src/models/talkie.cpp | 126 |
-| 100 | llama_model_xverse | src/models/xverse.cpp | 114 |
+| 9 bailingmoe3 | src/models/bailingmoe3.cpp | 383 |
+| 9 bert | src/models/bert.cpp | 218 |
+| 10 bitnet | src/models/bitnet.cpp | 143 |
+| 11 bloom | src/models/bloom.cpp | 128 |
+| 12 chameleon | src/models/chameleon.cpp | 164 |
+| 13 chatglm | src/models/chatglm.cpp | 138 |
+| 14 codeshell | src/models/codeshell.cpp | 130 |
+| 15 cogvlm | src/models/cogvlm.cpp | 138 |
+| 16 dbrx | src/models/dbrx.cpp | 128 |
+| 17 deci | src/models/deci.cpp | 168 |
+| 18 deepseek | src/models/deepseek.cpp | 172 |
+| 19 deepseek2 | src/models/deepseek2.cpp | 692 |
+| 20 deepseek32 | src/models/deepseek32.cpp | 495 |
+| 21 dots1 | src/models/dots1.cpp | 171 |
+| 22 dream | src/models/dream.cpp | 116 |
+| 23 ernie4_5 | src/models/ernie4-5.cpp | 142 |
+| 24 ernie4_5_moe | src/models/ernie4-5-moe.cpp | 110 |
+| 25 eurobert | src/models/eurobert.cpp | 109 |
+| 26 exaone | src/models/exaone.cpp | 113 |
+| 27 exaone4 | src/models/exaone4.cpp | 169 |
+| 28 exaone_moe | src/models/exaone-moe.cpp | 221 |
+| 29 gemma | src/models/gemma.cpp | 116 |
+| 30 gemma2 | src/models/gemma2.cpp | 148 |
+| 31 gemma3 | src/models/gemma3.cpp | 192 |
+| 32 gemma4 | src/models/gemma4.cpp | 362 |
+| 33 gemma4_assistant | src/models/gemma4-assistant.cpp | 181 |
+| 34 gemma_embedding | src/models/gemma-embedding.cpp | 161 |
+| 35 glm4 | src/models/glm4.cpp | 169 |
+| 36 glm4_moe | src/models/glm4-moe.cpp | 259 |
+| 37 glm_dsa | src/models/glm-dsa.cpp | 541 |
+| 38 gpt2 | src/models/gpt2.cpp | 125 |
+| 39 granite | src/models/granite.cpp | 306 (in build_layer_ffn helper) |
+| 40 grok | src/models/grok.cpp | 190 |
+| 41 grovemoe | src/models/grovemoe.cpp | 170 |
+| 42 hunyuan_moe | src/models/hunyuan-moe.cpp | 164 |
+| 43 hunyuan_vl | src/models/hunyuan-vl.cpp | 167 |
+| 44 hy_v3 | src/models/hy-v3.cpp | 208 |
+| 45 internlm2 | src/models/internlm2.cpp | 115 |
+| 46 jais | src/models/jais.cpp | 110 |
+| 47 jais2 | src/models/jais2.cpp | 140 |
+| 48 jamba | src/models/jamba.cpp | 177 |
+| 49 laguna | src/models/laguna.cpp | 316 |
+| 50 llada | src/models/llada.cpp | 136 |
+| 51 llada_moe | src/models/llada-moe.cpp | 139 |
+| 52 llama | src/models/llama.cpp | 221 |
+| 53 llama4 | src/models/llama4.cpp | 245 |
+| 54 maincoder | src/models/maincoder.cpp | 127 |
+| 55 mellum | src/models/mellum.cpp | 197 |
+| 56 mimo2 | src/models/mimo2.cpp | 225 |
+| 57 minicpm3 | src/models/minicpm3.cpp | 231 |
+| 58 minimax_01 | src/models/minimax-01.cpp | 494 |
+| 59 minimax_m2 | src/models/minimax-m2.cpp | 144 |
+| 60 minimax_m3 | src/models/minimax-m3.cpp | 582 |
+| 61 mistral3 | src/models/mistral3.cpp | 210 |
+| 62 modern_bert | src/models/modern-bert.cpp | 159 |
+| 63 mpt | src/models/mpt.cpp | 148 |
+| 64 muse_glimmer | src/models/muse-glimmer.cpp | 175 |
+| 65 nanbeige | src/models/nanbeige.cpp | 155 |
+| 66 nemotron | src/models/nemotron.cpp | 125 |
+| 67 neo_bert | src/models/neo-bert.cpp | 119 |
+| 68 olmo | src/models/olmo.cpp | 117 |
+| 69 olmo2 | src/models/olmo2.cpp | 182 |
+| 70 olmoe | src/models/olmoe.cpp | 150 |
+| 71 openai_moe | src/models/openai-moe.cpp | 147 |
+| 72 openelm | src/models/openelm.cpp | 148 |
+| 73 orion | src/models/orion.cpp | 117 |
+| 74 paddleocr | src/models/paddleocr.cpp | 85 |
+| 75 pangu_embed | src/models/pangu-embed.cpp | 132 |
+| 76 phi2 | src/models/phi2.cpp | 117 |
+| 77 phi3 | src/models/phi3.cpp | 166 |
+| 78 plamo | src/models/plamo.cpp | 112 |
+| 79 plamo3 | src/models/plamo3.cpp | 174 |
+| 80 plm | src/models/plm.cpp | 191 |
+| 81 pockettts | src/models/pockettts.cpp | 123 |
+| 82 qwen | src/models/qwen.cpp | 116 |
+| 83 qwen2 | src/models/qwen2.cpp | 127 |
+| 84 qwen2moe | src/models/qwen2moe.cpp | 170 |
+| 85 qwen2vl | src/models/qwen2vl.cpp | 119 |
+| 86 qwen3 | src/models/qwen3.cpp | 135 |
+| 87 qwen35 | src/models/qwen35.cpp | 200 |
+| 88 qwen3moe | src/models/qwen3moe.cpp | 155 |
+| 89 qwen3vl | src/models/qwen3vl.cpp | 154 |
+| 90 qwen3vlmoe | src/models/qwen3vlmoe.cpp | 166 |
+| 91 refact | src/models/refact.cpp | 136 |
+| 92 rnd1 | src/models/rnd1.cpp | 153 |
+| 93 seed_oss | src/models/seed-oss.cpp | 126 |
+| 94 smallthinker | src/models/smallthinker.cpp | 166 |
+| 95 smollm3 | src/models/smollm3.cpp | 127 |
+| 96 stablelm | src/models/stablelm.cpp | 147 |
+| 97 starcoder | src/models/starcoder.cpp | 123 |
+| 98 starcoder2 | src/models/starcoder2.cpp | 134 |
+| 99 step35 | src/models/step35.cpp | 340 |
+| 100 talkie | src/models/talkie.cpp | 126 |
+| 101 xverse | src/models/xverse.cpp | 114 |
 
 Of the 126 builders reviewed, 100 are ADOPT and 26 are REFUSE. Of the 100
 ADOPT rows, 4 are the active registry references (llama, gemma, gemma4,
