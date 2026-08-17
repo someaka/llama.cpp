@@ -432,6 +432,19 @@ struct server_slot {
     bool can_batch_with(server_slot & other_slot) const {
         GGML_ASSERT(task);
 
+        // HIDDEN_STATES tasks must never share a decode batch with ANY other
+        // slot (including another HIDDEN_STATES task): all slots share one
+        // ctx_tgt, so the hidden-state capture buffer accumulates every token
+        // in the batch — a co-batched slot's tokens would pollute the
+        // response (mixed token streams, wrong last-token, pool=none
+        // returning other prompts' vectors). Serialize them instead: the
+        // batching loop skips a slot that cannot batch with the current
+        // head, so a HIDDEN_STATES task decodes alone.
+        if (task->type == SERVER_TASK_TYPE_HIDDEN_STATES ||
+                other_slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+            return false;
+        }
+
         return task->type == other_slot.task->type
             && inp_embd.size() == other_slot.inp_embd.size()
             && are_lora_equal(lora, other_slot.lora);
