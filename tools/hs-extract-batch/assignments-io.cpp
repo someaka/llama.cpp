@@ -63,8 +63,7 @@ bool read_assignments_header(
 }
 
 /**
-
-/** * Read one prompt's assignments from assignments.bin (sequential read).
+ * Read one prompt's assignments from assignments.bin (sequential read).
  * Must be called in prompt order, matching prompts.txt line order.
  * Returns explicit status so EOF, valid zero-assignment prompts, and truncated
  * records cannot be confused.
