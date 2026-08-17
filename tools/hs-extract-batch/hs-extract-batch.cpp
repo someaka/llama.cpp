@@ -145,6 +145,7 @@ struct Args {
     const char* assignments_file = nullptr;   // --assignments: assignments.bin
     int ctx_size = 0;            // --ctx-size: override auto (0=auto)
     int checkpoint_every = 10000; // --checkpoint-every N
+    bool checkpoint_explicit = false; // whether --checkpoint-every was passed
     bool resume = false;          // --resume: continue from checkpoint
     int n_gpu_layers = ALL_GPU_LAYERS; // --n-gpu-layers / -ngl: GPU offload (ALL_GPU_LAYERS = all)
     bool save_per_record = false;  // --save-per-record: write per-record vectors sidecar
@@ -320,6 +321,7 @@ static Args parse_args(int argc, char** argv) {
                 exit(1);
             }
             args.checkpoint_every = (int)val;
+            args.checkpoint_explicit = true;
         } else if (arg == "--resume") {
             args.resume = true;
         } else if (arg == "--save-per-record") {
@@ -482,7 +484,9 @@ static Args parse_args(int argc, char** argv) {
                     "require --batch --generate; raw mode is comprehension-only\n");
             exit(1);
         }
-        if (args.resume || args.checkpoint_every > 0) {
+        // checkpoint_every defaults to 10000 (batch mode); reject only an
+        // EXPLICIT --resume/--checkpoint-every in raw mode, not the default.
+        if (args.resume || args.checkpoint_explicit) {
             fprintf(stderr, "Error: --resume/--checkpoint-every apply to batch mode only\n");
             exit(1);
         }
