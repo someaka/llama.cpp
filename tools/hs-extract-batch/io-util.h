@@ -8,6 +8,8 @@
 #include <cstdint>
 #ifndef _WIN32
 #include <unistd.h>  // fsync for durability before rename (POSIX)
+#include <fcntl.h>   // open/O_DIRECTORY for parent-dir fsync after rename
+#include <cerrno>
 #endif
 #include <string>
 
@@ -58,13 +60,40 @@ struct FilePtr {
 #endif
 };
 
+// fsync the parent directory of path after an atomic rename, so the rename
+// itself survives a power cut (fsync of the data file alone can lose the
+// rename). Best effort: an fsync failure on the directory is reported but
+// not fatal -- the data file is already synced; some filesystems do not
+// support directory fsync.
+static inline void fsync_parent_dir(const char* path) {
+#ifndef _WIN32
+    std::string p(path);
+    size_t slash = p.find_last_of('/');
+    std::string dir = (slash == std::string::npos)
+        ? std::string(".")
+        : p.substr(0, slash == 0 ? 1 : slash);
+    int dfd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dfd < 0) {
+        fprintf(stderr, "Warning: could not open dir %s for fsync (errno=%d)\n", dir.c_str(), errno);
+        return;
+    }
+    if (fsync(dfd) != 0) {
+        fprintf(stderr, "Warning: fsync of dir %s failed (errno=%d)\n", dir.c_str(), errno);
+    }
+    close(dfd);
+#else
+    (void) path;  // Windows: directory fsync not available via this path
+#endif
+}
+
 // Checked fwrite: verifies the full count was written. On failure prints an
 // error and returns false; callers must propagate the failure (never produce
 // corrupt files silently). Function form of the former CHECKED_WRITE macro.
 static inline bool checked_write(const void* ptr, size_t size, size_t count, FILE* f) {
     if (fwrite(ptr, size, count, f) != count) {
-        fprintf(stderr, "Error: write failed at %s:%d (expected %zu, wrote less)\n",
-                __FILE__, __LINE__, count);
+        // No __FILE__:__LINE__ in this message: as a static inline it would
+        // always report this header's location, not the caller's.
+        fprintf(stderr, "Error: write failed (expected %zu items)\n", count);
         return false;
     }
     return true;

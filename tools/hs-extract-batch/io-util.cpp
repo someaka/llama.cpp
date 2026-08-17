@@ -158,21 +158,26 @@ bool write_batch_output(
         return false;
     }
     bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
-    if (ok) {
-        if (!out.sync()) {  // flush + fsync: check for failures before rename
-            fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", temp_path.c_str());
-            out.reset();
-            std::remove(temp_path.c_str());
-            return false;
-        }
-        out.reset();  // close file before rename
-        if (rename(temp_path.c_str(), output_path) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
-            return false;
-        }
-        fprintf(stderr, "Output: written to %s\n", output_path);
+    if (!ok) {
+        out.reset();
+        std::remove(temp_path.c_str());  // no orphaned .tmp on write failure
+        return false;
     }
-    return ok;
+    if (!out.sync()) {  // flush + fsync: check for failures before rename
+        fprintf(stderr, "Error: sync failed for %s (disk full or I/O error)\n", temp_path.c_str());
+        out.reset();
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    out.reset();  // close file before rename
+    if (rename(temp_path.c_str(), output_path) != 0) {
+        fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
+        std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
+        return false;
+    }
+    fsync_parent_dir(output_path);
+    fprintf(stderr, "Output: written to %s\n", output_path);
+    return true;
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
@@ -198,25 +203,38 @@ bool write_checkpoint(
         fprintf(stderr, "Error: cannot write checkpoint to %s\n", temp_path.c_str());
         return false;
     }
-    if (!checked_write(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f)) return false;
-    if (!checked_write(&n_iterated, sizeof(int32_t), 1, f)) return false;
-    bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
-    if (ok) {
-        if (!f.sync()) {  // flush + fsync: check for failures before rename
-            fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
-            f.reset();
-            std::remove(temp_path.c_str());
-            return false;
-        }
-        f.reset();  // close file before rename
-        // Atomic rename: temp -> final
-        if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), ckpt_path.c_str());
-            return false;
-        }
-        fprintf(stderr, "Checkpoint saved: %d prompts -> %s\n", n_iterated, ckpt_path.c_str());
+    if (!checked_write(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f)) {
+        f.reset();
+        std::remove(temp_path.c_str());
+        return false;
     }
-    return ok;
+    if (!checked_write(&n_iterated, sizeof(int32_t), 1, f)) {
+        f.reset();
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
+    if (!ok) {
+        f.reset();
+        std::remove(temp_path.c_str());  // no orphaned .tmp on write failure
+        return false;
+    }
+    if (!f.sync()) {  // flush + fsync: check for failures before rename
+        fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
+        f.reset();
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    f.reset();  // close file before rename
+    // Atomic rename: temp -> final
+    if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
+        fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), ckpt_path.c_str());
+        std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
+        return false;
+    }
+    fsync_parent_dir(ckpt_path.c_str());
+    fprintf(stderr, "Checkpoint saved: %d prompts -> %s\n", n_iterated, ckpt_path.c_str());
+    return true;
 }
 
 /**
