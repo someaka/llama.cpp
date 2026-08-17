@@ -118,24 +118,7 @@ struct FilePtr {
 #include "hs-kernels.h"
 #include "io-util.h"
 #include "self-test.h"
-
-// -- Named Constants (replaces magic numbers throughout) -------------------
-
-static constexpr int32_t MIN_CTX_SIZE       = 512;     // minimum context size
-static constexpr double   CHARS_PER_TOKEN   = 3.5;     // tokenizer estimate for auto-ctx
-static constexpr int32_t MAX_PROMPTS        = 10000000; // max prompts in file
-static constexpr int32_t MAX_N_EMBD         = 65536;   // max embedding dimension
-static constexpr int32_t MAX_GROUPS         = 10000;   // max label groups
-static constexpr int32_t MAX_LAYERS         = 10000;   // max layers in checkpoint
-static constexpr int32_t MAX_MASKS          = 65536;   // max masks in checkpoint
-static constexpr int32_t MAX_ASSIGNMENTS    = 100000;  // max assignments per prompt
-static constexpr int32_t MAX_RANGES         = 100000;  // max ranges per assignment
-static constexpr int32_t MAX_GROUP_NAME_LEN = 1000;    // max group name length
-static constexpr int32_t ALL_GPU_LAYERS     = 99;      // load all layers on GPU
-static constexpr int      PROGRESS_INTERVAL  = 100;     // prompts between progress reports
-static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max batch size for multi mode
-
-// -- Argument Parsing ---------------------------------------------------
+#include "assignments-io.h"
 
 struct Args {
     const char* model_path = nullptr;
@@ -505,25 +488,6 @@ static Args parse_args(int argc, char** argv) {
     exit(1);
 }
 
-// Wraps fwrite for per-record sidecar writes. On failure: print error, signal
-// producer to stop, join the producer thread, remove the per-record temp file
-// (same cleanup contract as STOP_PRODUCER_AND_JOIN — a leftover
-// .records.bin.tmp would be picked up by a subsequent run's parser), and
-// return 1 from the calling function. All captured state is passed
-// explicitly; no implicit scope capture.
-#define RECORDS_WRITE(ptr, size, count, fp, pfq_ref, thread_ref)               \
-    do {                                                                        \
-        if (fwrite((ptr), (size), (count), (fp)) != (size_t)(count)) {         \
-            fprintf(stderr, "Error: per-record write failed at %s:%d\n",        \
-                    __FILE__, __LINE__);                                        \
-            { std::lock_guard<std::mutex> _lk((pfq_ref).mtx); (pfq_ref).producer_done = true; } \
-            (pfq_ref).cv_space.notify_all();                                    \
-            (thread_ref).join();                                                \
-            if (!(records_temp_path).empty()) std::remove((records_temp_path).c_str()); \
-            return 1;                                                           \
-        }                                                                       \
-    } while (0)
-
 // Stop the producer thread cleanly from a consumer error path.
 // Sets producer_done (unblocks a producer waiting on cv_space backpressure)
 // and joins the thread. Used at every consumer error exit point.
@@ -543,38 +507,7 @@ static Args parse_args(int argc, char** argv) {
 
 // -- Batch Mode Constants & Data Structures -----------------------------
 
-static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
-
-// Repeat-penalty window (last_n) for generation-mode sampling: tokens further
-// back than this are not penalized. Fixed, not CLI-tunable; named instead of
-// a bare literal at the call site.
 static constexpr int REPEAT_PENALTY_LAST_N = 64;
-// One (group, mask) assignment for a prompt.
-struct Assignment {
-    int32_t group_id;
-    int32_t mask_id;
-    int32_t mask_type;    // 0 = simple_skip, 1 = explicit_ranges
-    int32_t skip;         // valid when mask_type == 0
-    std::vector<std::pair<int,int>> ranges;  // valid when mask_type == 1
-};
-
-// Group name table from assignments.bin header.
-struct GroupTable {
-    int32_t n_groups = 0;
-    std::vector<std::string> names;  // indexed by group_id
-};
-
-enum class AssignmentReadStatus {
-    ok,
-    eof,
-    error,
-};
-
-struct AssignmentReadResult {
-    AssignmentReadStatus status = AssignmentReadStatus::error;
-    std::vector<Assignment> assignments;
-};
-
 // -- Layer Parsing ------------------------------------------------------
 
 static std::vector<int> parse_layers(const std::string& s, int n_layer) {
@@ -887,139 +820,6 @@ static int32_t ctx_from_scan(const PromptsScan& scan) {
     fprintf(stderr, "Auto-ctx: max line %zu chars -> estimated %d tokens -> n_ctx=%d\n",
             scan.max_len, (int)(scan.max_len / CHARS_PER_TOKEN), n_ctx);
     return n_ctx;
-}
-
-/**
- * Read assignments.bin header: magic, n_prompts, n_embd, group name table.
- * Leaves file position at the start of per-prompt data.
- * Returns true on success.
- */
-static bool read_assignments_header(
-    FILE* f, int32_t& n_prompts, int32_t& n_embd_expected, GroupTable& groups
-) {
-    int32_t magic = 0;
-    if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != ASSIGNMENTS_MAGIC) {
-        fprintf(stderr, "Error: invalid assignments.bin magic (got 0x%08X, expected 0x%08X)\n",
-                magic, ASSIGNMENTS_MAGIC);
-        return false;
-    }
-    if (fread(&n_prompts, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_embd_expected, sizeof(int32_t), 1, f) != 1) return false;
-
-    // Validate n_prompts and n_embd to prevent UB on corrupt file
-    if (n_prompts <= 0 || n_prompts > MAX_PROMPTS) {
-        fprintf(stderr, "Error: n_prompts %d out of range [1, %d] - corrupt assignments.bin\n", n_prompts, MAX_PROMPTS);
-        return false;
-    }
-    if (n_embd_expected < 0 || n_embd_expected > MAX_N_EMBD) {
-        fprintf(stderr, "Error: n_embd %d out of range [0, %d] - corrupt assignments.bin\n", n_embd_expected, MAX_N_EMBD);
-        return false;
-    }
-
-    if (fread(&groups.n_groups, sizeof(int32_t), 1, f) != 1) return false;
-
-    // Validate n_groups to prevent OOM on corrupt file
-    if (groups.n_groups < 0 || groups.n_groups > MAX_GROUPS) {
-        fprintf(stderr, "Error: n_groups %d out of range [0, %d] - corrupt assignments.bin\n", groups.n_groups, MAX_GROUPS);
-        return false;
-    }
-    groups.names.resize(groups.n_groups);
-    for (int32_t i = 0; i < groups.n_groups; i++) {
-        int32_t name_len = 0;
-        if (fread(&name_len, sizeof(int32_t), 1, f) != 1) return false;
-        // Validate name_len to prevent OOM on corrupt file
-        if (name_len < 0 || name_len > MAX_GROUP_NAME_LEN) {
-            fprintf(stderr, "Error: group name length %d out of range [0, %d] - corrupt assignments.bin\n", name_len, MAX_GROUP_NAME_LEN);
-            return false;
-        }
-        std::vector<char> buf(name_len > 0 ? name_len : 1, 0);
-        if (name_len > 0 && fread(buf.data(), 1, name_len, f) != (size_t)name_len) return false;
-        groups.names[i] = std::string(buf.data(), name_len);
-    }
-
-    fprintf(stderr, "Assignments: %d prompts, %d groups, n_embd_expected=%d\n",
-            n_prompts, groups.n_groups, n_embd_expected);
-    return true;
-}
-
-/**
- * Read one prompt's assignments from assignments.bin (sequential read).
- * Must be called in prompt order, matching prompts.txt line order.
- * Returns explicit status so EOF, valid zero-assignment prompts, and truncated
- * records cannot be confused.
- */
-static AssignmentReadResult read_prompt_assignments(FILE* f) {
-    int32_t n_assignments = 0;
-    if (fread(&n_assignments, sizeof(int32_t), 1, f) != 1) {
-        if (feof(f)) return {AssignmentReadStatus::eof, {}};
-        fprintf(stderr, "Error: failed to read n_assignments at offset %ld\n", ftell(f));
-        return {AssignmentReadStatus::error, {}};
-    }
-
-    if (n_assignments < 0 || n_assignments > MAX_ASSIGNMENTS) {
-        fprintf(stderr, "Error: n_assignments %d out of range [0, %d]\n", n_assignments, MAX_ASSIGNMENTS);
-        return {AssignmentReadStatus::error, {}};
-    }
-
-    std::vector<Assignment> assignments(n_assignments);
-    for (int32_t i = 0; i < n_assignments; i++) {
-        Assignment& a = assignments[i];
-        if (fread(&a.group_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        if (fread(&a.mask_id, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        // group_id/mask_id feed make_accum_key(), which truncates them to
-        // 16 bits (and group_id to 32 bits). Out-of-range values would
-        // silently alias into a different group/mask's statistics and
-        // produce checkpoints the tool's own reader rejects on --resume.
-        // Reject here, at the parse site, so every consumer (generation
-        // path, comprehension path, checkpoint writer) is covered.
-        if (a.group_id < 0 || a.group_id > 0xFFFF) {
-            fprintf(stderr, "Error: group_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.group_id);
-            return {AssignmentReadStatus::error, {}};
-        }
-        if (a.mask_id < 0 || a.mask_id > 0xFFFF) {
-            fprintf(stderr, "Error: mask_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.mask_id);
-            return {AssignmentReadStatus::error, {}};
-        }
-        if (fread(&a.mask_type, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-
-        if (a.mask_type == 0) {
-            if (fread(&a.skip, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-        } else if (a.mask_type == 1) {
-            int32_t n_ranges = 0;
-            if (fread(&n_ranges, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-            if (n_ranges < 0 || n_ranges > MAX_RANGES) {
-                fprintf(stderr, "Error: n_ranges %d out of range [0, %d]\n", n_ranges, MAX_RANGES);
-                return {AssignmentReadStatus::error, {}};
-            }
-            a.ranges.resize(n_ranges);
-            for (int32_t r = 0; r < n_ranges; r++) {
-                int32_t start = 0, end = 0;
-                if (fread(&start, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-                if (fread(&end, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
-                if (start < 0 || end < 0) {
-                    fprintf(stderr, "Error: assignment range [%d, %d) has negative bound  -  corrupt assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                if (start > end) {
-                    fprintf(stderr, "Error: assignment range [%d, %d) has start > end  -  corrupt assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                if (start == end) {
-                    // compute_masked_mean treats start >= end as a hard error, so
-                    // an empty range would abort the entire run deep in the kernel.
-                    // Reject it here at read time with a clear diagnostic instead.
-                    fprintf(stderr, "Error: assignment range [%d, %d) is empty (start == end)  -  "
-                                    "degenerate token span in assignments.bin\n", start, end);
-                    return {AssignmentReadStatus::error, {}};
-                }
-                a.ranges[r] = {start, end};
-            }
-        } else {
-            fprintf(stderr, "Error: unknown mask_type %d\n", a.mask_type);
-            return {AssignmentReadStatus::error, {}};
-        }
-    }
-    return {AssignmentReadStatus::ok, std::move(assignments)};
 }
 
 // -- Raw Mode (debug/parity) --------------------------------------------
