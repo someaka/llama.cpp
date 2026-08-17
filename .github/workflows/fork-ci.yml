@@ -208,6 +208,24 @@ jobs:
           LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states-c models/test-model.gguf
           echo "::endgroup::"
 
+      - name: Run logits probe + hs-extract-batch-test
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          echo "::group::Building llama-hs-probe"
+          cmake --build build --target llama-hs-probe -j"${BUILD_PARALLEL}"
+          echo "::endgroup::"
+          echo "::group::Building llama-hs-extract-batch-test"
+          cmake --build build --target llama-hs-extract-batch-test -j"${BUILD_PARALLEL}"
+          echo "::endgroup::"
+          echo "::group::llama-hs-probe (logits identical with/without extraction)"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox"
+          echo "::endgroup::"
+          echo "::group::llama-hs-extract-batch-test (warmup/toggle equivalence)"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 0
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 1
+          echo "::endgroup::"
+
       - name: Smoke test /hidden-states server endpoint
         timeout-minutes: 15
         run: |
