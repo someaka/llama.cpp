@@ -1,5 +1,5 @@
 set(TARGET llama-hs-extract-batch)
-add_executable(${TARGET} hs-extract-batch.cpp)
+add_executable(${TARGET} hs-extract-batch.cpp self-test.cpp)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
