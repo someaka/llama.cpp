@@ -1080,7 +1080,7 @@ extern "C" {
     // (post-block-i residual) = this index - 1.
     // Supported on the llama, gemma, gemma4 and qwen35 architectures
     // (single source of truth: llm_arch_supports_hidden_states() in
-    // src/llama-arch.cpp — extend that registry, not this list, when
+    // src/llama-arch.cpp -- extend that registry, not this list, when
     // adding architectures);
     // requires n_embd == n_embd_out (decode fails loud otherwise).
     // Returns a pointer to a flat float array of size n_tokens * n_embd_out,

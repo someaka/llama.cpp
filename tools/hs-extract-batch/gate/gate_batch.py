@@ -161,9 +161,9 @@ def main():
             if status == "FAIL":
                 fails += 1
     if fails:
-        print(f"\n{fails} MISMATCHES — refactor changed bytes")
+        print(f"\n{fails} MISMATCHES -- refactor changed bytes")
         return 1
-    print("\nALL_BYTE_IDENTICAL — refactor changed structure, not numerics")
+    print("\nALL_BYTE_IDENTICAL -- refactor changed structure, not numerics")
     return 0
 
 if __name__ == "__main__":

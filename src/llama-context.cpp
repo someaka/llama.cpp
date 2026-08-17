@@ -1865,7 +1865,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         const uint32_t n_embd_out = hparams.n_embd_out();
         // hidden_states ladder: index 0 (embeddings) through index n_layer
-        // (final block output) — one slot more than the block count.
+        // (final block output) -- one slot more than the block count.
         const int32_t n_slots = (int32_t) hparams.n_layer() + 1;
         const size_t total_size = (size_t)n_slots * n_tokens_all * n_embd_out;
         hidden_state_buf.resize(total_size);
