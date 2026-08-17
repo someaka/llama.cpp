@@ -51,18 +51,13 @@ static common_speculative_output_limits server_output_limits(const common_params
         return { params.n_batch, 1 };
     }
 
-    // the /hidden-states endpoint processes tasks that need
-    // per-token output buffers (like embedding/pooling mode). When hidden-states
-    // is active, the server must allocate n_batch outputs. For pure-generation
-    // workloads, fall through to upstream's optimized calculation to save memory.
-    //
-    // Since hidden-states tasks arrive dynamically and n_outputs_max is computed
-    // once at startup, we must be conservative: if this server might receive
-    // hidden-states requests, allocate full n_batch. The --no-hidden-states flag
-    // explicitly disables the endpoint and allows the upstream optimization.
-    if (!params.no_hidden_states) {
-        return { params.n_batch, 1 };
-    }
+    // Hidden-states tasks do NOT need per-token output buffers: capture runs
+    // on t_hidden_layers[] tensors during the forward pass, independent of
+    // the output-slot mapping (need_embd() is false for HIDDEN_STATES since
+    // 77babda9c). The early return {n_batch, 1} added in 0a7ed14b5 predates
+    // that change and inflated the shared output buffer to n_batch * n_vocab
+    // floats (~1.2 GB at n_batch=2048, ~150K vocab) on every default server.
+    // --no-hidden-states remains purely an endpoint kill-switch.
 
     auto result = common_speculative_get_output_limits(
             params.n_batch, params.n_parallel, common_speculative_n_max(&params.speculative));
