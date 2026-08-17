@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <climits>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -148,8 +149,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val < 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val < 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: --token-skip requires a non-negative integer, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -169,8 +171,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val <= 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val <= 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: --generate requires a positive integer, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -183,7 +186,7 @@ static Args parse_args(int argc, char** argv) {
             i++;
             char* endptr = nullptr;
             args.temperature = strtof(argv[i], &endptr);
-            if (*endptr != '\0' || endptr == argv[i] || args.temperature < 0.0f) {
+            if (!std::isfinite(args.temperature) || *endptr != '\0' || endptr == argv[i] || args.temperature < 0.0f) {
                 fprintf(stderr, "Error: --temperature requires a non-negative float, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -195,7 +198,7 @@ static Args parse_args(int argc, char** argv) {
             i++;
             char* endptr = nullptr;
             args.repeat_penalty = strtof(argv[i], &endptr);
-            if (*endptr != '\0' || endptr == argv[i] || args.repeat_penalty < 1.0f) {
+            if (!std::isfinite(args.repeat_penalty) || *endptr != '\0' || endptr == argv[i] || args.repeat_penalty < 1.0f) {
                 fprintf(stderr, "Error: --repeat-penalty requires a float >= 1.0, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -206,8 +209,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val < 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val < 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: --top-k requires a non-negative integer, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -220,7 +224,7 @@ static Args parse_args(int argc, char** argv) {
             i++;
             char* endptr = nullptr;
             args.top_p = strtof(argv[i], &endptr);
-            if (*endptr != '\0' || endptr == argv[i] || args.top_p <= 0.0f || args.top_p > 1.0f) {
+            if (!std::isfinite(args.top_p) || *endptr != '\0' || endptr == argv[i] || args.top_p <= 0.0f || args.top_p > 1.0f) {
                 fprintf(stderr, "Error: --top-p requires a float in (0, 1], got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -237,8 +241,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val < 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val < 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: --ctx-size requires a non-negative integer, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -250,8 +255,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val <= 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val <= 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: --checkpoint-every requires a positive integer, got '%s'\n", argv[i]);
                 exit(1);
             }
@@ -270,6 +276,7 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
             if (*endptr != '\0' || endptr == argv[i] || val < 1 || val > MAX_BATCH_SIZE) {
                 fprintf(stderr, "Error: --batch-size requires an integer in [1, %d], got '%s'\n", MAX_BATCH_SIZE, argv[i]);
@@ -283,8 +290,9 @@ static Args parse_args(int argc, char** argv) {
             }
             i++;
             char* endptr = nullptr;
+            errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0' || endptr == argv[i] || val < 0) {
+            if (*endptr != '\0' || endptr == argv[i] || errno == ERANGE || val < 0 || val > INT_MAX) {
                 fprintf(stderr, "Error: %s requires a non-negative integer, got '%s'\n", arg.c_str(), argv[i]);
                 exit(1);
             }
@@ -1025,24 +1033,16 @@ static constexpr size_t MAX_PREFETCH = 64;
 
 // Checked fwrite for the per-record sidecar. On failure: print error, signal
 // producer to stop, join the producer thread, remove the per-record temp file
-// (a leftover .records.bin.tmp would be picked up by a subsequent run's
-// parser), and return false; the caller propagates (return 1).
-// All state is passed explicitly; no implicit scope capture.
+// Write one field of a per-record row. On failure returns false ONLY --
+// producer teardown (join + temp removal) is owned by the single
+// stop_producer_and_join call at the caller's error site; joining here
+// would double-join a non-joinable thread (std::system_error -> terminate).
 static inline bool records_write(
-    const void* ptr, size_t size, size_t count, FILE* fp,
-    PrefetchQueue& pfq, std::thread& producer_thread,
-    const std::string& records_temp_path
+    const void* ptr, size_t size, size_t count, FILE* fp
 ) {
     if (fwrite(ptr, size, count, fp) != count) {
         fprintf(stderr, "Error: per-record write failed at %s:%d\n",
                 __FILE__, __LINE__);
-        {
-            std::lock_guard<std::mutex> lk(pfq.mtx);
-            pfq.producer_done = true;
-        }
-        pfq.cv_space.notify_all();
-        producer_thread.join();
-        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
         return false;
     }
     return true;
@@ -1452,6 +1452,18 @@ static int run_batch(const Args& args) {
     batch_wrapper.init(n_ctx, 0, 1);
     llama_batch& batch = batch_wrapper.batch;
 
+    // --resume + --save-per-record would silently truncate the sidecar:
+    // resumed-over prompts (< skip_count) are skipped WITHOUT emitting their
+    // per-record rows, and the STR1 header carries no record count, so the
+    // downstream parser (file-size-derived total) cannot detect the gap.
+    // Fail loud up front instead. (To resume a save-per-record run, re-run
+    // it without --resume.)
+    if (args.save_per_record && args.resume) {
+        fprintf(stderr, "Error: --resume is incompatible with --save-per-record "
+                "(resumed-over prompts would be missing from the sidecar)\n");
+        return 1;
+    }
+
     // Resume from checkpoint if --resume is set
     int skip_count = 0;
     if (args.resume) {
@@ -1830,14 +1842,14 @@ static int run_batch(const Args& args) {
 
                 if (args.save_per_record && records_closer) {
                     FILE* records_fp = records_closer.fp;
-                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                     int32_t gid = assign.group_id;
                     int32_t mid = assign.mask_id;
                     int32_t layer_idx = target_layers[li];
-                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp, pfq, producer_thread, records_temp_path)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                 }
             }
         }

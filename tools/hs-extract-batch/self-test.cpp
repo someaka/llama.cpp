@@ -280,6 +280,11 @@ int run_self_test() {
         // Cleanup
         remove(test_ckpt);
         remove((std::string(test_ckpt) + ".tmp").c_str());
+        // write_checkpoint actually writes output_path + ".checkpoint" (and
+        // its ".checkpoint.tmp" temp); those were leaked by earlier cleanup
+        // (47 stale files observed 2026-08-15..17).
+        remove((std::string(test_ckpt) + ".checkpoint").c_str());
+        remove((std::string(test_ckpt) + ".checkpoint.tmp").c_str());
     }
 
     fprintf(stderr, "\n%d/%d tests passed\n", passed, total);
