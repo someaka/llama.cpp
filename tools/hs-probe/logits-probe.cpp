@@ -27,8 +27,7 @@ int main(int argc, char ** argv) {
     if (n < 0) { toks.resize(-n); n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false); }
     toks.resize(n);
 
-    double results[2][10];
-    int    argmaxes[2];
+    int argmaxes[2];
 
     for (int mode = 0; mode < 2; ++mode) {
         llama_context_params cparams = llama_context_default_params();
@@ -57,7 +56,6 @@ int main(int argc, char ** argv) {
         int best = 0;
         for (int i = 1; i < n_vocab; ++i) if (logits[i] > logits[best]) best = i;
         argmaxes[mode] = best;
-        for (int k = 0; k < 10; ++k) results[mode][k] = logits[best]; // placeholder, refined below
 
         // capture the top-8 logit values (sorted) for a value-level check
         std::vector<float> lg(logits, logits + n_vocab);
