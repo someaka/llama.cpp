@@ -961,69 +961,102 @@ static AssignmentReadResult read_prompt_assignments(FILE* f) {
  * With --mean: writes mean vectors (token_skip->n_tokens) per layer.
  * Without --mean: writes full per-token data (n_tokens x hidden_size per layer).
  */
-static int run_raw(const Args& args) {
+// Shared model session for both run modes: owns the llama objects in the
+// required teardown order (ctx dies before model, model before backend).
+struct ModelSession {
     LlamaBackend backend;
+    LlamaModel model;
+    LlamaContext ctx;
+    const llama_vocab* vocab = nullptr;
+    int32_t n_embd = 0;
+    int32_t n_layers = 0;
+    int32_t n_ctx_train = 0;
+    int32_t n_ctx = 0;
+    std::vector<int32_t> target_layers;
+};
+
+// Common prologue shared by run_raw and run_batch: load the model, validate
+// dimensions, resolve target layers, size the context, create the extraction
+// context. Returns false (with a stderr message) on failure.
+static bool load_model_session(const Args& args, ModelSession& s) {
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = args.n_gpu_layers;
-    LlamaModel model(llama_model_load_from_file(args.model_path, mparams));
-    if (!model) {
+    s.model = LlamaModel(llama_model_load_from_file(args.model_path, mparams));
+    if (!s.model) {
         fprintf(stderr, "Error: failed to load model %s\n", args.model_path);
-        return 1;
+        return false;
     }
 
-    const llama_vocab* vocab = llama_model_get_vocab(model);
-    const int32_t n_ctx_train = llama_model_n_ctx_train(model);
-    const int32_t n_embd = llama_model_n_embd_out(model);
-    const int32_t n_layers = llama_model_n_layer(model);
+    s.vocab = llama_model_get_vocab(s.model);
+    s.n_embd = llama_model_n_embd_out(s.model);
+    s.n_layers = llama_model_n_layer(s.model);
+    s.n_ctx_train = llama_model_n_ctx_train(s.model);
 
-    if (n_embd <= 0) {
-        fprintf(stderr, "Error: invalid model n_embd=%d (model corrupt or unsupported)\n", n_embd);
-        return 1;
+    if (s.n_embd <= 0 || s.n_layers <= 0) {
+        fprintf(stderr, "Error: invalid model dimensions (n_embd=%d, n_layers=%d)\n", s.n_embd, s.n_layers);
+        return false;
     }
 
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
-            n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
+            s.n_ctx_train, s.n_embd, s.n_layers, args.n_gpu_layers);
 
     // Resolve layers (hidden_states indices: 0..n_layers inclusive)
-    const int32_t n_slots = n_layers + 1;
-    auto raw_layers = parse_layers(args.layers_str, n_layers);
-    std::vector<int32_t> target_layers;
+    const int32_t n_slots = s.n_layers + 1;
+    auto raw_layers = parse_layers(args.layers_str, s.n_layers);
     for (int l : raw_layers) {
         if (l < 0) l = n_slots + l;
         if (l >= 0 && l < n_slots) {
-            target_layers.push_back(l);
+            s.target_layers.push_back(l);
         } else {
             fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_slots);
-            return 1;
+            return false;
         }
     }
-    if (target_layers.empty()) {
+    if (s.target_layers.empty()) {
         fprintf(stderr, "Error: no valid target layers\n");
-        return 1;
+        return false;
     }
 
     // Auto-size context or use --ctx-size
-    int32_t n_ctx;
     if (args.ctx_size > 0) {
-        n_ctx = args.ctx_size;
-    } else if (!auto_size_ctx(args.prompts_file, n_ctx)) {
-        return 1;
+        s.n_ctx = args.ctx_size;
+    } else if (!auto_size_ctx(args.prompts_file, s.n_ctx)) {
+        return false;
     }
-    if (n_ctx > n_ctx_train) n_ctx = n_ctx_train;
-    fprintf(stderr, "Using n_ctx=%d\n", n_ctx);
+    if (s.n_ctx > s.n_ctx_train) s.n_ctx = s.n_ctx_train;
+    fprintf(stderr, "Using n_ctx=%d\n", s.n_ctx);
 
-    // Create context FIRST (Qwen3.5 Gated Delta Net OOM fix)
+    // Create the context BEFORE opening output files or reading assignments.
+    // Qwen3.5 Gated Delta Net requires the context to exist before model
+    // graph optimization, and creating it first prevents an OOM when the
+    // graph optimizer allocates CUDA buffers that would conflict with
+    // subsequent allocations. n_ubatch = n_ctx keeps the full prompt in one
+    // ubatch pass (stable CUDA graph capture).
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = n_ctx;
-    cparams.n_batch = n_ctx;
-    cparams.n_ubatch = n_ctx;  // Match run_batch: process full context in one ubatch pass
+    cparams.n_ctx = s.n_ctx;
+    cparams.n_batch = s.n_ctx;
+    cparams.n_ubatch = s.n_ctx;
     cparams.extract_hidden_states = true;
 
-    LlamaContext ctx(llama_init_from_model(model, cparams));
-    if (!ctx) {
+    s.ctx = LlamaContext(llama_init_from_model(s.model, cparams));
+    if (!s.ctx) {
         fprintf(stderr, "Error: failed to create context\n");
-        return 1;
+        return false;
     }
+    return true;
+}
+
+static int run_raw(const Args& args) {
+    ModelSession ms;
+    if (!load_model_session(args, ms)) return 1;
+    // Local references keep the body unchanged from the pre-extraction code.
+    LlamaModel& model = ms.model;
+    LlamaContext& ctx = ms.ctx;
+    const llama_vocab*& vocab = ms.vocab;
+    int32_t& n_embd = ms.n_embd;
+    int32_t& n_layers = ms.n_layers;
+    int32_t& n_ctx = ms.n_ctx;
+    std::vector<int32_t>& target_layers = ms.target_layers;
 
     // Open output file. Write to a temp path and atomically rename at the end;
     // a crash must never leave a truncated dump at the final path, because
@@ -1503,72 +1536,16 @@ static bool read_checkpoint(
  */
 static int run_batch(const Args& args) {
     // -- Setup (RAII: destructors handle cleanup on all return paths) --
-    LlamaBackend backend;
-    llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = args.n_gpu_layers;
-    LlamaModel model(llama_model_load_from_file(args.model_path, mparams));
-    if (!model) {
-        fprintf(stderr, "Error: failed to load model %s\n", args.model_path);
-        return 1;
-    }
-
-    const llama_vocab* vocab = llama_model_get_vocab(model);
-    const int32_t n_embd = llama_model_n_embd_out(model);
-    const int32_t n_layers = llama_model_n_layer(model);
-    const int32_t n_ctx_train = llama_model_n_ctx_train(model);
-
-    if (n_embd <= 0 || n_layers <= 0) {
-        fprintf(stderr, "Error: invalid model dimensions (n_embd=%d, n_layers=%d)\n", n_embd, n_layers);
-        return 1;
-    }
-
-    fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
-            n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
-
-    // Resolve layers (hidden_states indices: 0..n_layers inclusive)
-    const int32_t n_slots = n_layers + 1;
-    auto raw_layers = parse_layers(args.layers_str, n_layers);
-    std::vector<int32_t> target_layers;
-    for (int l : raw_layers) {
-        if (l < 0) l = n_slots + l;
-        if (l >= 0 && l < n_slots) {
-            target_layers.push_back(l);
-        } else {
-            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_slots);
-            return 1;
-        }
-    }
-    if (target_layers.empty()) {
-        fprintf(stderr, "Error: no valid target layers\n");
-        return 1;
-    }
-
-    // Auto-size context or use --ctx-size
-    int32_t n_ctx;
-    if (args.ctx_size > 0) {
-        n_ctx = args.ctx_size;
-    } else if (!auto_size_ctx(args.prompts_file, n_ctx)) {
-        return 1;
-    }
-    if (n_ctx > n_ctx_train) n_ctx = n_ctx_train;
-    fprintf(stderr, "Using n_ctx=%d\n", n_ctx);
-
-    // Create context BEFORE opening output files or reading assignments.
-    // Qwen3.5 Gated Delta Net requires the context to exist before model
-    // graph optimization, and creating it first prevents an OOM when the
-    // graph optimizer allocates CUDA buffers that would conflict with
-    // subsequent allocations.
-    llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = n_ctx;
-    cparams.n_batch = n_ctx;
-    cparams.n_ubatch = n_ctx;  // Size ubatch to full context for stable CUDA graph capture
-    cparams.extract_hidden_states = true;
-
-    LlamaContext ctx(llama_init_from_model(model, cparams));
-    if (!ctx) {
-        fprintf(stderr, "Error: failed to create context\n");
-        return 1;
-    }
+    ModelSession ms;
+    if (!load_model_session(args, ms)) return 1;
+    // Local references keep the body unchanged from the pre-extraction code.
+    LlamaModel& model = ms.model;
+    LlamaContext& ctx = ms.ctx;
+    const llama_vocab*& vocab = ms.vocab;
+    int32_t& n_embd = ms.n_embd;
+    int32_t& n_layers = ms.n_layers;
+    int32_t& n_ctx = ms.n_ctx;
+    std::vector<int32_t>& target_layers = ms.target_layers;
 
     // --batch-size > 1 is accepted and range-checked by the parser but has
     // NO effect: processing is always sequential. A caller passing --batch-size 8
@@ -2007,8 +1984,9 @@ static int run_batch(const Args& args) {
             // seeds a fresh RNG per prompt so sampled trajectories are reproducible
             // per-prompt. Hoisting the chain out of the loop would change RNG
             // sequencing across prompts. LlamaSampler (llama-raii.h) owns the free.
-            const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
-            int n_vocab = llama_vocab_n_tokens(vocab);
+            // Named gen_vocab to avoid shadowing the session-level vocab.
+            const llama_vocab * gen_vocab = llama_model_get_vocab(llama_get_model(ctx));
+            int n_vocab = llama_vocab_n_tokens(gen_vocab);
             LlamaSampler sampler_owner;
             if (args.temperature > 0.0f) {
                 llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
