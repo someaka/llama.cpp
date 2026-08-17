@@ -104,7 +104,7 @@ reassignment that follows the final residual add listed below.
 | 17 deci | src/models/deci.cpp | 168 |
 | 18 deepseek | src/models/deepseek.cpp | 172 |
 | 19 deepseek2 | src/models/deepseek2.cpp | 692 |
-| 20 deepseek32 | src/models/deepseek32.cpp | 495 |
+| 20 deepseek32 | src/models/deepseek32.cpp | 470 |
 | 21 dots1 | src/models/dots1.cpp | 171 |
 | 22 dream | src/models/dream.cpp | 116 |
 | 23 ernie4_5 | src/models/ernie4-5.cpp | 142 |
@@ -116,14 +116,14 @@ reassignment that follows the final residual add listed below.
 | 29 gemma | src/models/gemma.cpp | 116 |
 | 30 gemma2 | src/models/gemma2.cpp | 148 |
 | 31 gemma3 | src/models/gemma3.cpp | 192 |
-| 32 gemma4 | src/models/gemma4.cpp | 362 |
+| 32 gemma4 | src/models/gemma4.cpp | 377 |
 | 33 gemma4_assistant | src/models/gemma4-assistant.cpp | 181 |
 | 34 gemma_embedding | src/models/gemma-embedding.cpp | 161 |
 | 35 glm4 | src/models/glm4.cpp | 169 |
 | 36 glm4_moe | src/models/glm4-moe.cpp | 259 |
-| 37 glm_dsa | src/models/glm-dsa.cpp | 541 |
+| 37 glm_dsa | src/models/glm-dsa.cpp | 516 |
 | 38 gpt2 | src/models/gpt2.cpp | 125 |
-| 39 granite | src/models/granite.cpp | 306 (in build_layer_ffn helper) |
+| 39 granite | src/models/granite.cpp | 175 (in build_layer_ffn helper) |
 | 40 grok | src/models/grok.cpp | 190 |
 | 41 grovemoe | src/models/grovemoe.cpp | 170 |
 | 42 hunyuan_moe | src/models/hunyuan-moe.cpp | 164 |
