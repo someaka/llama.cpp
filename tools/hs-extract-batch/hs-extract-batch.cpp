@@ -743,6 +743,7 @@ static bool process_prompt(
     llama_context* ctx,
     llama_batch& batch,
     float* mean_buf,
+    std::vector<int32_t>& header,
     const std::vector<llama_token>& tokens,
     const std::vector<int32_t>& target_layers,
     int32_t n_embd,
@@ -791,7 +792,7 @@ static bool process_prompt(
     }
 
     // Write per-prompt header: [prompt_idx][n_tokens][n_layers][layer_indices...]
-    std::vector<int32_t> header(3 + target_layers.size());
+    header.resize(3 + target_layers.size());
     header[0] = (int32_t)prompt_idx;
     header[1] = n_hidden_tokens;
     header[2] = (int32_t)target_layers.size();
@@ -1177,6 +1178,7 @@ static int run_raw(const Args& args) {
     LlamaBatch batch_wrapper;
     batch_wrapper.init(n_ctx, 0, 1);
     std::vector<float> mean_buf(n_embd, 0.0f);
+    std::vector<int32_t> header;  // per-prompt output header (reused, written in process_prompt)
 
     std::string line;
     while (std::getline(fin, line)) {
@@ -1201,7 +1203,7 @@ static int run_raw(const Args& args) {
             return 1;
         }
 
-        if (!process_prompt(ctx, batch_wrapper.batch, mean_buf.data(),
+        if (!process_prompt(ctx, batch_wrapper.batch, mean_buf.data(), header,
                             tokens, target_layers, n_embd, prompt_idx, out,
                             args.mean_mode, args.token_skip)) {
             fprintf(stderr, "Error: process_prompt failed at prompt %d\n", prompt_idx);
