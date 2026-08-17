@@ -128,6 +128,37 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "ERROR: negative layer should return NULL\n");
         ok = 0;
     }
+    float * hs_over = llama_get_hidden_state(ctx, n_layer + 1);
+    if (hs_over != NULL) {
+        fprintf(stderr, "ERROR: layer n_layer+1 (above ladder top) should return NULL\n");
+        ok = 0;
+    }
+
+    // Ladder top slot n_layer (final block output) must be readable and
+    // non-NULL -- the fork's headline extension over upstream's
+    // 0..n_layer-1 range; untested before.
+    {
+        float * hs_top = llama_get_hidden_state(ctx, n_layer);
+        if (hs_top == NULL) {
+            fprintf(stderr, "ERROR: top slot n_layer returned NULL\n");
+            ok = 0;
+        } else {
+            int32_t n_embd = llama_model_n_embd(model);
+            int top_non_zero = 0;
+            for (int i = 0; i < n_hidden * n_embd; i++) {
+                if (hs_top[i] != hs_top[i]) {  // NaN check
+                    fprintf(stderr, "ERROR: top slot contains NaN at %d\n", i);
+                    ok = 0;
+                    break;
+                }
+                if (fabsf(hs_top[i]) > 1e-6f) top_non_zero++;
+            }
+            if (top_non_zero == 0) {
+                fprintf(stderr, "ERROR: top slot is all zeros\n");
+                ok = 0;
+            }
+        }
+    }
 
     llama_batch_free(batch);
     llama_free(ctx);

@@ -113,6 +113,57 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // Ladder top slot: n_layer (final block output) must be readable,
+    // non-NULL and finite. This is the fork's headline extension over
+    // upstream's 0..n_layer-1 range; it went untested before.
+    {
+        float * hs = llama_get_hidden_state(ctx, n_layer);
+        if (!hs) {
+            fprintf(stderr, "FAIL: llama_get_hidden_state(ctx, n_layer) returned NULL (top slot)\n");
+            return 1;
+        }
+        int top_non_zero = 0;
+        for (int i = 0; i < n_hidden_tokens * n_embd; i++) {
+            if (!std::isfinite(hs[i])) {
+                fprintf(stderr, "FAIL: top slot value [%d] is not finite\n", i);
+                return 1;
+            }
+            if (fabsf(hs[i]) > 1e-6f) top_non_zero++;
+        }
+        printf("Top slot (layer %d): non-zero %d / %d\n", n_layer, top_non_zero, n_hidden_tokens * n_embd);
+        if (top_non_zero == 0) {
+            fprintf(stderr, "FAIL: top slot is all zeros\n");
+            return 1;
+        }
+        total    += n_hidden_tokens * n_embd;
+        non_zero += top_non_zero;
+    }
+
+    // Out-of-range boundary: n_layer + 1 must be rejected (NULL), and the
+    // batch getter must refuse it (-1) WITHOUT writing any output pointer
+    // (its contract validates all indices before writing any entry).
+    {
+        if (llama_get_hidden_state(ctx, n_layer + 1) != NULL) {
+            fprintf(stderr, "FAIL: llama_get_hidden_state(ctx, n_layer+1) should return NULL\n");
+            return 1;
+        }
+        float * ptrs[2] = { nullptr, nullptr };
+        int32_t layers[2] = { 0, n_layer + 1 };
+        // Use a sentinel so we can detect any output-pointer write.
+        float * sentinel = (float *) 0x1;
+        ptrs[0] = sentinel;
+        ptrs[1] = sentinel;
+        if (llama_get_hidden_states_batch(ctx, layers, 2, ptrs) != -1) {
+            fprintf(stderr, "FAIL: llama_get_hidden_states_batch must reject layer n_layer+1 with -1\n");
+            return 1;
+        }
+        if (ptrs[0] != sentinel || ptrs[1] != sentinel) {
+            fprintf(stderr, "FAIL: batch getter wrote an output pointer while rejecting\n");
+            return 1;
+        }
+        printf("Boundary check: layer n_layer+1 rejected (single: NULL, batch: -1, no partial write)\n");
+    }
+
     // Show some values from layer 0
     printf("Layer 0 first 10 values: ");
     float * hs0 = llama_get_hidden_state(ctx, 0);
