@@ -1517,6 +1517,11 @@ static int run_batch(const Args& args) {
     const int32_t n_layers = llama_model_n_layer(model);
     const int32_t n_ctx_train = llama_model_n_ctx_train(model);
 
+    if (n_embd <= 0 || n_layers <= 0) {
+        fprintf(stderr, "Error: invalid model dimensions (n_embd=%d, n_layers=%d)\n", n_embd, n_layers);
+        return 1;
+    }
+
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
             n_ctx_train, n_embd, n_layers, args.n_gpu_layers);
 
@@ -2323,13 +2328,17 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "===============================================\n\n");
     }
 
-    // TOCTOU guard: verify the actual processed count matches the expected
-    // count from the assignments header. A mismatch means the prompts file was
-    // modified between the count pass and the producer read.
-    if (skip_count == 0 && n_processed != n_prompts_expected) {
-        fprintf(stderr, "Error: processed %d prompts but assignments expected %d "
-                        "(prompts file may have been modified during extraction)\n",
-                n_processed, n_prompts_expected);
+    // TOCTOU guard: the producer must have consumed every prompt line. On a
+    // fresh run (skip_count == 0) the counts must match exactly; on a resume
+    // run the final position must equal the assignments header count. A
+    // mismatch means the prompts file was modified between the count pass and
+    // the producer read (or lines vanished mid-run) -- the output would be
+    // silently truncated, so refuse it.
+    if (prompt_idx != n_prompts_expected) {
+        fprintf(stderr, "Error: producer stopped at position %d but assignments expected %d "
+                        "prompts (prompts file may have been modified during extraction)\n",
+                prompt_idx, n_prompts_expected);
+        if (!records_temp_path.empty()) std::remove(records_temp_path.c_str());
         return 1;
     }
 
