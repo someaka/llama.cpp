@@ -33,6 +33,12 @@ baseline. Exit 0 means all bytes identical; exit 1 means the refactor changed
 bytes. Resume scenarios additionally assert the resumed output is
 byte-identical to the uninterrupted full run.
 
+The driver refuses CUDA-ON binaries up front (a `libggml-cuda.so*` next to
+the binary aborts with `REFUSED`): with a visible CUDA device, gemma-graph
+op placement differs from a CUDA-off build even at `-ngl 0`, so a CUDA-ON
+binary can never validly compare against this baseline (verified 2026-08-18
+on the pass-5 gate #3 incident).
+
 ## Files
 
 - `gate_batch.py` - the gate driver. Two modes: `baseline <cpu-bin>` (run all
@@ -49,7 +55,9 @@ byte-identical to the uninterrupted full run.
 
 The gate hardcodes two model paths (in the `MODELS` dict of `gate_batch.py`):
 
-- `/tmp/llama-1b-q4_k_m.gguf` - llama 1B Q4_K_M
+- `/home/a/Bureau/Work/CrimsonRed/data/models/llama-1b-q4_k_m.gguf` - llama 1B
+  Q4_K_M (durable copy, sha256 `ddb21816ad55ccb1...`; falls back to the
+  historical `/tmp/llama-1b-q4_k_m.gguf` if the durable copy is absent)
 - `/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf` - gemma E2B Q4_K_M
 
 Both files must exist at those paths, or the constants must be adjusted to

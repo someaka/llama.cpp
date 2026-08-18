@@ -27,7 +27,10 @@ GOLD = pathlib.Path("/tmp/hs-batch-golden")
 INPUTS = GOLD / "inputs"
 
 MODELS = {
-    "llama": "/tmp/llama-1b-q4_k_m.gguf",
+    # durable copy first (data/ is gitignored); /tmp copy is the historical path
+    "llama": ("/home/a/Bureau/Work/CrimsonRed/data/models/llama-1b-q4_k_m.gguf"
+              if pathlib.Path("/home/a/Bureau/Work/CrimsonRed/data/models/llama-1b-q4_k_m.gguf").exists()
+              else "/tmp/llama-1b-q4_k_m.gguf"),
     "e2b": "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf",
 }
 
@@ -120,6 +123,17 @@ def main():
     mode, bin_path = sys.argv[1], os.path.abspath(sys.argv[2])
     if not os.path.exists(bin_path):
         sys.exit(f"binary not found: {bin_path}")
+    # Refuse CUDA-ON binaries: the baseline was captured with a CUDA-off
+    # build, and a visible CUDA device changes scheduler op placement for
+    # gemma graphs even at -ngl 0 (verified 2026-08-18: e2b digests differ
+    # between CUDA-off and CUDA-ON builds while llama matches). Gate #3 of
+    # pass-5 burned an hour on that mismatch; refuse it up front instead.
+    bin_dir = pathlib.Path(bin_path).parent
+    if any(bin_dir.glob("libggml-cuda.so*")):
+        sys.exit(
+            f"REFUSED: {bin_path} is a CUDA-ON build (libggml-cuda.so found "
+            f"in {bin_dir}). The gate contract is CPU-only binaries: rebuild "
+            f"with -DGGML_CUDA=OFF and rerun.")
     if not (INPUTS / "assignments.bin").exists():
         sys.exit(f"inputs missing -- run gen_inputs.py first")
 
