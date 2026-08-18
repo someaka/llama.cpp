@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate a deterministic small assignments.bin + prompts.txt for the
-run_batch golden gate. All prompts are >= 8 tokens (llama tokenizer, BOS
-added by binary), all explicit ranges stay within [0, 6) so every range is
-valid for every prompt."""
+run_batch golden gate. All prompts are >= 8 tokens (tokenized by the gate's
+model, BOS added by binary), all explicit ranges stay within [0, 6) so every
+range is valid for every prompt."""
 import struct, sys, pathlib
 
 out_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
