@@ -1017,7 +1017,9 @@ static int run_raw(const Args& args) {
         std::remove(tmp_path.c_str());
         return 1;
     }
-    fsync_parent_dir(args.output_path);  // make the rename itself durable
+    if (!fsync_parent_dir(args.output_path)) {  // make the rename itself durable
+        return 1;
+    }
 
     return 0;
 }
@@ -1986,7 +1988,9 @@ static int run_batch(const Args& args) {
             std::remove(records_temp_path.c_str());
             return 1;
         }
-        fsync_parent_dir(records_path.c_str());  // make the rename itself durable
+        if (!fsync_parent_dir(records_path.c_str())) {  // make the rename itself durable
+            return 1;
+        }
         fprintf(stderr, "Per-record output complete: %s\n", records_path.c_str());
     }
 

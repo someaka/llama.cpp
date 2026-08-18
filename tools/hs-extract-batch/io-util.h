@@ -62,10 +62,12 @@ struct FilePtr {
 
 // fsync the parent directory of path after an atomic rename, so the rename
 // itself survives a power cut (fsync of the data file alone can lose the
-// rename). Best effort: an fsync failure on the directory is reported but
-// not fatal -- the data file is already synced; some filesystems do not
-// support directory fsync.
-static inline void fsync_parent_dir(const char* path) {
+// rename). Returns false on failure; callers must propagate (a failed
+// directory fsync means the rename may not be durable -- never continue
+// silently). The _WIN32 guard is a portability build guard matching the
+// FilePtr::sync idiom above, not a runtime fallback: Windows uses _commit
+// on the file, and directory fsync is not available via this interface.
+static inline bool fsync_parent_dir(const char* path) {
 #ifndef _WIN32
     std::string p(path);
     size_t slash = p.find_last_of('/');
@@ -74,15 +76,18 @@ static inline void fsync_parent_dir(const char* path) {
         : p.substr(0, slash == 0 ? 1 : slash);
     int dfd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
     if (dfd < 0) {
-        fprintf(stderr, "Warning: could not open dir %s for fsync (errno=%d)\n", dir.c_str(), errno);
-        return;
+        fprintf(stderr, "Error: could not open dir %s for fsync (errno=%d)\n", dir.c_str(), errno);
+        return false;
     }
-    if (fsync(dfd) != 0) {
-        fprintf(stderr, "Warning: fsync of dir %s failed (errno=%d)\n", dir.c_str(), errno);
+    bool ok = fsync(dfd) == 0;
+    if (!ok) {
+        fprintf(stderr, "Error: fsync of dir %s failed (errno=%d)\n", dir.c_str(), errno);
     }
     close(dfd);
+    return ok;
 #else
     (void) path;  // Windows: directory fsync not available via this path
+    return true;
 #endif
 }
 

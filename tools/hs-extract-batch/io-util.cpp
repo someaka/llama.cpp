@@ -175,7 +175,9 @@ bool write_batch_output(
         std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
         return false;
     }
-    fsync_parent_dir(output_path);
+    if (!fsync_parent_dir(output_path)) {
+        return false;
+    }
     fprintf(stderr, "Output: written to %s\n", output_path);
     return true;
 }
@@ -232,7 +234,9 @@ bool write_checkpoint(
         std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
         return false;
     }
-    fsync_parent_dir(ckpt_path.c_str());
+    if (!fsync_parent_dir(ckpt_path.c_str())) {
+        return false;
+    }
     fprintf(stderr, "Checkpoint saved: %d prompts -> %s\n", n_iterated, ckpt_path.c_str());
     return true;
 }
