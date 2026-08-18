@@ -2,14 +2,14 @@
 """Golden byte-identity gate for run_batch (the hs-extract-batch refactor).
 
 Two modes:
-  baseline <cpu-bin>   run all scenarios with the PRE-refactor CPU binary,
+  baseline <cuda-bin>  run all scenarios with the PRE-refactor CUDA binary,
                        save every produced artifact under baseline/
-  check <cpu-bin>      run all scenarios with the POST-refactor CPU binary,
+  check <cuda-bin>     run all scenarios with the POST-refactor CUDA binary,
                        byte-compare every artifact against baseline/
 
-Methodology (from HANDOFF-2026-08-16): CPU-only binary (CUDA-off build),
--ngl 0, original tokenization flags (no --no-bos). Byte-identity of every
-artifact is the pass condition. Exit 0 = all identical.
+Methodology: the PRODUCTION path -- CUDA binary (libggml-cuda.so* present),
+-ngl 99, gemma-E2B only, hard requirements, no fallbacks. Byte-identity of
+every artifact is the pass condition. Exit 0 = all identical.
 
 Resume scenarios kill the binary at the 2nd "Checkpoint saved" stderr line
 (deterministic checkpoint boundary), then re-run with --resume; the resumed
@@ -27,24 +27,17 @@ GOLD = pathlib.Path("/tmp/hs-batch-golden")
 INPUTS = GOLD / "inputs"
 
 MODELS = {
-    # durable copy first (data/ is gitignored); /tmp copy is the historical path
-    "llama": ("/home/a/Bureau/Work/CrimsonRed/data/models/llama-1b-q4_k_m.gguf"
-              if pathlib.Path("/home/a/Bureau/Work/CrimsonRed/data/models/llama-1b-q4_k_m.gguf").exists()
-              else "/tmp/llama-1b-q4_k_m.gguf"),
     "e2b": "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf",
 }
 
 # name, model-key, layers, extra args, assignments-file key, is_resume_scenario
 SCENARIOS = [
-    ("s1_llama_comp_records", "llama", "0,8,16", ["--save-per-record"], "main", False),
-    ("s2_llama_resume",       "llama", "0,8,16", [], "main", True),
-    ("s3_llama_gen_greedy",   "llama", "0,16",   ["--generate", "8", "--token-skip", "2"], "gen", False),
-    ("s4_llama_gen_sampled",  "llama", "0,16",   ["--generate", "8", "--token-skip", "2",
-                                                  "--temperature", "0.8", "--top-k", "40",
-                                                  "--repeat-penalty", "1.1"], "gen", False),
     ("s5_e2b_comp_records",   "e2b",   "0,17,35", ["--save-per-record"], "main", False),
     ("s6_e2b_resume",         "e2b",   "0,17,35", [], "main", True),
     ("s7_e2b_gen_greedy",     "e2b",   "0,35",    ["--generate", "8", "--token-skip", "2"], "gen", False),
+    ("s8_e2b_gen_sampled",    "e2b",   "0,35",    ["--generate", "8", "--token-skip", "2",
+                                                  "--temperature", "0.8", "--top-k", "40",
+                                                  "--repeat-penalty", "1.1"], "gen", False),
 ]
 
 def sha256(p):
@@ -59,7 +52,7 @@ ASSIGN_FILES = {"main": "assignments.bin", "gen": "assignments_gen.bin"}
 def base_cmd(bin_path, model, layers, out, extra, assign_key="main"):
     return [bin_path, model, str(INPUTS / "prompts.txt"), layers, out,
             "--batch", "--assignments", str(INPUTS / ASSIGN_FILES[assign_key]),
-            "-ngl", "0"] + list(extra)
+            "-ngl", "99"] + list(extra)
 
 def run_full(bin_path, model, layers, out, extra, assign_key="main", timeout=1800):
     cmd = base_cmd(bin_path, model, layers, out, extra, assign_key)
@@ -119,21 +112,26 @@ def do_scenario(bin_path, name, model_key, layers, extra, assign_key, is_resume,
 
 def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ("baseline", "check"):
-        sys.exit(f"usage: {sys.argv[0]} baseline|check <cpu-binary>")
+        sys.exit(f"usage: {sys.argv[0]} baseline|check <cuda-binary>")
     mode, bin_path = sys.argv[1], os.path.abspath(sys.argv[2])
     if not os.path.exists(bin_path):
         sys.exit(f"binary not found: {bin_path}")
-    # Refuse CUDA-ON binaries: the baseline was captured with a CUDA-off
-    # build, and a visible CUDA device changes scheduler op placement for
-    # gemma graphs even at -ngl 0 (verified 2026-08-18: e2b digests differ
-    # between CUDA-off and CUDA-ON builds while llama matches). Gate #3 of
-    # pass-5 burned an hour on that mismatch; refuse it up front instead.
+    # Refuse CPU-only binaries: the gate runs the PRODUCTION path (CUDA
+    # binary, -ngl 99). A CUDA-off build produces different gemma numerics
+    # than the production build even at -ngl 0 (verified 2026-08-18), so it
+    # can never serve as a valid gate binary.
     bin_dir = pathlib.Path(bin_path).parent
-    if any(bin_dir.glob("libggml-cuda.so*")):
+    if not any(bin_dir.glob("libggml-cuda.so*")):
         sys.exit(
-            f"REFUSED: {bin_path} is a CUDA-ON build (libggml-cuda.so found "
-            f"in {bin_dir}). The gate contract is CPU-only binaries: rebuild "
-            f"with -DGGML_CUDA=OFF and rerun.")
+            f"REFUSED: {bin_path} is a CPU-only build (no libggml-cuda.so* in "
+            f"{bin_dir}). The gate runs the production path: CUDA binary, "
+            f"-ngl 99. Rebuild with -DGGML_CUDA=ON and rerun.")
+    # Hard requirements -- no fallbacks. The e2b model is the gate's only
+    # model; a missing model aborts the gate, it does not fall back.
+    for model_key, model_path in MODELS.items():
+        if not pathlib.Path(model_path).exists():
+            sys.exit(f"REFUSED: model {model_key} not found at {model_path} -- "
+                     f"the gate runs the production path; no fallbacks.")
     if not (INPUTS / "assignments.bin").exists():
         sys.exit(f"inputs missing -- run gen_inputs.py first")
 
