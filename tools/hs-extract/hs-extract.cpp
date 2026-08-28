@@ -293,6 +293,9 @@ int main(int argc, char ** argv) {
         }
         ctx_params.n_ctx = (uint32_t) ctx_n;
         ctx_params.n_batch = (uint32_t) ctx_n;
+        // Match hs-extract-batch: one ubatch per prompt keeps the full prompt
+        // in a single pass (stable capture path, same code path as batch).
+        ctx_params.n_ubatch = (uint32_t) ctx_n;
         fprintf(stderr, "%s: using n_ctx=%d for %zu tokens\n", __func__, ctx_n, tokens.size());
     }
     ctx_params.n_threads = n_threads;
