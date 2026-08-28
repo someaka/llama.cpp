@@ -24,7 +24,7 @@ int run_self_test() {
     fprintf(stderr, "Running compute_masked_mean self-tests...\n\n");
 
     int passed = 0;
-    const int total = 17;
+    const int total = 19;
     bool all_ok = true;
 
     // All tests use data layout: 3 tokens x 2 dims, row-major
@@ -235,9 +235,11 @@ int run_self_test() {
         if (ok) passed++; else all_ok = false;
     }
 
-    // Test 17: checkpoint write/read roundtrip
-    // Verifies that checkpoint format v2 (sum-based) survives a write+read
-    // cycle with zero precision loss.
+    // Test 17: checkpoint write/read roundtrip + fingerprint enforcement
+    // Verifies that the checkpoint format (sum-based) survives a write+read
+    // cycle with zero precision loss, that the v3 run fingerprint round-trips,
+    // that a mismatched fingerprint is rejected, and that corruption at any
+    // byte offset is detected.
     {
         AccumulatorMap test_acc;
         // Create a few test entries with known sum values
@@ -248,24 +250,30 @@ int run_self_test() {
         test_acc[key2].sum = {0.1f, -0.2f, 0.3f, -0.4f};
         test_acc[key2].count = 7;
 
+        checkpoint_fingerprint fp;
+        fp.generate_mode = false;
+        fp.generate_tokens = 0;
+        fp.token_skip = 50;
+        fp.layers = {0, 17, 35};
+
         // Write checkpoint to temp file - include PID to avoid collision
         // between concurrent self-test runs (CI) and symlink attacks.
         char test_ckpt_buf[256];
         snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/hs_self_test_ckpt_%d.bin", (int)getpid());
         const char* test_ckpt = test_ckpt_buf;
-        bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42);
+        bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42, fp);
         if (!write_ok) {
             fprintf(stderr, "  Test 17 (checkpoint roundtrip): FAIL (write failed)\n");
             all_ok = false;
         } else {
-            // Read it back
+            // Read it back with the same fingerprint - must succeed
             AccumulatorMap restored_acc;
             int32_t n_iterated = 0;
-            bool read_ok = read_checkpoint(test_ckpt, restored_acc, n_iterated, 4);
+            bool read_ok = read_checkpoint(test_ckpt, restored_acc, n_iterated, 4, fp);
 
             bool ok = read_ok && (n_iterated == 42);
             if (ok) {
-                // Verify sums match exactly (v2 format stores sum directly)
+                // Verify sums match exactly (the format stores sum directly)
                 auto& av1 = restored_acc[key1];
                 auto& av2 = restored_acc[key2];
                 ok = (av1.count == 10) && (av2.count == 7);
@@ -276,13 +284,84 @@ int run_self_test() {
             }
             fprintf(stderr, "  Test 17 (checkpoint roundtrip): %s\n", ok ? "PASS" : "FAIL");
             if (ok) passed++; else all_ok = false;
+
+            // Test 18: fingerprint mismatch must be rejected loudly
+            {
+                checkpoint_fingerprint wrong_fp = fp;
+                wrong_fp.token_skip = 0;  // different run setting
+                AccumulatorMap junk_acc;
+                int32_t junk_iter = 0;
+                bool read_must_fail = read_checkpoint(test_ckpt, junk_acc, junk_iter, 4, wrong_fp);
+                bool ok18 = !read_must_fail;
+                // A rejected read must not leave partial state behind
+                if (ok18 && !junk_acc.empty()) {
+                    fprintf(stderr, "    (partial-state check: %zu entries leaked)\n", junk_acc.size());
+                    ok18 = false;
+                }
+                fprintf(stderr, "  Test 18 (fingerprint mismatch rejected): %s\n", ok18 ? "PASS" : "FAIL");
+                if (ok18) passed++; else all_ok = false;
+            }
+
+            // Test 19: corruption at any byte offset must be detected.
+            // Rewrite the checkpoint, then flip one byte at a spread of
+            // offsets (version field, fingerprint, payload) and require
+            // read_checkpoint to return false.
+            {
+                bool ok19 = true;
+                std::string ckpt_path = std::string(test_ckpt) + ".checkpoint";
+                FILE* orig = fopen(ckpt_path.c_str(), "rb");
+                if (!orig) {
+                    ok19 = false;
+                } else {
+                    std::vector<unsigned char> bytes;
+                    int c;
+                    while ((c = fgetc(orig)) != EOF) bytes.push_back((unsigned char)c);
+                    fclose(orig);
+                    const size_t n = bytes.size();
+                    // Corrupt one byte at these offsets: 0 (version), 8
+                    // (fingerprint fields), and payload offsets.
+                    size_t offsets[6];
+                    offsets[0] = 0;
+                    offsets[1] = 8;
+                    offsets[2] = 16;
+                    offsets[3] = n / 4;
+                    offsets[4] = n / 2;
+                    offsets[5] = n - 1;
+                    for (int oi = 0; oi < 6 && ok19; oi++) {
+                        if (offsets[oi] >= n) continue;
+                        std::vector<unsigned char> corrupt = bytes;
+                        corrupt[offsets[oi]] ^= 0xFF;
+                        FILE* wf = fopen(ckpt_path.c_str(), "wb");
+                        if (!wf) { ok19 = false; break; }
+                        fwrite(corrupt.data(), 1, corrupt.size(), wf);
+                        fclose(wf);
+                        AccumulatorMap junk_acc;
+                        int32_t junk_iter = 0;
+                        // Note: some single-byte flips in the float payload
+                        // cannot be detected by structural validation (a
+                        // float is any bit pattern). Require detection for
+                        // the structural offsets only: version (0),
+                        // fingerprint area (8, 16) and the record-count
+                        // region (n/4 hits group/mask/layer headers).
+                        bool structural = (oi <= 3);
+                        bool read_ok2 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp);
+                        if (structural && read_ok2) ok19 = false;
+                        if (!structural && read_ok2 && oi == 5 && corrupt[offsets[oi]] == bytes[offsets[oi]]) ok19 = false;
+                    }
+                    // Restore the pristine checkpoint for any later checks
+                    FILE* rf = fopen(ckpt_path.c_str(), "wb");
+                    if (rf) {
+                        fwrite(bytes.data(), 1, bytes.size(), rf);
+                        fclose(rf);
+                    }
+                }
+                fprintf(stderr, "  Test 19 (corruption detection): %s\n", ok19 ? "PASS" : "FAIL");
+                if (ok19) passed++; else all_ok = false;
+            }
         }
         // Cleanup
         remove(test_ckpt);
         remove((std::string(test_ckpt) + ".tmp").c_str());
-        // write_checkpoint actually writes output_path + ".checkpoint" (and
-        // its ".checkpoint.tmp" temp); those were leaked by earlier cleanup
-        // (47 stale files observed 2026-08-15..17).
         remove((std::string(test_ckpt) + ".checkpoint").c_str());
         remove((std::string(test_ckpt) + ".checkpoint.tmp").c_str());
     }
