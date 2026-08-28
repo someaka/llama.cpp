@@ -5476,7 +5476,7 @@ void server_routes::init_routes() {
         }
 
         // Tokenize the input using the same pattern as embeddings
-        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
         if (tokenized_prompts.empty() || tokenized_prompts[0].empty()) {
             res->error(format_error_response("Failed to tokenize input", ERROR_TYPE_INVALID_REQUEST));
             return res;
