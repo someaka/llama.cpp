@@ -729,7 +729,7 @@ static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::st
  * Single pre-scan of prompts.txt. Collects everything the pre-flight passes
  * need: non-empty line count (header/validation) and max line length
  * (auto-ctx estimate). One I/O pass serves run_raw, run_batch, and
- * load_model_session (task-0 #10: was three separate scans).
+ * load_model_session.
  */
 struct PromptsScan {
     int32_t n_nonempty = 0;
@@ -1294,6 +1294,18 @@ static int generate_assignment(GenContext& g) {
             fprintf(stderr, "Error: hidden state extraction failed during generation step %d\n", gen_step);
                     return 1;
         }
+        // Each single-token decode refills the capture buffer from scratch, so
+        // it must hold exactly one row (the generated token) per layer. Reading
+        // row 0 without this check would silently take the wrong token if the
+        // capture contract ever changed.
+        {
+            int32_t n_hidden = llama_get_hidden_state_n_tokens(ctx);
+            if (n_hidden != 1) {
+                fprintf(stderr, "Error: capture buffer holds %d tokens after single-token decode (expected 1) - "
+                                "generation accumulation would read the wrong row\n", n_hidden);
+                return 1;
+            }
+        }
 
         // Accumulate: each layer has 1 token x n_embd floats.
         // Skip the first args.token_skip generated tokens (matching
@@ -1408,10 +1420,9 @@ static int run_batch(const Args& args) {
     int32_t& n_ctx = ms.n_ctx;
     std::vector<int32_t>& target_layers = ms.target_layers;
 
-    // --batch-size > 1 is accepted and range-checked by the parser but has
-    // NO effect: processing is always sequential. A caller passing --batch-size 8
-    // expecting 8x prompt packing gets 1x with only a stderr warning and exit 0.
-    // Per the project's no-silent-errors rule: reject it loudly rather than lie.
+    // --batch-size > 1 is rejected: multi-prompt batching is not implemented
+    // (shared KV-cache semantics would corrupt extraction). The parser still
+    // range-checks the value so the error message can quote it.
     if (args.batch_size > 1) {
         fprintf(stderr, "Error: --batch-size %d is not supported. Multi-prompt batching is "
                         "not implemented (Gemma-4 shared-KV-cache corruption). Use --batch-size 1 "
@@ -1487,13 +1498,33 @@ static int run_batch(const Args& args) {
         return 1;
     }
 
-    // Resume from checkpoint if --resume is set
+    // Resume from checkpoint if --resume is set. The checkpoint carries a run
+    // fingerprint (v3): mode, --generate length, --token-skip, and the target
+    // layer list. A checkpoint written under different settings is rejected
+    // loudly rather than silently merged.
     int skip_count = 0;
     if (args.resume) {
-        if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd)) {
+        checkpoint_fingerprint fp;
+        fp.generate_mode   = args.generate_tokens > 0;
+        fp.generate_tokens = args.generate_tokens;
+        fp.token_skip      = args.token_skip;
+        fp.layers          = target_layers;  // parse_layers returns ascending order
+        if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd, fp)) {
             fprintf(stderr, "Error: --resume requested but no valid checkpoint found at %s.checkpoint\n",
                     args.output_path);
             return 1;
+        }
+        // A checkpoint from a different (larger) dataset would skip every
+        // prompt and still finalize a valid-looking output. Reject instead.
+        if (skip_count > n_prompts_expected) {
+            fprintf(stderr, "Error: checkpoint skip count %d exceeds dataset size %d - checkpoint is from a "
+                            "different (larger) run. Discard the checkpoint (remove %s.checkpoint).\n",
+                    skip_count, n_prompts_expected, args.output_path);
+            return 1;
+        }
+        if (skip_count == n_prompts_expected) {
+            fprintf(stderr, "Warning: checkpoint reports all %d prompts already processed - nothing to do.\n",
+                    skip_count);
         }
     }
 
@@ -1667,7 +1698,12 @@ static int run_batch(const Args& args) {
         n_processed++;
 
         if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
-            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx)) {
+            checkpoint_fingerprint fp;
+            fp.generate_mode   = args.generate_tokens > 0;
+            fp.generate_tokens = args.generate_tokens;
+            fp.token_skip      = args.token_skip;
+            fp.layers          = target_layers;
+            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx, fp)) {
                 fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
                 return false;
             }

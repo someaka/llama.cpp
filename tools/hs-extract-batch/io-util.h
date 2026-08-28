@@ -12,6 +12,7 @@
 #include <cerrno>
 #endif
 #include <string>
+#include <vector>
 
 #include "hs-accum.h"
 
@@ -117,20 +118,37 @@ bool write_batch_output(
 
 // -- Checkpoint / Resume (io-util.cpp) ------------------------------------
 
-// Write checkpoint: version + n_iterated + accumulator state (binary
-// accumulator format). The checkpoint file is output_path + ".checkpoint".
+// Run fingerprint: identifies the invocation that produced a checkpoint so
+// --resume can refuse checkpoints written under different extraction
+// settings (mode, generation length, token skip, target layers). Resuming
+// across differing settings would silently merge incompatible accumulators
+// into one valid-looking output file.
+struct checkpoint_fingerprint {
+    bool    generate_mode   = false; // --generate N > 0 was active
+    int32_t generate_tokens = 0;
+    int32_t token_skip      = 0;
+    std::vector<int32_t> layers;     // sorted target layer indices
+};
+
+// Write checkpoint: version + n_iterated + run fingerprint (v3) + accumulator
+// state (binary accumulator format). The checkpoint file is output_path + ".checkpoint".
 bool write_checkpoint(
     const AccumulatorMap& accumulators,
     const char* output_path,
     int32_t n_embd,
-    int32_t n_iterated
+    int32_t n_iterated,
+    const checkpoint_fingerprint& fp
 );
 
 // Read checkpoint: restore accumulator state and return n_iterated (skip
-// count). Returns false if checkpoint doesn't exist or is corrupt.
+// count). Returns false if checkpoint doesn't exist or is corrupt. For v3+
+// checkpoints the stored run fingerprint must match `expected` exactly;
+// v1/v2 checkpoints carry no fingerprint and are accepted with a warning
+// (legacy files cannot be validated retroactively).
 bool read_checkpoint(
     const char* output_path,
     AccumulatorMap& accumulators,
     int32_t& n_iterated,
-    int32_t expected_n_embd
+    int32_t expected_n_embd,
+    const checkpoint_fingerprint& expected
 );

@@ -183,7 +183,8 @@ bool write_batch_output(
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
-static constexpr int32_t CHECKPOINT_VERSION = 2;
+static constexpr int32_t CHECKPOINT_VERSION = 3;
+static constexpr int32_t CHECKPOINT_VERSION_V2 = 2; // legacy: no run fingerprint
 static constexpr int32_t CHECKPOINT_VERSION_V1 = 1;  // legacy: stored mean, restored via sum=mean*count
 
 /**
@@ -194,7 +195,8 @@ bool write_checkpoint(
     const AccumulatorMap& accumulators,
     const char* output_path,
     int32_t n_embd,
-    int32_t n_iterated
+    int32_t n_iterated,
+    const checkpoint_fingerprint& fp
 ) {
     std::string ckpt_path = std::string(output_path) + ".checkpoint";
     std::string temp_path = ckpt_path + ".tmp";
@@ -214,6 +216,21 @@ bool write_checkpoint(
         f.reset();
         std::remove(temp_path.c_str());
         return false;
+    }
+    // v3: run fingerprint so --resume can refuse checkpoints written under
+    // different extraction settings (see checkpoint_fingerprint in io-util.h).
+    {
+        int32_t n_fp_layers = (int32_t)fp.layers.size();
+        if (!checked_write(&n_fp_layers, sizeof(int32_t), 1, f) ||
+            !checked_write(&fp.generate_mode, sizeof(bool), 1, f) ||
+            !checked_write(&fp.generate_tokens, sizeof(int32_t), 1, f) ||
+            !checked_write(&fp.token_skip, sizeof(int32_t), 1, f) ||
+            (n_fp_layers > 0 &&
+             !checked_write(fp.layers.data(), sizeof(int32_t), (size_t)n_fp_layers, f))) {
+            f.reset();
+            std::remove(temp_path.c_str());
+            return false;
+        }
     }
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (!ok) {
@@ -249,7 +266,8 @@ bool read_checkpoint(
     const char* output_path,
     AccumulatorMap& accumulators,
     int32_t& n_iterated,
-    int32_t expected_n_embd
+    int32_t expected_n_embd,
+    const checkpoint_fingerprint& expected
 ) {
     std::string ckpt_path = std::string(output_path) + ".checkpoint";
     FilePtr f(fopen(ckpt_path.c_str(), "rb"));
@@ -258,22 +276,60 @@ bool read_checkpoint(
     // Read and validate checkpoint version
     int32_t version = 0;
     if (fread(&version, sizeof(int32_t), 1, f) != 1) return false;
-    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V1) {
+    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V2 && version != CHECKPOINT_VERSION_V1) {
         fprintf(stderr, "Error: checkpoint version mismatch (got %d, expected %d) - incompatible checkpoint format\n",
                 version, CHECKPOINT_VERSION);
         return false;
     }
-    // v1 checkpoints stored mean (sum/count); v2 stores raw sum (no precision loss).
+    // v1 checkpoints stored mean (sum/count); v2+ stores raw sum (no precision loss).
     // The read loop below branches on version to restore sums correctly.
     const bool is_v1 = (version == CHECKPOINT_VERSION_V1);
 
     // Read n_iterated
     if (fread(&n_iterated, sizeof(int32_t), 1, f) != 1) return false;
 
-    // R4-R6: Validate n_iterated to prevent negative loop counts
+    // Validate n_iterated to prevent negative loop counts
     if (n_iterated < 0) {
         fprintf(stderr, "Error: checkpoint contains invalid n_iterated=%d (would cause infinite loop)\n", n_iterated);
         return false;
+    }
+
+    // v3: run fingerprint. Must match the current invocation exactly; a
+    // mismatch means the checkpoint was written under different extraction
+    // settings and resuming would silently merge incompatible accumulators.
+    if (version >= CHECKPOINT_VERSION) {
+        int32_t n_fp_layers = 0;
+        bool generate_mode = false;
+        int32_t generate_tokens = 0, token_skip = 0;
+        if (fread(&n_fp_layers, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&generate_mode, sizeof(bool), 1, f) != 1) return false;
+        if (fread(&generate_tokens, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&token_skip, sizeof(int32_t), 1, f) != 1) return false;
+        if (n_fp_layers < 0 || n_fp_layers > MAX_LAYERS) {
+            fprintf(stderr, "Error: checkpoint fingerprint layer count %d out of range [0, %d] - corrupt checkpoint\n",
+                    n_fp_layers, MAX_LAYERS);
+            return false;
+        }
+        std::vector<int32_t> fp_layers((size_t)n_fp_layers);
+        if (n_fp_layers > 0 && fread(fp_layers.data(), sizeof(int32_t), (size_t)n_fp_layers, f) != (size_t)n_fp_layers) {
+            return false;
+        }
+        if (generate_mode != expected.generate_mode || generate_tokens != expected.generate_tokens ||
+            token_skip != expected.token_skip || fp_layers != expected.layers) {
+            fprintf(stderr, "Error: checkpoint run fingerprint mismatch - checkpoint was written with different "
+                            "extraction settings (mode=%s generate_tokens=%d token_skip=%d n_layers=%d) than the "
+                            "current invocation (mode=%s generate_tokens=%d token_skip=%d n_layers=%zu). "
+                            "Discard the checkpoint (remove %s) or rerun with the original settings.\n",
+                    generate_mode ? "generate" : "comprehension", generate_tokens, token_skip, n_fp_layers,
+                    expected.generate_mode ? "generate" : "comprehension", expected.generate_tokens,
+                    expected.token_skip, expected.layers.size(), ckpt_path.c_str());
+            return false;
+        }
+    } else {
+        fprintf(stderr, "Warning: checkpoint version %d carries no run fingerprint - cannot verify that extraction "
+                        "settings (mode/--generate/--token-skip/--layers) match this invocation. Proceeding; if the "
+                        "checkpoint came from a different run configuration the output will silently mix settings.\n",
+                version);
     }
 
     // Read accumulator state (binary accumulator format)
@@ -302,6 +358,11 @@ bool read_checkpoint(
                 n_embd, expected_n_embd);
         return false;
     }
+
+    // All-or-nothing restore: parse into a local map and publish only after
+    // the final record validates, so a corrupt record at offset N cannot
+    // leave a partially-mutated caller map behind.
+    AccumulatorMap restored;
 
     for (int32_t g = 0; g < n_groups; g++) {
         int32_t group_id = 0, n_masks = 0;
@@ -365,7 +426,7 @@ bool read_checkpoint(
 
                 // Use flat key for single-level map lookup
                 uint64_t key = make_accum_key(group_id, mask_id, layer_idx);
-                auto& av = accumulators[key];
+                auto& av = restored[key];
                 av.count = count;
                 av.sum.resize(n_embd);
                 if (is_v1) {
@@ -388,6 +449,7 @@ bool read_checkpoint(
     }
 
     fprintf(stderr, "Checkpoint restored: %d prompts already processed\n", n_iterated);
+    accumulators = std::move(restored);
     return true;
 }
 
