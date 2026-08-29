@@ -445,9 +445,6 @@ static Args parse_args(int argc, char** argv) {
 
 
 
-// -- Batch Mode Constants & Data Structures -----------------------------
-
-static constexpr int REPEAT_PENALTY_LAST_N = 64;
 // -- Layer Parsing ------------------------------------------------------
 
 static std::vector<int> parse_layers(const std::string& s, int n_layer) {
@@ -488,6 +485,9 @@ static std::vector<int> parse_layers(const std::string& s, int n_layer) {
 }
 
 // -- Masked Mean Computation --------------------------------------------
+
+// Repeat-penalty window for generation mode's sampler chain.
+static constexpr int REPEAT_PENALTY_LAST_N = 64;
 
 /**
  * Compute mean of hidden state data over specified token ranges.
@@ -554,32 +554,10 @@ int compute_single_range_mean(
     int end,
     float* out
 ) {
-    // All range violations are hard errors  -  no silent clamping.
-    if (start < 0 || end < 0 || start >= end) {
-        fprintf(stderr, "Error: invalid single-range [%d, %d)  -  negative or empty range\n", start, end);
-        return -1;
-    }
-    if (end > n_tokens || start > n_tokens) {
-        fprintf(stderr, "Error: single-range [%d, %d) exceeds n_tokens=%d  -  "
-                        "token span computation is incorrect\n", start, end, n_tokens);
-        return -1;
-    }
-
-    for (int t = start; t < end; t++) {
-        const float* row = data + (size_t)t * (size_t)n_embd;
-        HS_SIMD
-        for (int d = 0; d < n_embd; d++) {
-            out[d] += row[d];
-        }
-    }
-
-    const int count = end - start;
-    float inv = 1.0f / (float)count;
-    HS_SIMD
-    for (int d = 0; d < n_embd; d++) {
-        out[d] *= inv;
-    }
-    return count;
+    // Single contiguous [start, end) span: a specialization of
+    // compute_masked_mean with one range. Delegates for identical
+    // validation and accumulation semantics.
+    return (int)compute_masked_mean(data, n_tokens, n_embd, {{start, end}}, out);
 }
 
 // -- Prompt Processing --------------------------------------------------
@@ -960,8 +938,7 @@ static int run_raw(const Args& args) {
                             tokens, target_layers, n_embd, prompt_idx, out,
                             args.mean_mode, args.token_skip)) {
             fprintf(stderr, "Error: process_prompt failed at prompt %d\n", prompt_idx);
-            out.reset();
-            std::remove(tmp_path.c_str());
+            fail_cleanup();
             return 1;  // fatal I/O error
         }
 
@@ -1024,13 +1001,16 @@ static int run_raw(const Args& args) {
     return 0;
 }
 
-// -- Batch-Accumulate Output Writer -------------------------------------
-
 // -- Async prefetch pipeline (TU scope) ----------------------------------
 //
 // Producer-consumer: the producer thread does file I/O + tokenization for
 // prompt N+1 while the GPU processes prompt N. The consumer (main thread)
 // owns the llama_context exclusively -- only it calls decode/extract.
+//
+// Backpressure: the queue below is capped at MAX_PREFETCH items to bound
+// memory (~2KB typical per item, up to ~50KB for long prompts; 64 items ->
+// max ~3MB queued), preventing OOM on 200K-prompt runs where tokenization
+// outpaces GPU decode.
 
 struct PrefetchedPrompt {
     int prompt_idx = -1;
@@ -1049,10 +1029,7 @@ struct PrefetchQueue {
     std::atomic<int> n_produced{0};
 };
 
-// Backpressure: cap queue depth to bound memory usage.
-// Each item holds tokens + assignments (~2KB typical, up to ~50KB for long prompts).
-// 64 items -> max ~3MB queued, prevents OOM on 200K-prompt runs where
-// tokenization outpaces GPU decode.
+// Backpressure cap: see the pipeline comment above.
 static constexpr size_t MAX_PREFETCH = 64;
 
 // Checked fwrite for the per-record sidecar.
@@ -1137,7 +1114,7 @@ static int generate_assignment(GenContext& g) {
     if (args.save_per_record) {
         fprintf(stderr, "Error: --generate is incompatible with --save-per-record "
                 "(per-record records are not written in generation mode)\n");
-            return 1;
+        return 1;
     }
     // Generation mode means over ALL generated tokens. Assignments
     // with skip>0 or ranges (mask_type==1) have no defined semantics here
@@ -1177,7 +1154,7 @@ static int generate_assignment(GenContext& g) {
         fprintf(stderr, "Error: generation accumulator size (%zu layers x %d embd) "
                 "exceeds 1GB cap - configuration is corrupt or absurdly large\n",
                 n_layers_total, n_embd);
-            return 1;
+        return 1;
     }
     gen_accum.resize(n_layers_total * n_embd, 0.0f);
     gen_count.assign(n_layers_total, 0);
@@ -1247,7 +1224,7 @@ static int generate_assignment(GenContext& g) {
                 float* token_logits = llama_get_logits_ith(ctx, n_tokens - 1);
                 if (!token_logits) {
                     fprintf(stderr, "Error: no logits available for generation sampling\n");
-                                    return 1;
+                    return 1;
                 }
                 next_token = 0;
                 float best_val = token_logits[0];
@@ -1263,7 +1240,7 @@ static int generate_assignment(GenContext& g) {
                 if (std::isnan(best_val)) {
                     fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
                                     "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                                    return 1;
+                    return 1;
                 }
             }
         }
@@ -1349,7 +1326,7 @@ static int generate_assignment(GenContext& g) {
                     if (std::isnan(best_val)) {
                         fprintf(stderr, "Error: NaN logits at generation step %d for prompt %d "
                                         "(numerical instability or corrupt model)\n", gen_step, prompt_idx);
-                                            return 1;
+                        return 1;
                     }
                 }
             }
@@ -1574,12 +1551,6 @@ static int run_batch(const Args& args) {
     }
 
 
-    // Backpressure: cap queue depth to bound memory usage.
-    // Each item holds tokens + assignments (~2KB typical, up to ~50KB for long prompts).
-    // 64 items -> max ~3MB queued, prevents OOM on 200K-prompt runs where
-    // tokenization outpaces GPU decode.
-
-
     PrefetchQueue pfq;
 
     // Producer thread: reads prompts, tokenizes, reads assignments
@@ -1796,13 +1767,9 @@ static int run_batch(const Args& args) {
         llama_synchronize(ctx);
         auto t_decode_end = std::chrono::steady_clock::now();
 
-        // -- Generation-based extraction --
-        // If --generate N is set, autoregressively generate N tokens and extract
-        // hidden states from the GENERATED tokens only. This contrasts with the
-        // default comprehension-based mode, which reads hidden states from the
-        // INPUT tokens of a single forward pass: here the model's own output
-        // tokens are the span whose representations are captured.
-        // -- Generation-based extraction (generate_assignment) --
+        // The shared per-prompt tail (after_prompt_done) does the bookkeeping
+        // (counters, checkpoint, progress); generation has no separate
+        // extract/mean phases, so those accrue as 0 under --profile.
         if (args.generate_tokens > 0) {
             GenContext g{ctx, batch, args, assignments, prompt_idx, n_tokens,
                          n_embd, n_ctx, target_layers, layer_ptrs, mean_buf,
