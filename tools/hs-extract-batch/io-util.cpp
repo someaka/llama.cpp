@@ -1,6 +1,7 @@
 // Durable/atomic I/O implementations for hs-extract-batch: batch output
-// writer, checkpoint write/read. Extracted verbatim from
-// hs-extract-batch.cpp (pure code motion).
+// writer, checkpoint write/read, and fsync helpers (temp+fsync+rename
+// finalization contract shared by all writers).
+
 
 #include "io-util.h"
 

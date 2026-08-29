@@ -16,9 +16,11 @@
  *
  * --raw is a debug/parity mode that dumps per-prompt binary data.
  *
- * Flags:
+ * Flags (see print_usage for the full list):
  *   --mean           In --raw: output token means instead of full per-token output
- *   --token-skip N   Skip first N tokens when computing mean (default: 0)
+ *   --token-skip N   Skip first N tokens when a mean is computed (default: 0)
+ *   --generate N     Batch mode: autoregressive generation extraction
+ *                    (pair with --temperature/--top-k/--top-p/--repeat-penalty)
  *
  * Batch-only flags:
  *   --assignments F  Path to assignments.bin (required)
@@ -870,6 +872,13 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
 static int run_raw(const Args& args) {
     PromptsScan scan;
     if (!scan_prompts_file(args.prompts_file, scan)) return 1;
+    // Q-P1-10 (2026-08-29 quality pass): an empty prompts file would finalize
+    // an output containing just the int32 0 header and exit 0 — silently
+    // producing a "complete" empty dump. Reject instead.
+    if (scan.n_nonempty == 0) {
+        fprintf(stderr, "Error: prompts file '%s' contains no non-empty prompts\n", args.prompts_file);
+        return 1;
+    }
     ModelSession ms;
     if (!load_model_session(args, scan, ms)) return 1;
     // Local references keep the body unchanged from the pre-extraction code.
@@ -1081,7 +1090,6 @@ static inline void stop_producer_and_join(
 // default comprehension-based mode, which reads hidden states from the
 // INPUT tokens of a single forward pass: here the model's own output
 // tokens are the span whose representations are captured.
-// Extracted verbatim from run_batch's consumer loop (pure code motion).
 // Returns 0 on success (caller runs the shared tail); 1 on error (caller
 // stops the producer and returns 1).
 
@@ -1138,13 +1146,8 @@ static int generate_assignment(GenContext& g) {
     }
     // Accumulate hidden states from generated tokens into per-layer buffers.
     // We reuse mean_buf for per-token accumulation and a separate gen_accum
-    // buffer for the running sum.
-    // These were `static thread_local`, implying per-thread
-    // safety. run_batch is single-consumer, so thread_local adds no
-    // protection and only misleads a reader into thinking parallel
-    // generation is safe. Plain function-scope static keeps the
-    // perf benefit (one allocation, reused via resize/fill) without
-    // the false concurrency implication.
+    // buffer for the running sum. Function-scope static: one allocation,
+    // reused across calls; NOT thread-safe (run_batch is single-consumer).
     static std::vector<float> gen_accum;
     static std::vector<int64_t> gen_count;
     const size_t n_layers_total = target_layers.size();
@@ -1342,24 +1345,26 @@ static int generate_assignment(GenContext& g) {
     }
 
     // Compute means from generated tokens and accumulate into the assignment buffers
-    // (same path as comprehension mode, but using gen_accum instead of masked mean)
-    // Use per-layer gen_count[li]; a null layer_ptrs[li] skips that layer's
-    // accumulation, so counts can differ across layers.
-    for (const auto& assign : assignments) {
-        for (size_t li = 0; li < target_layers.size(); li++) {
-            int64_t n_gen = gen_count[li];
-            if (n_gen == 0) continue;  // layer had no valid hidden states
-            float* accum_ptr = &gen_accum[li * n_embd];
-            // Divide by count to get mean
-            float inv = 1.0f / (float)n_gen;
-            HS_SIMD
-            for (int d = 0; d < n_embd; d++) {
-                mean_buf[d] = accum_ptr[d] * inv;
-            }
-            // Accumulate into the group/mask/layer accumulator.
-            // Use target_layers[li] (the REAL layer number), matching the
-            // comprehension accumulation loop. Using the loop index `li`
-            // would silently mislabel layers in the binary accumulator output.
+    // (same path as comprehension mode, but using gen_accum instead of masked mean).
+    // Q-P1-4 (2026-08-29 quality pass): the mean gen_accum[li]/n_gen is
+    // per-LAYER, not per-assignment — hoisted out of the assignment loop
+    // (A*L divides collapsed to L).
+    for (size_t li = 0; li < target_layers.size(); li++) {
+        int64_t n_gen = gen_count[li];
+        if (n_gen == 0) continue;  // layer had no valid hidden states
+        float* accum_ptr = &gen_accum[li * n_embd];
+        float inv = 1.0f / (float)n_gen;
+        HS_SIMD
+        for (int d = 0; d < n_embd; d++) {
+            mean_buf[d] = accum_ptr[d] * inv;
+        }
+        // Accumulate into the group/mask/layer accumulator.
+        // Use target_layers[li] (the REAL layer number), matching the
+        // comprehension accumulation loop. Using the loop index `li`
+        // would silently mislabel layers in the binary accumulator output.
+        // Per-layer gen_count[li] may differ (null layer_ptrs[li] skips
+        // that layer's accumulation), so counts can differ across layers.
+        for (const auto& assign : assignments) {
             uint64_t acc_key = make_accum_key(assign.group_id, assign.mask_id, target_layers[li]);
             auto& acc = accumulators[acc_key];
             if (acc.sum.empty()) {
@@ -1581,6 +1586,10 @@ static int run_batch(const Args& args) {
             if (p_line.empty()) continue;
             auto assignment_read = read_prompt_assignments(assign_fin);
             if (assignment_read.status != AssignmentReadStatus::ok) {
+                // Q-P2-3: precise producer-side diagnostic (status, not a
+                // generic consumer-side "assignment read failed").
+                fprintf(stderr, "Error: assignment read status=%d for prompt %d (assignments stream desync or truncated)\n",
+                        (int)assignment_read.status, (int)pfq.n_produced.load());
                 PrefetchedPrompt p;
                 p.error = true;
                 {
@@ -1721,7 +1730,9 @@ static int run_batch(const Args& args) {
         }
 
         if (pp.error) {
-            fprintf(stderr, "Error: assignment read failed\n");
+            // Producer-side failure (assignment read, prompts-stream I/O, or
+            // tokenization); the producer printed the precise diagnostic.
+            fprintf(stderr, "Error: producer failed on prompt %d\n", pp.prompt_idx);
             stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }
@@ -1843,8 +1854,7 @@ static int run_batch(const Args& args) {
             // mask_type 0 is the common case (single full-span range): reuse
             // the hoisted buffer with clear+push_back (no allocation).
             // mask_type 1 points at the assignment's own vector -- a const
-            // pointer, no copy. The old code deep-copied assign.ranges per
-            // assignment per prompt on this hot path.
+            // pointer, no copy.
             const std::vector<std::pair<int,int>>* ranges_ptr;
             if (assign.mask_type == 0) {
                 ranges_buf.clear();

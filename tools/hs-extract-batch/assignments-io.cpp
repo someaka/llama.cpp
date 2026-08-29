@@ -1,6 +1,7 @@
 // assignments.bin readers for hs-extract-batch: header parsing and the
-// per-prompt sequential assignment reader. Extracted verbatim from
-// hs-extract-batch.cpp (pure code motion).
+// per-prompt sequential assignment reader. Durable/atomic I/O implementations
+// for hs-extract-batch (this TU: the assignments reader).
+
 
 #include <cstdio>
 #include <string>

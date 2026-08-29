@@ -1,7 +1,7 @@
 // Internal header for hs-extract-batch: named size limits shared across
 // translation units, the assignments.bin data model and readers, and the
-// per-record sidecar write macro. Extracted verbatim from hs-extract-batch.cpp
-// (pure code motion).
+// per-record sidecar write macro.
+
 #pragma once
 
 #include <cstdint>

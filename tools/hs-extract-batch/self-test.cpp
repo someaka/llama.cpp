@@ -1,7 +1,7 @@
 // Self-test for hs-extract-batch: synthetic tests over compute_masked_mean(),
 // compute_single_range_mean(), the accumulator key encoding, and the
-// checkpoint write/read roundtrip. Extracted verbatim from
-// hs-extract-batch.cpp (pure code motion). No model file needed.
+// checkpoint write/read roundtrip. No model file needed.
+
 
 #include <cstdio>
 #include <cstdlib>

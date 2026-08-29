@@ -1,7 +1,7 @@
 // Internal shared header for hs-extract-batch: RAII FILE wrapper, checked
 // writes, and durable/atomic I/O helpers (checkpoint read/write, atomic
-// temp+fsync+rename finalization). Extracted verbatim from
-// hs-extract-batch.cpp (pure code motion).
+// output finalization).
+
 #pragma once
 
 #include <cstdio>

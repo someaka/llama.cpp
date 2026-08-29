@@ -5459,11 +5459,15 @@ void server_routes::init_routes() {
                 res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
-            skip_offset = body["skip_offset"].get<int32_t>();
-            if (skip_offset < 0) {
-                res->error(format_error_response("skip_offset must be non-negative", ERROR_TYPE_INVALID_REQUEST));
+            // Q-P1-8 (2026-08-29 quality pass): parse as int64 first — get<int32_t>
+            // narrows before the range check, so 2^32+7 would truncate to 7.
+            // Mirrors the layer_req parse 40 lines above.
+            const int64_t skip_req = body["skip_offset"].get<int64_t>();
+            if (skip_req < 0 || skip_req > 2147483647LL) {
+                res->error(format_error_response("skip_offset must be in [0, INT32_MAX]", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
+            skip_offset = (int32_t)skip_req;
         }
 
         // Get input text

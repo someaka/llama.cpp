@@ -1,7 +1,7 @@
 // Internal header for hs-extract-batch: accumulator data structures and the
 // flat-key encoding shared by the accumulation, checkpoint, output-writing,
-// and self-test translation units. Extracted verbatim from
-// hs-extract-batch.cpp (pure code motion).
+// and self-test translation units.
+
 #pragma once
 
 #include <cstdint>

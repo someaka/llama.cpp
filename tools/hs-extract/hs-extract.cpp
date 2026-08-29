@@ -60,7 +60,17 @@ static std::vector<int> parse_layer_list(const char * str, int n_layers) {
             fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
             return {};
         }
-        if (val < 0 || val >= n_slots) {
+        if (val < 0) {
+            // Q-P1-11 (2026-08-29 quality pass): Python-style negative index
+            // (from the end), matching hs-extract-batch's parser. -1 = last
+            // slot (final block output), -n_slots = embeddings.
+            val += n_slots;
+            if (val < 0) {
+                fprintf(stderr, "error: layer %ld out of range [-%d, %d)\n", val - n_slots, n_slots, n_slots);
+                return {};
+            }
+        }
+        if (val >= n_slots) {
             fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_slots);
             return {};
         }
