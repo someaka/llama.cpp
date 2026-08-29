@@ -333,19 +333,21 @@ int main(int argc, char ** argv) {
 
     // Stream the JSON directly (no ostringstream buffer): "all" layers with a
     // long prompt (e.g. 2048 tokens x 2560 dims) would otherwise accumulate
-    // GB-scale text in RAM before the first write. The emitted bytes are
-    // identical to the former buffered form.
+    // GB-scale text in RAM before the first write. When --output is given the
+    // stream targets a .tmp file renamed into place only after a verified
+    // flush, so a disk-full/EIO mid-write never leaves a truncated JSON at
+    // the final path (same durability contract as hs-extract-batch's writers).
     std::ofstream file_out;
-    std::ostream* json_stream = &std::cout;
+    std::string tmp_path;
     if (output_file) {
-        file_out.open(output_file);
+        tmp_path = std::string(output_file) + ".tmp";
+        file_out.open(tmp_path);
         if (!file_out) {
-            fprintf(stderr, "error: could not open output file '%s'\n", output_file);
+            fprintf(stderr, "error: could not open output file '%s'\n", tmp_path.c_str());
             return 1;
         }
-        json_stream = &file_out;
     }
-    std::ostream& json = *json_stream;
+    std::ostream& json = output_file ? static_cast<std::ostream&>(file_out) : std::cout;
     json << "{\n";
     json << "  \"n_tokens\": " << n_tokens_out << ",\n";
     json << "  \"n_embd\": " << n_embd << ",\n";
@@ -358,11 +360,11 @@ int main(int argc, char ** argv) {
 
         if (!hs) {
             fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
-            // Streaming opens the output file before extraction; a failure
+            // Streaming opens the temp file before extraction; a failure
             // here must not leave an empty/truncated JSON behind.
             if (output_file) {
                 file_out.close();
-                std::remove(output_file);
+                std::remove(tmp_path.c_str());
             }
             return 1;
         }
@@ -389,10 +391,22 @@ int main(int argc, char ** argv) {
     json.flush();
     if (!json) {
         fprintf(stderr, "error: write/flush of output '%s' failed\n",
-                output_file ? output_file : "stdout");
+                output_file ? tmp_path.c_str() : "stdout");
+        if (output_file) {
+            file_out.close();
+            std::remove(tmp_path.c_str());
+        }
         return 1;
     }
     if (output_file) {
+        file_out.close();
+        // Atomic finalize: the final path appears only when the write is
+        // complete, so a crash mid-write can never leave a truncated JSON.
+        if (std::rename(tmp_path.c_str(), output_file) != 0) {
+            fprintf(stderr, "error: cannot rename %s to %s\n", tmp_path.c_str(), output_file);
+            std::remove(tmp_path.c_str());
+            return 1;
+        }
         fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
     }
 

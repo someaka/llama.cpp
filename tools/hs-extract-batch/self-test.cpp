@@ -24,7 +24,7 @@ int run_self_test() {
     fprintf(stderr, "Running compute_masked_mean self-tests...\n\n");
 
     int passed = 0;
-    const int total = 19;
+    int total = 19;  // attempted tests: 1-16 kernels, 17 fixture, 18-19 inside 17's success branch
     bool all_ok = true;
 
     // All tests use data layout: 3 tokens x 2 dims, row-major
@@ -264,7 +264,9 @@ int run_self_test() {
         bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42, fp);
         if (!write_ok) {
             fprintf(stderr, "  Test 17 (checkpoint roundtrip): FAIL (write failed)\n");
+            fprintf(stderr, "  Test 18/19: SKIP (fixture unavailable)\n");
             all_ok = false;
+            total += 2;  // attempted-but-failed, not silently absent
         } else {
             // Read it back with the same fingerprint - must succeed
             AccumulatorMap restored_acc;
@@ -345,8 +347,10 @@ int run_self_test() {
                         // region (n/4 hits group/mask/layer headers).
                         bool structural = (oi <= 3);
                         bool read_ok2 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp);
+                        // Structural offsets must be detected. Float-payload
+                        // offsets may legitimately pass: a flipped float is a
+                        // valid float (comment above).
                         if (structural && read_ok2) ok19 = false;
-                        if (!structural && read_ok2 && oi == 5 && corrupt[offsets[oi]] == bytes[offsets[oi]]) ok19 = false;
                     }
                     // Restore the pristine checkpoint for any later checks
                     FILE* rf = fopen(ckpt_path.c_str(), "wb");

@@ -6,11 +6,6 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <queue>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,10 +29,6 @@ static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max batch size for mul
 // -- Argument Parsing ---------------------------------------------------
 
 static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
-
-// Repeat-penalty window (last_n) for generation-mode sampling: tokens further
-// back than this are not penalized. Fixed, not CLI-tunable; named instead of
-// a bare literal at the call site.
 
 // One (group, mask) assignment for a prompt.
 struct Assignment {

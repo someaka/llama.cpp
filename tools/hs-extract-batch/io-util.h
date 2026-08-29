@@ -127,7 +127,7 @@ struct checkpoint_fingerprint {
     bool    generate_mode   = false; // --generate N > 0 was active
     int32_t generate_tokens = 0;
     int32_t token_skip      = 0;
-    std::vector<int32_t> layers;     // sorted target layer indices
+    std::vector<int32_t> layers;     // target layer indices; writer sorts, identity is order-independent
 };
 
 // Write checkpoint: version + n_iterated + run fingerprint (v3) + accumulator

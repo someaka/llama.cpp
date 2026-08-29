@@ -106,7 +106,6 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --self-test      Run synthetic tests on compute_masked_mean(), no model needed\n");
     fprintf(stderr, "\nFlags:\n");
     fprintf(stderr, "  --mean           In --raw mode: output token means instead of full per-token data\n");
-    fprintf(stderr, "  --token-skip N   Skip first N tokens for mean computation (default: 0)\n");
     fprintf(stderr, "  --assignments F  Path to assignments.bin (required with --batch)\n");
     fprintf(stderr, "  --ctx-size N     Override auto context sizing (default: auto from prompts)\n");
     fprintf(stderr, "  --checkpoint-every N  Write checkpoint every N prompts (default: 10000)\n");
@@ -116,12 +115,13 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --batch-size N   Accepted for compatibility; values > 1 are rejected at runtime\n");
     fprintf(stderr, "                  (multi-prompt batching is not implemented). Default: 1.\n");
     fprintf(stderr, "  --profile       Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)\n");
-    fprintf(stderr, "  --no-bos        Do not add BOS token (for models like Qwen3.5 with bos_offset=0)\n");
+    fprintf(stderr, "  --no-bos        Do not add BOS token (for models whose tokenizer expects no leading BOS)\n");
     fprintf(stderr, "  --generate N    Generation-based extraction: generate N tokens after each prompt,\n");
     fprintf(stderr, "                  extract hidden states from GENERATED tokens only.\n");
     fprintf(stderr, "                  Without this flag, extraction is comprehension-based (forward pass only).\n");
-    fprintf(stderr, "  --token-skip N  In generation mode: skip the first N GENERATED tokens when computing the mean.\n");
-    fprintf(stderr, "                  In comprehension mode: skip the first N input tokens. Default: 0.\n");
+    fprintf(stderr, "  --token-skip N  Skip the first N tokens when a mean is computed: with --raw --mean,\n");
+    fprintf(stderr, "                  skip input tokens; with --batch --generate, skip generated tokens.\n");
+    fprintf(stderr, "                  Rejected in batch comprehension mode and in --raw full dumps. Default: 0.\n");
     fprintf(stderr, "  --temperature F Sampling temperature for generation mode (0 = greedy argmax, default).\n");
     fprintf(stderr, "                  temperature > 0 reduces cross-backend divergence from greedy decoding.\n");
     fprintf(stderr, "  --top-k K       Top-k sampling (generation mode only, default: 0 = disabled).\n");
@@ -386,6 +386,14 @@ static Args parse_args(int argc, char** argv) {
 
     // --raw mode: [model] [prompts] [layers] [output]
     if (args.raw_mode) {
+        // --token-skip is consumed only by the --raw --mean path (mean over
+        // [skip, n_tokens)); full dumps carry every token, so the flag
+        // would be silently ignored.
+        if (args.token_skip > 0 && !args.mean_mode) {
+            fprintf(stderr, "Error: --token-skip applies only to --raw --mean or --batch --generate mode; "
+                            "--raw full dumps contain every token. Drop the flag or pass --mean.\n");
+            exit(1);
+        }
         if (positional.empty()) {
             fprintf(stderr, "Error: --raw requires a model path\n");
             print_usage(argv[0]);
@@ -671,12 +679,12 @@ static bool process_prompt(
  * exception from here would change that contract. Token output is identical
  * to common_tokenize(vocab, text, add_bos, true) on the happy path.
  *
- * add_bos default note: callers pass !args.no_bos (BOS always added unless
- * --no-bos). hs-extract instead uses llama_vocab_get_add_bos(vocab) &&
- * !no_bos, i.e. the VOCAB's own default. The divergence is deliberate here:
- * batch extraction targets fixed story sets where an explicit token budget
- * matters, and the Python driver (batch_runner) passes --no-bos for every
- * bos_offset==0 model, keeping cross-tool parity where it counts.
+ * add_bos: callers pass !args.no_bos -- BOS is added unless --no-bos, even
+ * for vocabs whose own default is no-BOS. hs-extract instead follows the
+ * vocab default (llama_vocab_get_add_bos && !no_bos). This is a real
+ * divergence on no-BOS-default models (e.g. Qwen3.5): pass --no-bos to
+ * hs-extract-batch to match hs-extract there. The Python driver does this
+ * automatically for bos_offset==0 models.
  */
 static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool add_bos = true) {
     int n = -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, add_bos, true);
@@ -1371,6 +1379,18 @@ static int generate_assignment(GenContext& g) {
     return 0;
 }
 
+// Build the checkpoint run fingerprint. Layer list is sorted so the identity
+// is order-independent (--layers 0,17,35 and 35,17,0 resume interchangeably).
+static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vector<int32_t>& layers) {
+    checkpoint_fingerprint fp;
+    fp.generate_mode   = args.generate_tokens > 0;
+    fp.generate_tokens = args.generate_tokens;
+    fp.token_skip      = args.token_skip;
+    fp.layers          = layers;
+    std::sort(fp.layers.begin(), fp.layers.end());
+    return fp;
+}
+
 // -- Batch-Accumulate Mode ----------------------------------------------
 
 /**
@@ -1481,11 +1501,7 @@ static int run_batch(const Args& args) {
     // loudly rather than silently merged.
     int skip_count = 0;
     if (args.resume) {
-        checkpoint_fingerprint fp;
-        fp.generate_mode   = args.generate_tokens > 0;
-        fp.generate_tokens = args.generate_tokens;
-        fp.token_skip      = args.token_skip;
-        fp.layers          = target_layers;  // parse_layers returns ascending order
+        checkpoint_fingerprint fp = make_fingerprint(args, target_layers);
         if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd, fp)) {
             fprintf(stderr, "Error: --resume requested but no valid checkpoint found at %s.checkpoint\n",
                     args.output_path);
@@ -1669,12 +1685,8 @@ static int run_batch(const Args& args) {
         n_processed++;
 
         if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
-            checkpoint_fingerprint fp;
-            fp.generate_mode   = args.generate_tokens > 0;
-            fp.generate_tokens = args.generate_tokens;
-            fp.token_skip      = args.token_skip;
-            fp.layers          = target_layers;
-            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx, fp)) {
+            if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx,
+                                  make_fingerprint(args, target_layers))) {
                 fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
                 return false;
             }
@@ -2009,12 +2021,6 @@ static int run_batch(const Args& args) {
     return 0;
 }
 
-// -- Self-Test Mode -----------------------------------------------------
-
-/**
- * Run synthetic known-value tests on compute_masked_mean() with no model loaded.
- * Exits 0 on pass, 1 on fail.
- */
 // -- Main ----------------------------------------------------------------
 
 int main(int argc, char** argv) {
