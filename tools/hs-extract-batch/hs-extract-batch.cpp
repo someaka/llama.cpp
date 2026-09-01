@@ -884,12 +884,9 @@ static int run_raw(const Args& args) {
     }
     ModelSession ms;
     if (!load_model_session(args, scan, ms)) return 1;
-    // Local references keep the body unchanged from the pre-extraction code.
-    LlamaModel& model = ms.model;
     LlamaContext& ctx = ms.ctx;
     const llama_vocab*& vocab = ms.vocab;
     int32_t& n_embd = ms.n_embd;
-    int32_t& n_layers = ms.n_layers;
     int32_t& n_ctx = ms.n_ctx;
     std::vector<int32_t>& target_layers = ms.target_layers;
 
@@ -1418,12 +1415,9 @@ static int run_batch(const Args& args) {
     if (!scan_prompts_file(args.prompts_file, scan)) return 1;
     ModelSession ms;
     if (!load_model_session(args, scan, ms)) return 1;
-    // Local references keep the body unchanged from the pre-extraction code.
-    LlamaModel& model = ms.model;
     LlamaContext& ctx = ms.ctx;
     const llama_vocab*& vocab = ms.vocab;
     int32_t& n_embd = ms.n_embd;
-    int32_t& n_layers = ms.n_layers;
     int32_t& n_ctx = ms.n_ctx;
     std::vector<int32_t>& target_layers = ms.target_layers;
 

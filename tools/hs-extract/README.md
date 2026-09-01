@@ -23,7 +23,8 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 - `-f, --file FILE` - Read prompt from file
 - `-l, --layers LIST` - Comma-separated layer indices or `all` (default: all)
 - `--raw` - Interpret prompt as comma-separated token IDs
-- `--no-bos` - Don't add BOS token
+- `--no-bos` - Don't add BOS token. Default: BOS is added only when the
+  model's tokenizer declares `add_bos_token` (e.g. gemma yes, qwen no).
 - `-t, --threads N` - Number of CPU threads (default: 4)
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 0)
 - `--output FILE` - Output JSON file (default: stdout)

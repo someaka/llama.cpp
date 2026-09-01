@@ -89,10 +89,11 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 
 ### 6. Test/Diagnostic Tools
 
-- `tools/hs-extract-batch-test`  -  warmup/toggle equivalence repro: verifies
-  CLI-style (extract on from creation) and server-style (warmup, toggle on,
-  memory clear) initialization produce identical hidden states. Both modes
-  run in fork CI.
+- `tools/hs-extract-batch-test`  -  warmup/toggle equivalence check: mode 2
+  (the CI mode) runs both init paths in one process — CLI-style (extract on
+  from creation) and server-style (warmup, toggle on, memory clear) — and
+  compares the captured hidden states bitwise; exit 2 on any mismatch.
+  Modes 0/1 print values for manual debugging.
 - `tools/hs-probe`  -  logits-equivalence probe: greedy next-token argmax +
   top-8 logits must be identical with extraction on vs off (regression gate
   for the output-projection pruning fix). Exits 2 on mismatch. Runs in fork CI.
