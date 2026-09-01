@@ -5,7 +5,10 @@ model, BOS added by binary), all explicit ranges stay within [0, 6) so every
 range is valid for every prompt."""
 import struct, sys, pathlib
 
-out_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+# Default to the canonical input dir gate_batch.py reads (GOLD = /tmp/hs-batch-golden).
+# The gate refuses to run if these fixtures are missing, and /tmp is wiped on
+# reboot — so the default lands exactly where gate_batch.py expects them.
+out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("/tmp/hs-batch-golden/inputs")
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # 24 prompts, varied lengths, ASCII only (deterministic), all well over 6 tokens.
