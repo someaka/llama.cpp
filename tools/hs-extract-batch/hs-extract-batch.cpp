@@ -52,6 +52,9 @@
 #include <queue>
 #include <atomic>
 
+// HS_SIMD: vectorization hint for the hot mean-accumulation loops. Under
+// OpenMP it is an omp simd pragma; without OpenMP it expands to nothing
+// (correct, just not auto-vectorized by pragma).
 #if defined(_OPENMP)
 #define HS_SIMD _Pragma("omp simd")
 #else
@@ -114,7 +117,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --resume         Resume from last checkpoint\n");
     fprintf(stderr, "  --n-gpu-layers N / -ngl N  Layers to offload to GPU (default: 99 = all)\n");
     fprintf(stderr, "  --save-per-record  Also write per-record vectors to <output>.records.bin\n");
-    fprintf(stderr, "  --batch-size N   Accepted for compatibility; values > 1 are rejected at runtime\n");
+    fprintf(stderr, "  --batch-size N   Only 1 is supported; the flag is parsed so old driver scripts\n                   keep working, and values > 1 are rejected at runtime\n");
     fprintf(stderr, "                  (multi-prompt batching is not implemented). Default: 1.\n");
     fprintf(stderr, "  --profile       Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)\n");
     fprintf(stderr, "  --no-bos        Do not add BOS token (for models whose tokenizer expects no leading BOS)\n");
@@ -1054,12 +1057,14 @@ static constexpr size_t MAX_PREFETCH = 64;
 // producer teardown (join + temp removal) is owned by the single
 // stop_producer_and_join call at the caller's error site; joining here
 // would double-join a non-joinable thread (std::system_error -> terminate).
+// `what` names the field for the diagnostic (no __FILE__:__LINE__ here: it
+// would always print this helper's own location, the trap io-util.h's
+// checked_write avoids).
 static inline bool records_write(
-    const void* ptr, size_t size, size_t count, FILE* fp
+    const void* ptr, size_t size, size_t count, FILE* fp, const char* what
 ) {
     if (fwrite(ptr, size, count, fp) != count) {
-        fprintf(stderr, "Error: per-record write failed at %s:%d\n",
-                __FILE__, __LINE__);
+        fprintf(stderr, "Error: per-record write failed (%s)\n", what);
         return false;
     }
     return true;
@@ -1890,14 +1895,14 @@ static int run_batch(const Args& args) {
 
                 if (args.save_per_record && records_closer) {
                     FILE* records_fp = records_closer.fp;
-                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&prompt_idx, sizeof(int32_t), 1, records_fp, "prompt_idx")) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                     int32_t gid = assign.group_id;
                     int32_t mid = assign.mask_id;
                     int32_t layer_idx = target_layers[li];
-                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
-                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp)) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&gid, sizeof(int32_t), 1, records_fp, "group_id")) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&mid, sizeof(int32_t), 1, records_fp, "mask_id")) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(&layer_idx, sizeof(int32_t), 1, records_fp, "layer_idx")) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
+                    if (!records_write(mean_buf.data(), sizeof(float), n_embd, records_fp, "hidden vector")) { stop_producer_and_join(pfq, producer_thread, records_temp_path); return 1; }
                 }
             }
         }

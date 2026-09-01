@@ -338,6 +338,9 @@ int main(int argc, char ** argv) {
 
     std::vector<int> layers = parse_layer_list(layer_str, n_layers);
     if (layers.empty()) {
+        // Q-P1-6: silent exit-1 gave the caller nothing to act on; match the
+        // batch tool's diagnostic shape (hs-extract-batch parse_layers).
+        fprintf(stderr, "error: no valid layers in '%s'\n", layer_str);
         return 1;
     }
 
