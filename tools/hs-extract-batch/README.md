@@ -56,10 +56,10 @@ llama-hs-extract-batch --self-test
 - `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw` and `--generate`.
 - `--batch-size N` - Accepted for compatibility; values > 1 are rejected at runtime with an error (multi-prompt batching is not implemented)
 - `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
-- `--no-bos` - Do not add the BOS token. Default: BOS is ALWAYS added unless
-  this flag is passed, regardless of the tokenizer's `add_bos_token` — the
-  Python driver passes `--no-bos` automatically for no-BOS-default models
-  (the deliberate cross-tool divergence; see hs-extract-batch.cpp tokenize comment).
+- `--no-bos` - Force BOS off. Default: BOS follows the tokenizer's
+  `add_bos_token` (added for gemma-class vocabs, not for qwen-class), with
+  `--no-bos` as a force-off override — the same semantics as `hs-extract`
+  (unified 2026-09-01; before that this tool added BOS unconditionally).
 - `--generate N` - Generation-based extraction: generate N tokens after each prompt and extract hidden states from the generated tokens only (comprehension-based extraction otherwise). Incompatible with `--save-per-record`
 - `--temperature F` - Sampling temperature for generation mode (0 = greedy argmax, default)
 - `--top-k K` - Top-k sampling, generation mode only (default: 0 = disabled)

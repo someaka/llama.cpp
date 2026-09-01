@@ -92,7 +92,7 @@ struct Args {
     bool save_per_record = false;  // --save-per-record: write per-record vectors sidecar
     int batch_size = 1;           // --batch-size N: pack N prompts per decode (default: 1)
     bool profile = false;         // --profile: print per-phase timing breakdown
-    bool no_bos = false;          // --no-bos: do not add BOS token (for models like Qwen3.5)
+    bool no_bos = false;          // --no-bos: force BOS off (default: follow tokenizer's add_bos_token)
     int generate_tokens = 0;      // --generate N: autoregressive generation mode (extract from generated tokens)
     float temperature = 0.0f;     // --temperature: sampling temperature (0 = greedy argmax, the default)
     float repeat_penalty = 1.0f;  // --repeat-penalty: penalty for repeated tokens (1.0 = disabled)
@@ -120,7 +120,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --batch-size N   Only 1 is supported; the flag is parsed so old driver scripts\n                   keep working, and values > 1 are rejected at runtime\n");
     fprintf(stderr, "                  (multi-prompt batching is not implemented). Default: 1.\n");
     fprintf(stderr, "  --profile       Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)\n");
-    fprintf(stderr, "  --no-bos        Do not add BOS token (for models whose tokenizer expects no leading BOS)\n");
+    fprintf(stderr, "  --no-bos        Force BOS off (default: follow the tokenizer's add_bos_token)\n");
     fprintf(stderr, "  --generate N    Generation-based extraction: generate N tokens after each prompt,\n");
     fprintf(stderr, "                  extract hidden states from GENERATED tokens only.\n");
     fprintf(stderr, "                  Without this flag, extraction is comprehension-based (forward pass only).\n");
@@ -684,14 +684,17 @@ static bool process_prompt(
  * exception from here would change that contract. Token output is identical
  * to common_tokenize(vocab, text, add_bos, true) on the happy path.
  *
- * add_bos: callers pass !args.no_bos -- BOS is added unless --no-bos, even
- * for vocabs whose own default is no-BOS. hs-extract instead follows the
- * vocab default (llama_vocab_get_add_bos && !no_bos). This is a real
- * divergence on no-BOS-default models (e.g. Qwen3.5): pass --no-bos to
- * hs-extract-batch to match hs-extract there. The Python driver does this
- * automatically for bos_offset==0 models.
+ * add_bos: callers pass the unified default -- BOS follows the vocab's own
+ * add_bos_token declaration, AND --no-bos forces it off (matching hs-extract's
+ * llama_vocab_get_add_bos(vocab) && !no_bos). Before 2026-09-01 this tool
+ * instead added BOS unconditionally unless --no-bos: on no-BOS-default models
+ * (e.g. Qwen3.5) a manual invocation silently injected BOS, shifting every
+ * token position and polluting the skip window -- a silent-corruption trap
+ * the Python driver dodged only by passing --no-bos itself. The default is
+ * now tokenizer-faithful; --no-bos remains as a force-off override.
  */
-static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool add_bos = true) {
+static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool follow_vocab_default = true, bool no_bos = false) {
+    const bool add_bos = follow_vocab_default && llama_vocab_get_add_bos(vocab) && !no_bos;
     int n = -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, add_bos, true);
     if (n <= 0) return {};
     std::vector<llama_token> toks(n);
@@ -938,7 +941,7 @@ static int run_raw(const Args& args) {
             continue;
         }
 
-        auto tokens = tokenize(vocab, line, /*add_bos=*/!args.no_bos);
+        auto tokens = tokenize(vocab, line, /*follow_vocab_default=*/true, /*no_bos=*/args.no_bos);
         if (tokens.empty()) {
             fprintf(stderr, "Error: prompt %d tokenized to empty\n", prompt_idx);
             fail_cleanup();
@@ -1609,7 +1612,7 @@ static int run_batch(const Args& args) {
             // resume burns 150K tokenizations). The line itself must still
             // be consumed to keep the stream in sync with assignments.
             if (p_idx >= skip_count) {
-                pp.tokens = tokenize(vocab, p_line, /*add_bos=*/!args.no_bos);
+                pp.tokens = tokenize(vocab, p_line, /*follow_vocab_default=*/true, /*no_bos=*/args.no_bos);
             }
             pp.assignments = std::move(assignment_read.assignments);
             // Empty tokens on a skipped prompt are expected (not tokenized);
