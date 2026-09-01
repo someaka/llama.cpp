@@ -221,9 +221,8 @@ jobs:
           echo "::group::llama-hs-probe (logits identical with/without extraction)"
           LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox"
           echo "::endgroup::"
-          echo "::group::llama-hs-extract-batch-test (warmup/toggle equivalence)"
-          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 0
-          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 1
+          echo "::group::llama-hs-extract-batch-test (warmup/toggle equivalence, bitwise)"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 2
           echo "::endgroup::"
 
       - name: Smoke test /hidden-states server endpoint
