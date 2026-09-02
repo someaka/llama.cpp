@@ -377,8 +377,11 @@ bool read_checkpoint(
     }
 
     // v4: prompts-file content identity. The stored hash covers the
-    // skip_count-th non-empty line -- the next prompt a resume would skip
-    // over -- and the stored count binds the run to the full dataset size.
+    // n_iterated-th non-empty line -- the LAST line the checkpointed run
+    // processed -- and the stored count binds the run to the full dataset
+    // size. On resume the same line is re-hashed: drift there (or any
+    // insertion/deletion shifting it) rejects the resume, which protects
+    // the accumulator against boundary corruption.
     if (version >= CHECKPOINT_VERSION) {
         uint64_t stored_fnv = 0;
         int32_t stored_n_prompts = 0;
