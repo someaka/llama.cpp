@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <utility>
@@ -184,9 +185,37 @@ bool write_batch_output(
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
-static constexpr int32_t CHECKPOINT_VERSION = 3;
+static constexpr int32_t CHECKPOINT_VERSION = 4;
+static constexpr int32_t CHECKPOINT_VERSION_V3 = 3; // legacy: no content check
 static constexpr int32_t CHECKPOINT_VERSION_V2 = 2; // legacy: no run fingerprint
 static constexpr int32_t CHECKPOINT_VERSION_V1 = 1;  // legacy: stored mean, restored via sum=mean*count
+
+// FNV-1a 64 of the line_number-th non-empty line (1-based), matching
+// scan_prompts_file's line accounting. Returns false when the line does not
+// exist or the file cannot be read.
+static bool hash_prompt_line(const char* prompts_file, int32_t line_number, uint64_t& out) {
+    std::ifstream fin(prompts_file);
+    if (!fin) {
+        fprintf(stderr, "Error: cannot open %s for the resume content check\n", prompts_file);
+        return false;
+    }
+    std::string line;
+    int32_t n = 0;
+    while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        if (++n == line_number) {
+            out = hs_fnv1a64(line);
+            return true;
+        }
+    }
+    if (fin.bad()) {
+        fprintf(stderr, "Error: I/O error reading prompts file for the resume content check\n");
+        return false;
+    }
+    fprintf(stderr, "Error: prompts file has %d non-empty lines but the checkpoint skip count is %d - "
+                    "the prompts file shrank since the checkpoint\n", n, line_number);
+    return false;
+}
 
 /**
  * Write checkpoint: version + n_iterated + accumulator state (binary accumulator format).
@@ -233,6 +262,15 @@ bool write_checkpoint(
             return false;
         }
     }
+    // v4: prompts-file content identity (hash of the skip_count-th non-empty
+    // line + expected prompt count) so --resume cannot silently continue a
+    // checkpoint over different prompt content.
+    if (!checked_write(&fp.content_fnv64, sizeof(uint64_t), 1, f) ||
+        !checked_write(&fp.n_prompts, sizeof(int32_t), 1, f)) {
+        f.reset();
+        std::remove(temp_path.c_str());
+        return false;
+    }
     bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
     if (!ok) {
         f.reset();
@@ -268,7 +306,8 @@ bool read_checkpoint(
     AccumulatorMap& accumulators,
     int32_t& n_iterated,
     int32_t expected_n_embd,
-    const checkpoint_fingerprint& expected
+    const checkpoint_fingerprint& expected,
+    const char* prompts_file
 ) {
     std::string ckpt_path = std::string(output_path) + ".checkpoint";
     FilePtr f(fopen(ckpt_path.c_str(), "rb"));
@@ -277,7 +316,8 @@ bool read_checkpoint(
     // Read and validate checkpoint version
     int32_t version = 0;
     if (fread(&version, sizeof(int32_t), 1, f) != 1) return false;
-    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V2 && version != CHECKPOINT_VERSION_V1) {
+    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V3 &&
+        version != CHECKPOINT_VERSION_V2 && version != CHECKPOINT_VERSION_V1) {
         fprintf(stderr, "Error: checkpoint version mismatch (got %d, expected %d) - incompatible checkpoint format\n",
                 version, CHECKPOINT_VERSION);
         return false;
@@ -298,7 +338,7 @@ bool read_checkpoint(
     // v3: run fingerprint. Must match the current invocation exactly; a
     // mismatch means the checkpoint was written under different extraction
     // settings and resuming would silently merge incompatible accumulators.
-    if (version >= CHECKPOINT_VERSION) {
+    if (version >= CHECKPOINT_VERSION_V3) {
         int32_t n_fp_layers = 0;
         bool generate_mode = false;
         int32_t generate_tokens = 0, token_skip = 0;
@@ -326,11 +366,46 @@ bool read_checkpoint(
                     expected.token_skip, expected.layers.size(), ckpt_path.c_str());
             return false;
         }
+        if (version < CHECKPOINT_VERSION) {
+            fprintf(stderr, "Warning: checkpoint predates content check\n");
+        }
     } else {
         fprintf(stderr, "Warning: checkpoint version %d carries no run fingerprint - cannot verify that extraction "
                         "settings (mode/--generate/--token-skip/--layers) match this invocation. Proceeding; if the "
                         "checkpoint came from a different run configuration the output will silently mix settings.\n",
                 version);
+    }
+
+    // v4: prompts-file content identity. The stored hash covers the
+    // skip_count-th non-empty line -- the next prompt a resume would skip
+    // over -- and the stored count binds the run to the full dataset size.
+    if (version >= CHECKPOINT_VERSION) {
+        uint64_t stored_fnv = 0;
+        int32_t stored_n_prompts = 0;
+        if (fread(&stored_fnv, sizeof(uint64_t), 1, f) != 1) return false;
+        if (fread(&stored_n_prompts, sizeof(int32_t), 1, f) != 1) return false;
+        if (stored_n_prompts != expected.n_prompts) {
+            fprintf(stderr, "Error: checkpoint prompt count mismatch - checkpoint was written over %d prompts "
+                            "but the current invocation has %d. Discard the checkpoint (remove %s) or restore "
+                            "the original prompts file.\n",
+                    stored_n_prompts, expected.n_prompts, ckpt_path.c_str());
+            return false;
+        }
+        if (n_iterated > 0 && stored_fnv != 0 && prompts_file && prompts_file[0] != '\0') {
+            uint64_t current_fnv = 0;
+            if (!hash_prompt_line(prompts_file, n_iterated, current_fnv)) {
+                return false;
+            }
+            if (current_fnv != stored_fnv) {
+                fprintf(stderr, "Error: prompts file content mismatch at resume - line %d hashed to 0x%016llx but "
+                                "the checkpoint (written over line %d) recorded 0x%016llx. The prompts file changed "
+                                "since the checkpoint; the accumulator holds results for different content. "
+                                "Discard the checkpoint (remove %s) or restore the original prompts file.\n",
+                        n_iterated, (unsigned long long)current_fnv, n_iterated,
+                        (unsigned long long)stored_fnv, ckpt_path.c_str());
+                return false;
+            }
+        }
     }
 
     // Read accumulator state (binary accumulator format)

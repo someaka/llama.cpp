@@ -978,6 +978,7 @@ struct PrefetchedPrompt {
     std::vector<Assignment> assignments;
     bool skip = false;  // tokenization failed or exceeds ctx
     bool error = false; // set by producer on assignment read failure
+    uint64_t line_fnv = 0;  // FNV-1a 64 of this prompt's raw line
 };
 
 struct PrefetchQueue {
@@ -1331,13 +1332,18 @@ static int generate_assignment(GenContext& g) {
 
 // Build the checkpoint run fingerprint. Layer list is sorted so the identity
 // is order-independent (--layers 0,17,35 and 35,17,0 resume interchangeably).
-static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vector<int32_t>& layers) {
+// line_fnv is the FNV-1a 64 of the last-processed prompts line (0 before any
+// prompt completes); n_prompts binds the run to the dataset size.
+static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vector<int32_t>& layers,
+                                               uint64_t line_fnv, int32_t n_prompts) {
     checkpoint_fingerprint fp;
     fp.generate_mode   = args.generate_tokens > 0;
     fp.generate_tokens = args.generate_tokens;
     fp.token_skip      = args.token_skip;
     fp.layers          = layers;
     std::sort(fp.layers.begin(), fp.layers.end());
+    fp.content_fnv64 = line_fnv;
+    fp.n_prompts     = n_prompts;
     return fp;
 }
 
@@ -1445,11 +1451,13 @@ static int run_batch(const Args& args) {
     // Resume from checkpoint if --resume is set. The checkpoint carries a run
     // fingerprint (v3): mode, --generate length, --token-skip, and the target
     // layer list. A checkpoint written under different settings is rejected
-    // loudly rather than silently merged.
+    // loudly rather than silently merged. v4 adds the prompts-file content
+    // identity (last-processed line hash + prompt count); read_checkpoint
+    // re-hashes the current prompts file and rejects a mismatch.
     int skip_count = 0;
     if (args.resume) {
-        checkpoint_fingerprint fp = make_fingerprint(args, target_layers);
-        if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd, fp)) {
+        checkpoint_fingerprint fp = make_fingerprint(args, target_layers, 0, n_prompts_expected);
+        if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd, fp, args.prompts_file)) {
             fprintf(stderr, "Error: --resume requested but no valid checkpoint found at %s.checkpoint\n",
                     args.output_path);
             return 1;
@@ -1470,6 +1478,9 @@ static int run_batch(const Args& args) {
 
     int prompt_idx = 0;
     int n_processed = 0;
+    // FNV-1a 64 of the most recently processed prompts line, updated by the
+    // consumer and captured by the producer for checkpoint fingerprinting.
+    uint64_t line_fnv = 0;
     auto start_time = std::chrono::steady_clock::now();
 
     // Profiling accumulators
@@ -1546,6 +1557,7 @@ static int run_batch(const Args& args) {
 
             PrefetchedPrompt pp;
             pp.prompt_idx = p_idx;
+            pp.line_fnv = hs_fnv1a64(p_line);
             // On --resume, prompts below skip_count are discarded by the
             // consumer without decoding; their tokens are never used.
             // Skip the tokenization (pure waste on resume: a 150K-prompt
@@ -1637,7 +1649,7 @@ static int run_batch(const Args& args) {
 
         if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
             if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx,
-                                  make_fingerprint(args, target_layers))) {
+                                  make_fingerprint(args, target_layers, line_fnv, n_prompts_expected))) {
                 fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
                 return false;
             }
@@ -1743,6 +1755,7 @@ static int run_batch(const Args& args) {
                 stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
+            line_fnv = pp.line_fnv;
             // Skip the normal comprehension-mode extraction below.
             // The shared tail does the bookkeeping (counters, checkpoint,
             // progress) identically to the comprehension path.
@@ -1844,6 +1857,7 @@ static int run_batch(const Args& args) {
             }
         }
         auto t_mean_end = std::chrono::steady_clock::now();
+        line_fnv = pp.line_fnv;
 
         // Accumulate profiling data
         if (args.profile) {

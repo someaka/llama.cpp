@@ -1,6 +1,6 @@
 // Self-test for hs-extract-batch: synthetic tests over compute_masked_mean(),
 // compute_single_range_mean(), the accumulator key encoding, and the
-// checkpoint write/read roundtrip. No model file needed.
+// checkpoint write/read roundtrip. No model file needed. 21 tests total.
 
 
 #include <cstdio>
@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <utility>
@@ -24,7 +25,7 @@ int run_self_test() {
     fprintf(stderr, "Running compute_masked_mean self-tests...\n\n");
 
     int passed = 0;
-    int total = 19;  // attempted tests: 1-16 kernels, 17 fixture, 18-19 inside 17's success branch
+    int total = 21;  // attempted tests: 1-16 kernels, 17 fixture, 18-19 inside 17's success branch, 20-21 resume content check
     bool all_ok = true;
 
     // All tests use data layout: 3 tokens x 2 dims, row-major
@@ -255,6 +256,8 @@ int run_self_test() {
         fp.generate_tokens = 0;
         fp.token_skip = 50;
         fp.layers = {0, 17, 35};
+        fp.content_fnv64 = hs_fnv1a64("hello world");
+        fp.n_prompts = 3;
 
         // Write checkpoint to temp file - include PID to avoid collision
         // between concurrent self-test runs (CI) and symlink attacks.
@@ -268,10 +271,19 @@ int run_self_test() {
             all_ok = false;
             total += 2;  // attempted-but-failed, not silently absent
         } else {
+            // Prompts fixture for the v4 content check: the checkpoint
+            // records the hash of the 42nd non-empty line ("hello world").
+            const std::string prompts_path = std::string(test_ckpt) + ".prompts";
+            {
+                std::ofstream pf(prompts_path.c_str());
+                for (int i = 0; i < 41; i++) pf << "filler " << i << "\n";
+                pf << "hello world\n";
+                pf << "tail\n";
+            }
             // Read it back with the same fingerprint - must succeed
             AccumulatorMap restored_acc;
             int32_t n_iterated = 0;
-            bool read_ok = read_checkpoint(test_ckpt, restored_acc, n_iterated, 4, fp);
+            bool read_ok = read_checkpoint(test_ckpt, restored_acc, n_iterated, 4, fp, prompts_path.c_str());
 
             bool ok = read_ok && (n_iterated == 42);
             if (ok) {
@@ -293,7 +305,7 @@ int run_self_test() {
                 wrong_fp.token_skip = 0;  // different run setting
                 AccumulatorMap junk_acc;
                 int32_t junk_iter = 0;
-                bool read_must_fail = read_checkpoint(test_ckpt, junk_acc, junk_iter, 4, wrong_fp);
+                bool read_must_fail = read_checkpoint(test_ckpt, junk_acc, junk_iter, 4, wrong_fp, prompts_path.c_str());
                 bool ok18 = !read_must_fail;
                 // A rejected read must not leave partial state behind
                 if (ok18 && !junk_acc.empty()) {
@@ -346,7 +358,7 @@ int run_self_test() {
                         // fingerprint area (8, 16) and the record-count
                         // region (n/4 hits group/mask/layer headers).
                         bool structural = (oi <= 3);
-                        bool read_ok2 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp);
+                        bool read_ok2 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp, prompts_path.c_str());
                         // Structural offsets must be detected. Float-payload
                         // offsets may legitimately pass: a flipped float is a
                         // valid float (comment above).
@@ -362,12 +374,48 @@ int run_self_test() {
                 fprintf(stderr, "  Test 19 (corruption detection): %s\n", ok19 ? "PASS" : "FAIL");
                 if (ok19) passed++; else all_ok = false;
             }
+
+            // Test 20: same-content resume roundtrip must pass with the
+            // content check active (skip_count > 0, v4 hash re-verified
+            // against the fixture's 42nd non-empty line).
+            {
+                AccumulatorMap same_acc;
+                int32_t same_iter = 0;
+                bool read_same = read_checkpoint(test_ckpt, same_acc, same_iter, 4, fp, prompts_path.c_str());
+                bool ok20 = read_same && (same_iter == 42) && (same_acc.size() == 2);
+                fprintf(stderr, "  Test 20 (same-content resume roundtrip): %s\n", ok20 ? "PASS" : "FAIL");
+                if (ok20) passed++; else all_ok = false;
+            }
+
+            // Test 21: tampered prompts content must be rejected loudly
+            // (line 42 differs from the hash recorded in the checkpoint).
+            {
+                bool ok21 = true;
+                const std::string tampered_path = prompts_path + ".tampered";
+                {
+                    std::ofstream tf(tampered_path.c_str());
+                    for (int i = 0; i < 41; i++) tf << "filler " << i << "\n";
+                    tf << "TAMPERED content\n";
+                    tf << "tail\n";
+                }
+                AccumulatorMap junk_acc;
+                int32_t junk_iter = 0;
+                bool read_tampered = read_checkpoint(test_ckpt, junk_acc, junk_iter, 4, fp, tampered_path.c_str());
+                if (read_tampered) ok21 = false;
+                // A rejected content check must not leave partial state behind
+                if (ok21 && !junk_acc.empty()) ok21 = false;
+                fprintf(stderr, "  Test 21 (tampered prompts content rejected): %s\n", ok21 ? "PASS" : "FAIL");
+                if (ok21) passed++; else all_ok = false;
+                remove(tampered_path.c_str());
+            }
         }
         // Cleanup
         remove(test_ckpt);
         remove((std::string(test_ckpt) + ".tmp").c_str());
         remove((std::string(test_ckpt) + ".checkpoint").c_str());
         remove((std::string(test_ckpt) + ".checkpoint.tmp").c_str());
+        remove((std::string(test_ckpt) + ".prompts").c_str());
+        remove((std::string(test_ckpt) + ".prompts.tampered").c_str());
     }
 
     fprintf(stderr, "\n%d/%d tests passed\n", passed, total);

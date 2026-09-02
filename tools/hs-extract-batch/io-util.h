@@ -105,6 +105,17 @@ static inline bool checked_write(const void* ptr, size_t size, size_t count, FIL
     return true;
 }
 
+// FNV-1a 64-bit hash of a prompt line: cheap content identity for the
+// resume-time prompts-file check (v4 checkpoints store this hash).
+static inline uint64_t hs_fnv1a64(const std::string& s) {
+    uint64_t h = 1469598103934665603ull;  // FNV offset basis
+    for (unsigned char c : s) {
+        h ^= c;
+        h *= 1099511628211ull;            // FNV prime
+    }
+    return h;
+}
+
 
 // -- Batch-Accumulate Output Writer (io-util.cpp) ------------------------
 
@@ -120,18 +131,24 @@ bool write_batch_output(
 
 // Run fingerprint: identifies the invocation that produced a checkpoint so
 // --resume can refuse checkpoints written under different extraction
-// settings (mode, generation length, token skip, target layers). Resuming
-// across differing settings would silently merge incompatible accumulators
-// into one valid-looking output file.
+// settings (mode, generation length, token skip, target layers) or over a
+// different prompts file. Resuming across differing settings would silently
+// merge incompatible accumulators into one valid-looking output file.
 struct checkpoint_fingerprint {
     bool    generate_mode   = false; // --generate N > 0 was active
     int32_t generate_tokens = 0;
     int32_t token_skip      = 0;
     std::vector<int32_t> layers;     // target layer indices; writer sorts, identity is order-independent
+    // v4 content identity: FNV-1a 64 of the skip_count-th prompts-file line
+    // and the expected prompt count. Zero fnv64 disables the content check.
+    uint64_t content_fnv64  = 0;
+    int32_t n_prompts       = 0;
 };
 
-// Write checkpoint: version + n_iterated + run fingerprint (v3) + accumulator
-// state (binary accumulator format). The checkpoint file is output_path + ".checkpoint".
+// Write checkpoint: version + n_iterated + run fingerprint (v3) + content
+// identity (v4) + accumulator state (binary accumulator format). The
+// checkpoint file is output_path + ".checkpoint". fp.content_fnv64 and
+// fp.n_prompts carry the v4 content identity.
 bool write_checkpoint(
     const AccumulatorMap& accumulators,
     const char* output_path,
@@ -144,11 +161,16 @@ bool write_checkpoint(
 // count). Returns false if checkpoint doesn't exist or is corrupt. For v3+
 // checkpoints the stored run fingerprint must match `expected` exactly;
 // v1/v2 checkpoints carry no fingerprint and are accepted with a warning
-// (legacy files cannot be validated retroactively).
+// (legacy files cannot be validated retroactively). v4 checkpoints also
+// carry the content identity of the prompts file: when n_iterated > 0 and
+// prompts_file is non-null, the hash of its n_iterated-th non-empty line and
+// the stored prompt count must match expected (different content is a loud
+// error). v3 files predate the content check and skip it with a warning.
 bool read_checkpoint(
     const char* output_path,
     AccumulatorMap& accumulators,
     int32_t& n_iterated,
     int32_t expected_n_embd,
-    const checkpoint_fingerprint& expected
+    const checkpoint_fingerprint& expected,
+    const char* prompts_file
 );
