@@ -54,7 +54,7 @@ llama-hs-extract-batch --self-test
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
 - `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw` and `--generate`.
-- `--batch-size N` - Accepted for compatibility; values > 1 are rejected at runtime with an error (multi-prompt batching is not implemented)
+- `--batch-size N` - Only 1 is supported (multi-prompt batching is not implemented: shared KV-cache semantics would corrupt extraction). The flag is parsed so old driver scripts keep working; values > 1 are rejected with an error at runtime.
 - `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
 - `--no-bos` - Force BOS off. Default: BOS follows the tokenizer's
   `add_bos_token` (added for gemma-class vocabs, not for qwen-class), with
