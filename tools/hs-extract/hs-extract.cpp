@@ -16,6 +16,8 @@
 
 // RAII wrappers are in common/llama-raii.h (shared with hs-extract-batch, tests)
 #include "llama-raii.h"
+// Shared layer-list parser (same file as hs-extract-batch uses)
+#include "layer-parse.h"
 
 static void print_usage(const char * prog) {
     printf("usage: %s [options]\n\n", prog);
@@ -36,52 +38,6 @@ static void print_usage(const char * prog) {
     printf("  %s -m model.gguf -p \"Hello world\"\n", prog);
     printf("  %s -m model.gguf -p \"Hello world\" --layers 0,5,10\n", prog);
     printf("  %s -m model.gguf --raw -p \"1,2,3,4\"\n", prog);
-}
-
-static std::vector<int> parse_layer_list(const char * str, int n_layers) {
-    std::vector<int> layers;
-    // hidden_states indices: 0 = embeddings, i = state entering block i
-    // (= HF hidden_states[i]), N = final block output. Legacy fork
-    // numbering (post-block-i residual) = upstream index - 1.
-    const int n_slots = n_layers + 1;
-    if (strcmp(str, "all") == 0) {
-        for (int i = 0; i < n_slots; i++) {
-            layers.push_back(i);
-        }
-        return layers;
-    }
-    std::stringstream ss(str);
-    std::string item;
-    std::vector<int> seen(n_slots, 0);  // duplicate layers emit redundant JSON blocks; reject
-    while (std::getline(ss, item, ',')) {
-        char *endp = nullptr;
-        long val = strtol(item.c_str(), &endp, 10);
-        if (endp == item.c_str() || *endp != '\0') {
-            fprintf(stderr, "error: invalid layer '%s' (not a number)\n", item.c_str());
-            return {};
-        }
-        if (val < 0) {
-            // Q-P1-11 (2026-08-29 quality pass): Python-style negative index
-            // (from the end), matching hs-extract-batch's parser. -1 = last
-            // slot (final block output), -n_slots = embeddings.
-            val += n_slots;
-            if (val < 0) {
-                fprintf(stderr, "error: layer %ld out of range [-%d, %d)\n", val - n_slots, n_slots, n_slots);
-                return {};
-            }
-        }
-        if (val >= n_slots) {
-            fprintf(stderr, "error: layer %ld out of range [0, %d)\n", val, n_slots);
-            return {};
-        }
-        if (seen[val]) {
-            fprintf(stderr, "error: duplicate layer index %ld in '%s'\n", val, str);
-            return {};
-        }
-        seen[val] = 1;
-        layers.push_back((int)val);
-    }
-    return layers;
 }
 
 static std::vector<llama_token> parse_raw_tokens(const char * str, const llama_vocab * vocab) {
@@ -336,7 +292,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    std::vector<int> layers = parse_layer_list(layer_str, n_layers);
+    std::vector<int> layers = hs_parse_layer_list(layer_str, n_layers + 1);
     if (layers.empty()) {
         // Q-P1-6: silent exit-1 gave the caller nothing to act on; match the
         // batch tool's diagnostic shape (hs-extract-batch parse_layers).

@@ -1,5 +1,6 @@
 set(TARGET llama-hs-extract)
 add_executable(${TARGET} hs-extract.cpp)
+target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../hs-extract-common)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()

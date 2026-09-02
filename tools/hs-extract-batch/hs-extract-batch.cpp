@@ -72,6 +72,8 @@
 #include "io-util.h"
 #include "self-test.h"
 #include "assignments-io.h"
+// Shared layer-list parser (same file as hs-extract uses)
+#include "layer-parse.h"
 
 struct Args {
     const char* model_path = nullptr;
@@ -458,45 +460,6 @@ static Args parse_args(int argc, char** argv) {
 
 
 
-// -- Layer Parsing ------------------------------------------------------
-
-static std::vector<int> parse_layers(const std::string& s, int n_layer) {
-    std::vector<int> out;
-    // Layer indices are hidden_states indices: 0 = embeddings, i = state
-    // entering block i (= HF hidden_states[i]), N = final block output.
-    // Legacy fork numbering (post-block-i residual) = upstream index - 1.
-    const int n_slots = n_layer + 1;
-    if (s == "all") {
-        for (int i = 0; i < n_slots; i++) out.push_back(i);
-        return out;
-    }
-    const char* p = s.c_str();
-    while (*p) {
-        char* endptr = nullptr;
-        errno = 0;
-        long val = strtol(p, &endptr, 10);
-        if (endptr == p) {
-            fprintf(stderr, "Error: invalid layer '%c' in layers string '%s'\n", *p, s.c_str());
-            return {};  // caller checks for empty target_layers
-        }
-        if (errno == ERANGE) {
-            fprintf(stderr, "Error: layer value out of range in '%s'\n", s.c_str());
-            return {};
-        }
-        // Validate at parse time, not downstream. Negative indices are
-        // resolved later (l < 0 means l += n_slots), but must be in [-n_slots, n_slots-1].
-        if (val >= n_slots || val < -n_slots) {
-            fprintf(stderr, "Error: layer %ld out of range [0, %d) or [%d, -1]\n", val, n_slots, -n_slots);
-            return {};
-        }
-        out.push_back((int)val);
-        while (*endptr && *endptr != ',') endptr++;
-        if (*endptr == ',') endptr++;
-        p = endptr;
-    }
-    return out;
-}
-
 // -- Masked Mean Computation --------------------------------------------
 
 // Repeat-penalty window for generation mode's sampler chain.
@@ -815,32 +778,9 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
     fprintf(stderr, "Model loaded: n_ctx_train=%d, n_embd=%d, n_layers=%d, n_gpu_layers=%d\n",
             s.n_ctx_train, s.n_embd, s.n_layers, args.n_gpu_layers);
 
-    // Resolve layers (hidden_states indices: 0..n_layers inclusive)
-    const int32_t n_slots = s.n_layers + 1;
-    auto raw_layers = parse_layers(args.layers_str, s.n_layers);
-    for (int l : raw_layers) {
-        if (l < 0) l = n_slots + l;
-        if (l >= 0 && l < n_slots) {
-            s.target_layers.push_back(l);
-        } else {
-            fprintf(stderr, "Error: layer %d out of range [0, %d)\n", l, n_slots);
-            return false;
-        }
-    }
-    // Duplicate indices (including negatives aliasing the same slot, e.g.
-    // "17,-1" with n_slots=18) would accumulate the same layer twice into
-    // one accumulator -- silently wrong counts. Reject after resolution.
-    {
-        std::vector<int32_t> seen(n_slots, 0);
-        for (int32_t l : s.target_layers) {
-            if (seen[l]) {
-                fprintf(stderr, "Error: duplicate layer index %d in '%s' (after negative-index resolution)\n",
-                        l, args.layers_str.c_str());
-                return false;
-            }
-            seen[l] = 1;
-        }
-    }
+    // Resolve layers (hidden_states indices: 0..n_layers inclusive); negative
+    // indices resolve Python-style and duplicates are rejected in the parser.
+    s.target_layers = hs_parse_layer_list(args.layers_str.c_str(), s.n_layers + 1);
     if (s.target_layers.empty()) {
         fprintf(stderr, "Error: no valid target layers\n");
         return false;
