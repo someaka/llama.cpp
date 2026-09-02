@@ -1,5 +1,8 @@
 // Test whether warmup + dynamic extract_hidden_states toggle changes values.
 // Modes 0/1 reproduce the CLI and server init paths and print values (debug).
+// Mode 1 mirrors the server /hidden-states init contract: extraction off and
+// embeddings off at creation, BOS+EOS warmup decode, toggle on, perf reset,
+// memory clear. n_ubatch = n_ctx in every mode.
 // Mode 2 (default) runs BOTH paths in one process and compares the captured
 // hidden states bitwise — a single-mode run can only print, never verify.
 // Exit codes: 0 = identical (mode 2) or ran (modes 0/1), 1 = setup error,
@@ -26,6 +29,9 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     // One ubatch per prompt: the capture path parity rule (fork D2/C1). A
     // split ubatch changes which kernel shapes produce the capture.
     cparams.n_ubatch = cparams.n_ctx;
+    // Server init keeps embeddings off for every request type (common_params
+    // default); logits are a decode-time batch flag in both paths.
+    cparams.embeddings = false;
 
     if (server_style) {
         // Server style: extraction off at creation, warmup decode, then the
@@ -36,6 +42,8 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
         cparams.extract_hidden_states = true;
     }
     cparams.no_perf = true;
+    // Logits are controlled at decode time (llama_batch logits flags), not at
+    // context creation; both styles leave them off by the same route.
 
     llama_context * ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
@@ -63,6 +71,9 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
         }
         llama_set_extract_hidden_states(ctx, true);
         llama_memory_clear(llama_get_memory(ctx), true);
+        // Server reset: perf counters (common_init_from_params warmup) and
+        // memory (per-request prompt_clear), so the decode starts at pos 0.
+        llama_perf_context_reset(ctx);
     }
 
     llama_batch batch = llama_batch_get_one(const_cast<llama_token *>(tokens.data()), tokens.size());
