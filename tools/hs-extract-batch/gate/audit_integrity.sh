@@ -134,7 +134,7 @@ echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this c
 fi
 echo "PASS"
 echo "=== Check 9: No off-by-one ==="
-if grep -q "i <= n_layer" tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
+if grep -qE 'i[[:space:]]*<=[[:space:]]*n_layer' tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
   echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
 fi
 echo "PASS"
