@@ -7,7 +7,7 @@ be byte-identical to the recorded baseline.
 
 ## Methodology: the production path
 
-Four scenarios run on the PRODUCTION CUDA binary (`build-cuda`,
+Five scenarios run on the PRODUCTION CUDA binary (`build-cuda`,
 `libggml-cuda.so*` present), `-ngl 99`, one model:
 
 - gemma E2B Q4_K_M
@@ -22,6 +22,7 @@ greedy generation, and sampled generation (seed=0 dist sampler). In detail:
 | s6_e2b_resume       | e2b   | 0,17,35   | kill at 2nd checkpoint, `--resume`       |
 | s7_e2b_gen_greedy   | e2b   | 0,35      | `--generate 8`, greedy                   |
 | s8_e2b_gen_sampled  | e2b   | 0,35      | `--generate 8`, temp 0.8, top-k 40       |
+| s9_e2b_gen_resume   | e2b   | 0,35      | gen-mode kill at 2nd checkpoint + `--resume` |
 
 Methodology: a CUDA-ON binary (`libggml-cuda.so*` next to the binary is
 REQUIRED; a CPU-only build is refused), `-ngl 99`, original tokenization

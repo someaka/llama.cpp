@@ -115,7 +115,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "  --mean           In --raw mode: output token means instead of full per-token data\n");
     fprintf(stderr, "  --assignments F  Path to assignments.bin (required with --batch)\n");
     fprintf(stderr, "  --ctx-size N     Override auto context sizing (default: auto from prompts)\n");
-    fprintf(stderr, "  --checkpoint-every N  Write checkpoint every N prompts (default: 10000)\n");
+    fprintf(stderr, "  --checkpoint-every N  Write checkpoint every N prompts (N >= 1, default: 10000)\n");
     fprintf(stderr, "  --resume         Resume from last checkpoint\n");
     fprintf(stderr, "  --n-gpu-layers N / -ngl N  Layers to offload to GPU (default: 99 = all)\n");
     fprintf(stderr, "  --save-per-record  Also write per-record vectors to <output>.records.bin\n");
