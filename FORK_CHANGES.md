@@ -79,7 +79,7 @@ Production tool for processing thousands of prompts:
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
 - Binary I/O format (magic 0x43524432, "binary accumulator format v2")
-- Self-test mode (23 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 18-23
+- Self-test mode (23 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 18-21
   depend on 17's checkpoint write - if the fixture write fails the self-test fails rc=1
   with the attempted count dropping accordingly; no model required)
 - `--profile` flag for per-step timing analysis

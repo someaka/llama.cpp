@@ -294,7 +294,7 @@ int run_self_test() {
         if (!write_ok) {
             fprintf(stderr, "  (checkpoint fixture write failed)\n");
             HS_CHECK(false, "Test 17 (checkpoint roundtrip)");
-            fprintf(stderr, "  Tests 18-23 unavailable - failing\n");
+            fprintf(stderr, "  Tests 18-21 unavailable - failing\n");
             all_ok = false;
         } else {
             // Read it back with the same fingerprint - must succeed

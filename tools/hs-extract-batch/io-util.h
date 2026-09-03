@@ -210,11 +210,13 @@ bool write_checkpoint(
 // count). Returns false if checkpoint doesn't exist or is corrupt. For v3+
 // checkpoints the stored run fingerprint must match `expected` exactly;
 // v1/v2 checkpoints carry no fingerprint and are accepted with a warning
-// (legacy files cannot be validated retroactively). v4 checkpoints also
-// carry the content identity of the prompts file: when n_iterated > 0 and
-// prompts_file is non-null, the hash of its n_iterated-th non-empty line and
-// the stored prompt count must match expected (different content is a loud
-// error). v3 files predate the content check and skip it with a warning.
+// (legacy files cannot be validated retroactively). Content identity by
+// version: v4 resumes with the prompt-count check only (its single-line
+// hash uses a retired basis and is not revalidated); v5/v6 re-derive the
+// rolling consumed-line hash and refuse a mismatch with both hashes
+// printed; v6 additionally refuses a corrupted accumulator payload via the
+// acc_fnv64 trailer. v3 files predate the content check and skip it with
+// a warning.
 bool read_checkpoint(
     const char* output_path,
     AccumulatorMap& accumulators,
