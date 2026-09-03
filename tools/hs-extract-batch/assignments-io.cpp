@@ -24,8 +24,14 @@ bool read_assignments_header(
                 magic, ASSIGNMENTS_MAGIC);
         return false;
     }
-    if (fread(&n_prompts, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_embd_expected, sizeof(int32_t), 1, f) != 1) return false;
+    if (fread(&n_prompts, sizeof(int32_t), 1, f) != 1) {
+        fprintf(stderr, "Error: assignments.bin header truncated at n_prompts\n");
+        return false;
+    }
+    if (fread(&n_embd_expected, sizeof(int32_t), 1, f) != 1) {
+        fprintf(stderr, "Error: assignments.bin header truncated at n_embd\n");
+        return false;
+    }
 
     // Validate n_prompts and n_embd to prevent UB on corrupt file
     if (n_prompts <= 0 || n_prompts > MAX_PROMPTS) {
@@ -37,7 +43,10 @@ bool read_assignments_header(
         return false;
     }
 
-    if (fread(&groups.n_groups, sizeof(int32_t), 1, f) != 1) return false;
+    if (fread(&groups.n_groups, sizeof(int32_t), 1, f) != 1) {
+        fprintf(stderr, "Error: assignments.bin header truncated at n_groups\n");
+        return false;
+    }
 
     // Validate n_groups to prevent OOM on corrupt file
     if (groups.n_groups < 0 || groups.n_groups > MAX_GROUPS) {
@@ -47,14 +56,20 @@ bool read_assignments_header(
     groups.names.resize(groups.n_groups);
     for (int32_t i = 0; i < groups.n_groups; i++) {
         int32_t name_len = 0;
-        if (fread(&name_len, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&name_len, sizeof(int32_t), 1, f) != 1) {
+            fprintf(stderr, "Error: assignments.bin header truncated at group %d name length\n", i);
+            return false;
+        }
         // Validate name_len to prevent OOM on corrupt file
         if (name_len < 0 || name_len > MAX_GROUP_NAME_LEN) {
             fprintf(stderr, "Error: group name length %d out of range [0, %d] - corrupt assignments.bin\n", name_len, MAX_GROUP_NAME_LEN);
             return false;
         }
         std::vector<char> buf(name_len > 0 ? name_len : 1, 0);
-        if (name_len > 0 && fread(buf.data(), 1, name_len, f) != (size_t)name_len) return false;
+        if (name_len > 0 && fread(buf.data(), 1, name_len, f) != (size_t)name_len) {
+            fprintf(stderr, "Error: assignments.bin header truncated at group %d name\n", i);
+            return false;
+        }
         groups.names[i] = std::string(buf.data(), name_len);
     }
 

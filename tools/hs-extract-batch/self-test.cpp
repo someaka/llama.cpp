@@ -251,14 +251,44 @@ int run_self_test() {
         fp.generate_tokens = 0;
         fp.token_skip = 50;
         fp.layers = {0, 17, 35};
-        fp.content_fnv64 = hs_fnv1a64("hello world");
+        // Content identity is set below, from the prompts fixture itself.
         fp.n_prompts = 3;
+
+        // FNV-1a-64 known vectors: the empty string hashes to the offset
+        // basis, "hello world" to the canonical reference value. Guards the
+        // constant against the silent-typo class (a wrong basis still
+        // roundtrips self-consistently but diverges from every external
+        // FNV-1a-64 implementation).
+        HS_CHECK(hs_fnv1a64("") == 0xcbf29ce484222325ull, "Test 16b (fnv empty = offset basis)");
+        HS_CHECK(hs_fnv1a64("hello world") == 0x779a65e7023cd2e7ull, "Test 16c (fnv known vector)");
 
         // Write checkpoint to temp file - include PID to avoid collision
         // between concurrent self-test runs (CI) and symlink attacks.
         char test_ckpt_buf[256];
         snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/hs_self_test_ckpt_%d.bin", (int)getpid());
         const char* test_ckpt = test_ckpt_buf;
+        // Prompts fixture for the v5 content check: the checkpoint records
+        // the rolling hash of the first 42 non-empty lines (41 fillers +
+        // "hello world"), exactly as the producer would accumulate it.
+        const std::string prompts_path = std::string(test_ckpt) + ".prompts";
+        {
+            std::ofstream pf(prompts_path.c_str());
+            for (int i = 0; i < 41; i++) pf << "filler " << i << "\n";
+            pf << "hello world\n";
+            pf << "tail\n";
+        }
+        {
+            uint64_t rolling = 14695981039346656037ull;  // offset basis
+            std::ifstream pf(prompts_path.c_str());
+            std::string line;
+            int32_t n = 0;
+            while (std::getline(pf, line)) {
+                if (line.empty()) continue;
+                rolling = fnv_roll_line(rolling, line);
+                if (++n == 42) break;
+            }
+            fp.content_fnv64 = rolling;
+        }
         bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42, fp);
         if (!write_ok) {
             fprintf(stderr, "  (checkpoint fixture write failed)\n");
@@ -266,15 +296,6 @@ int run_self_test() {
             fprintf(stderr, "  Test 18-21: SKIP (fixture unavailable)\n");
             all_ok = false;
         } else {
-            // Prompts fixture for the v4 content check: the checkpoint
-            // records the hash of the 42nd non-empty line ("hello world").
-            const std::string prompts_path = std::string(test_ckpt) + ".prompts";
-            {
-                std::ofstream pf(prompts_path.c_str());
-                for (int i = 0; i < 41; i++) pf << "filler " << i << "\n";
-                pf << "hello world\n";
-                pf << "tail\n";
-            }
             // Read it back with the same fingerprint - must succeed
             AccumulatorMap restored_acc;
             int32_t n_iterated = 0;

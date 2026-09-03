@@ -105,14 +105,29 @@ static inline bool checked_write(const void* ptr, size_t size, size_t count, FIL
     return true;
 }
 
-// FNV-1a 64-bit hash of a prompt line: cheap content identity for the
-// resume-time prompts-file check (v4 checkpoints store this hash).
+// FNV-1a 64-bit hash of a string: cheap content identity for the
+// resume-time prompts-file check (v5 checkpoints store a rolling hash of
+// every consumed line; v4 stored a single-line hash).
 static inline uint64_t hs_fnv1a64(const std::string& s) {
-    uint64_t h = 1469598103934665603ull;  // FNV offset basis
+    uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
     for (unsigned char c : s) {
         h ^= c;
         h *= 1099511628211ull;            // FNV prime
     }
+    return h;
+}
+
+// Advance a running FNV-1a-64 state with one prompt line. The trailing
+// newline is mixed in so the concatenation is unambiguous ("ab"+"c" vs
+// "a"+"bc"). The checkpoint's content hash is this rolling state over all
+// consumed lines: any change anywhere in the processed prefix changes it.
+static inline uint64_t fnv_roll_line(uint64_t h, const std::string& line) {
+    for (unsigned char c : line) {
+        h ^= c;
+        h *= 1099511628211ull;            // FNV prime
+    }
+    h ^= (unsigned char)'\n';
+    h *= 1099511628211ull;
     return h;
 }
 
@@ -139,8 +154,13 @@ struct checkpoint_fingerprint {
     int32_t generate_tokens = 0;
     int32_t token_skip      = 0;
     std::vector<int32_t> layers;     // target layer indices; writer sorts, identity is order-independent
-    // v4 content identity: FNV-1a 64 of the skip_count-th prompts-file line
-    // and the expected prompt count. Zero fnv64 disables the content check.
+    // v4/v5 content identity: a hash over consumed prompts-file content and
+    // the expected prompt count. v5 (current) stores a rolling FNV-1a-64
+    // over every consumed line, newline-terminated: any change anywhere in
+    // the processed prefix is caught. Zero fnv64 with progress > 0 is
+    // rejected as a corrupt/hand-edited checkpoint. (v4 stored a hash of
+    // only the last processed line on a retired basis; such checkpoints
+    // resume with the count check only, plus a warning.)
     uint64_t content_fnv64  = 0;
     int32_t n_prompts       = 0;
 };

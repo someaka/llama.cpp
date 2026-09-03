@@ -185,15 +185,18 @@ bool write_batch_output(
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
-static constexpr int32_t CHECKPOINT_VERSION = 4;
+static constexpr int32_t CHECKPOINT_VERSION = 5;
+static constexpr int32_t CHECKPOINT_VERSION_V4 = 4; // legacy: single-line anchor + typo'd basis
 static constexpr int32_t CHECKPOINT_VERSION_V3 = 3; // legacy: no content check
 static constexpr int32_t CHECKPOINT_VERSION_V2 = 2; // legacy: no run fingerprint
 static constexpr int32_t CHECKPOINT_VERSION_V1 = 1;  // legacy: stored mean, restored via sum=mean*count
 
-// FNV-1a 64 of the line_number-th non-empty line (1-based), matching
-// scan_prompts_file's line accounting. Returns false when the line does not
-// exist or the file cannot be read.
-static bool hash_prompt_line(const char* prompts_file, int32_t line_number, uint64_t& out) {
+// Rolling content hash of the first `line_count` non-empty lines of the
+// prompts file (v5 resume check): identical iteration to the live run's
+// producer (same non-empty skip, same newline mixing), so the states match
+// byte-for-byte on unchanged content. Returns false if the file is missing,
+// unreadable, or has fewer than line_count non-empty lines.
+static bool hash_prompts_prefix(const char* prompts_file, int32_t line_count, uint64_t& out) {
     std::ifstream fin(prompts_file);
     if (!fin) {
         fprintf(stderr, "Error: cannot open %s for the resume content check\n", prompts_file);
@@ -201,10 +204,12 @@ static bool hash_prompt_line(const char* prompts_file, int32_t line_number, uint
     }
     std::string line;
     int32_t n = 0;
+    uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
     while (std::getline(fin, line)) {
         if (line.empty()) continue;
-        if (++n == line_number) {
-            out = hs_fnv1a64(line);
+        h = fnv_roll_line(h, line);
+        if (++n == line_count) {
+            out = h;
             return true;
         }
     }
@@ -213,7 +218,7 @@ static bool hash_prompt_line(const char* prompts_file, int32_t line_number, uint
         return false;
     }
     fprintf(stderr, "Error: prompts file has %d non-empty lines but the checkpoint skip count is %d - "
-                    "the prompts file shrank since the checkpoint\n", n, line_number);
+                    "the prompts file shrank since the checkpoint\n", n, line_count);
     return false;
 }
 
@@ -376,13 +381,14 @@ bool read_checkpoint(
                 version);
     }
 
-    // v4: prompts-file content identity. The stored hash covers the
-    // n_iterated-th non-empty line -- the LAST line the checkpointed run
-    // processed -- and the stored count binds the run to the full dataset
-    // size. On resume the same line is re-hashed: drift there (or any
-    // insertion/deletion shifting it) rejects the resume, which protects
-    // the accumulator against boundary corruption.
-    if (version >= CHECKPOINT_VERSION) {
+    // v4/v5: prompts-file content identity + expected prompt count. v5 stores
+    // a rolling FNV-1a-64 over every consumed line (newline-terminated): any
+    // change anywhere in the processed prefix changes the hash. (v4 anchored
+    // only the last processed line AND used a typo'd FNV basis - a stored
+    // v4 hash cannot be revalidated, so v4 checkpoints resume with the count
+    // check only and a loud warning.) On resume the same rolling hash is
+    // re-derived from the current prompts file and compared.
+    if (version >= CHECKPOINT_VERSION_V4) {
         uint64_t stored_fnv = 0;
         int32_t stored_n_prompts = 0;
         if (fread(&stored_fnv, sizeof(uint64_t), 1, f) != 1) return false;
@@ -394,19 +400,36 @@ bool read_checkpoint(
                     stored_n_prompts, expected.n_prompts, ckpt_path.c_str());
             return false;
         }
-        if (n_iterated > 0 && stored_fnv != 0 && prompts_file && prompts_file[0] != '\0') {
+        if (n_iterated > 0 && stored_fnv == 0 && version >= CHECKPOINT_VERSION) {
+            // A processed prefix always has a non-zero rolling hash (the
+            // empty input hashes to the offset basis), so a stored zero with
+            // progress means a hand-edited or torn checkpoint: refuse loudly
+            // instead of silently downgrading to no content check.
+            fprintf(stderr, "Error: checkpoint %s has a zero content hash but %d processed prompt(s) - "
+                            "the checkpoint is corrupt or hand-edited. Discard it (remove %s) "
+                            "and start over.\n",
+                    ckpt_path.c_str(), n_iterated, ckpt_path.c_str());
+            return false;
+        }
+        if (n_iterated > 0 && prompts_file && prompts_file[0] != '\0') {
+            if (version == CHECKPOINT_VERSION_V4) {
+                fprintf(stderr, "Warning: checkpoint is v4 (single-line content anchor, retired basis) - "
+                                "content identity cannot be revalidated; only the prompt count is checked. "
+                                "Re-run without --resume for a full v5 content guarantee.\n");
+            } else {
             uint64_t current_fnv = 0;
-            if (!hash_prompt_line(prompts_file, n_iterated, current_fnv)) {
+            if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
                 return false;
             }
             if (current_fnv != stored_fnv) {
-                fprintf(stderr, "Error: prompts file content mismatch at resume - line %d hashed to 0x%016llx but "
-                                "the checkpoint (written over line %d) recorded 0x%016llx. The prompts file changed "
+                fprintf(stderr, "Error: prompts file content mismatch at resume - the first %d prompt line(s) hash "
+                                "to 0x%016llx but the checkpoint recorded 0x%016llx. The prompts file changed "
                                 "since the checkpoint; the accumulator holds results for different content. "
                                 "Discard the checkpoint (remove %s) or restore the original prompts file.\n",
-                        n_iterated, (unsigned long long)current_fnv, n_iterated,
+                        n_iterated, (unsigned long long)current_fnv,
                         (unsigned long long)stored_fnv, ckpt_path.c_str());
                 return false;
+            }
             }
         }
     }

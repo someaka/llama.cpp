@@ -978,7 +978,7 @@ struct PrefetchedPrompt {
     std::vector<Assignment> assignments;
     bool skip = false;  // tokenization failed or exceeds ctx
     bool error = false; // set by producer on assignment read failure
-    uint64_t line_fnv = 0;  // FNV-1a 64 of this prompt's raw line
+    uint64_t rolling_fnv = 0;  // FNV over every consumed line through this one
 };
 
 struct PrefetchQueue {
@@ -1332,17 +1332,17 @@ static int generate_assignment(GenContext& g) {
 
 // Build the checkpoint run fingerprint. Layer list is sorted so the identity
 // is order-independent (--layers 0,17,35 and 35,17,0 resume interchangeably).
-// line_fnv is the FNV-1a 64 of the last-processed prompts line (0 before any
-// prompt completes); n_prompts binds the run to the dataset size.
+// content_fnv is the rolling FNV over every consumed prompts line (0 before
+// any line is consumed); n_prompts binds the run to the dataset size.
 static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vector<int32_t>& layers,
-                                               uint64_t line_fnv, int32_t n_prompts) {
+                                               uint64_t content_fnv, int32_t n_prompts) {
     checkpoint_fingerprint fp;
     fp.generate_mode   = args.generate_tokens > 0;
     fp.generate_tokens = args.generate_tokens;
     fp.token_skip      = args.token_skip;
     fp.layers          = layers;
     std::sort(fp.layers.begin(), fp.layers.end());
-    fp.content_fnv64 = line_fnv;
+    fp.content_fnv64 = content_fnv;
     fp.n_prompts     = n_prompts;
     return fp;
 }
@@ -1451,9 +1451,10 @@ static int run_batch(const Args& args) {
     // Resume from checkpoint if --resume is set. The checkpoint carries a run
     // fingerprint (v3): mode, --generate length, --token-skip, and the target
     // layer list. A checkpoint written under different settings is rejected
-    // loudly rather than silently merged. v4 adds the prompts-file content
-    // identity (last-processed line hash + prompt count); read_checkpoint
-    // re-hashes the current prompts file and rejects a mismatch.
+    // loudly rather than silently merged. v4/v5 add the prompts-file content
+    // identity (v5: rolling hash over all consumed lines + prompt count);
+    // read_checkpoint re-derives it from the current prompts file and rejects
+    // a mismatch.
     int skip_count = 0;
     if (args.resume) {
         checkpoint_fingerprint fp = make_fingerprint(args, target_layers, 0, n_prompts_expected);
@@ -1478,9 +1479,13 @@ static int run_batch(const Args& args) {
 
     int prompt_idx = 0;
     int n_processed = 0;
-    // FNV-1a 64 of the most recently processed prompts line, updated by the
-    // consumer and captured by the producer for checkpoint fingerprinting.
-    uint64_t line_fnv = 0;
+    // Rolling FNV-1a-64 over every consumed prompts line (v5 content
+    // identity). The producer advances its own atomic copy per line (lines
+    // are consumed strictly in order, one producer thread), and stamps each
+    // PrefetchedPrompt; the consumer adopts the stamped value after the
+    // prompt's work completes, so a checkpoint never races a partial line.
+    uint64_t content_fnv = 0;
+    std::atomic<uint64_t> producer_content_fnv{0};
     auto start_time = std::chrono::steady_clock::now();
 
     // Profiling accumulators
@@ -1545,6 +1550,7 @@ static int run_batch(const Args& args) {
                         (int)assignment_read.status, (int)pfq.n_produced.load());
                 PrefetchedPrompt p;
                 p.error = true;
+                p.prompt_idx = (int)pfq.n_produced.load();
                 {
                     std::lock_guard<std::mutex> lk(pfq.mtx);
                     pfq.queue.push(std::move(p));
@@ -1557,7 +1563,8 @@ static int run_batch(const Args& args) {
 
             PrefetchedPrompt pp;
             pp.prompt_idx = p_idx;
-            pp.line_fnv = hs_fnv1a64(p_line);
+            pp.rolling_fnv = fnv_roll_line(producer_content_fnv.load(std::memory_order_relaxed), p_line);
+            producer_content_fnv.store(pp.rolling_fnv, std::memory_order_relaxed);
             // On --resume, prompts below skip_count are discarded by the
             // consumer without decoding; their tokens are never used.
             // Skip the tokenization (pure waste on resume: a 150K-prompt
@@ -1588,6 +1595,7 @@ static int run_batch(const Args& args) {
             fprintf(stderr, "Error: I/O error reading prompts file (bad stream)\n");
             PrefetchedPrompt ep;
             ep.error = true;
+            ep.prompt_idx = (int)pfq.n_produced.load();
             {
                 std::lock_guard<std::mutex> lk(pfq.mtx);
                 pfq.producer_done = true;
@@ -1617,6 +1625,7 @@ static int run_batch(const Args& args) {
             try {
                 PrefetchedPrompt ep;
                 ep.error = true;
+                ep.prompt_idx = (int)pfq.n_produced.load();
                 pfq.queue.push(std::move(ep));
             } catch (...) { /* consumer will see producer_done + empty queue */ }
         }
@@ -1626,6 +1635,7 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Error: producer thread unknown exception\n");
         PrefetchedPrompt ep;
         ep.error = true;
+        ep.prompt_idx = (int)pfq.n_produced.load();
         {
             std::lock_guard<std::mutex> lk(pfq.mtx);
             pfq.queue.push(std::move(ep));
@@ -1649,7 +1659,7 @@ static int run_batch(const Args& args) {
 
         if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
             if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx,
-                                  make_fingerprint(args, target_layers, line_fnv, n_prompts_expected))) {
+                                  make_fingerprint(args, target_layers, content_fnv, n_prompts_expected))) {
                 fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
                 return false;
             }
@@ -1755,7 +1765,7 @@ static int run_batch(const Args& args) {
                 stop_producer_and_join(pfq, producer_thread, records_temp_path);
                 return 1;
             }
-            line_fnv = pp.line_fnv;
+            content_fnv = pp.rolling_fnv;
             // Skip the normal comprehension-mode extraction below.
             // The shared tail does the bookkeeping (counters, checkpoint,
             // progress) identically to the comprehension path.
@@ -1857,7 +1867,7 @@ static int run_batch(const Args& args) {
             }
         }
         auto t_mean_end = std::chrono::steady_clock::now();
-        line_fnv = pp.line_fnv;
+        content_fnv = pp.rolling_fnv;
 
         // Accumulate profiling data
         if (args.profile) {
