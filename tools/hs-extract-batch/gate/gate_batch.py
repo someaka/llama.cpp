@@ -13,8 +13,8 @@ every artifact is the pass condition. Exit 0 = all identical.
 
 Resume scenarios kill the binary at the 2nd "Checkpoint saved" stderr line
 (deterministic checkpoint boundary), then re-run with --resume; the resumed
-output must be byte-identical to the full run's output (v2 checkpoint stores
-raw sums losslessly, so float accumulation order is preserved).
+output must be byte-identical to the full run's output (checkpoints v2+
+store raw sums losslessly, so float accumulation order is preserved).
 """
 import hashlib
 import os
