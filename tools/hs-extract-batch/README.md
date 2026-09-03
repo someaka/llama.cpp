@@ -9,6 +9,11 @@ Processes thousands of prompts efficiently using streaming architecture and opti
 - **Streaming processing** - Handles datasets larger than RAM
 - **GPU acceleration** - Up to 100x faster with CUDA/Vulkan
 - **Checkpoint/resume** - Save progress and resume interrupted runs
+
+> Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
+> CUDA results for the same prompt are not value-comparable at deep layers. Pin
+> the backend (and `-ngl`) for research data.
+
 - **Self-test mode** - Validate setup without requiring a model
 - **Binary I/O** - Compact output format for downstream processing
 
@@ -38,6 +43,7 @@ llama-hs-extract-batch --self-test
 **Batch mode (production):**
 ```
 <model> <prompts.txt> [layers] <output.bin> --batch --assignments <file> [flags]
+  ([layers]: `all`, decimal indices, or negative indices resolved Python-style; CLI-only sugar - the server API takes non-negative integers)
 ```
 
 **Raw mode (debug):**
@@ -50,7 +56,7 @@ llama-hs-extract-batch --self-test
 - `--token-skip N` - Skip first N tokens for mean computation (default: 0). Applies only to `--raw --mean` and `--batch --generate`; rejected elsewhere.
 - `--assignments FILE` - Path to assignments.bin (required for batch mode)
 - `--ctx-size N` - Override auto context sizing (default: auto from prompts)
-- `--checkpoint-every N` - Save checkpoint every N prompts (default: 10000)
+- `--checkpoint-every N` - Save checkpoint every N prompts (N >= 1, default: 10000)
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
 - `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw`, `--generate`, and `--resume`.
@@ -180,6 +186,33 @@ llama-hs-extract-batch model.gguf prompts.txt all output.bin \
 ```
 
 If interrupted, re-run with `--resume` to continue from the last checkpoint.
+
+### Checkpoint file format (v5)
+
+A checkpoint is `<output>.checkpoint`; the format is versioned. Field order
+(all little-endian):
+
+| field | type | notes |
+|---|---|---|
+| `version` | i32 | 5 for current checkpoints; 1-4 load with degraded guarantees + warning |
+| `n_iterated` | i32 | number of prompts fully processed (resume skip count) |
+| accumulator records | binary | per-key sums as in `output.bin` (raw **sums**, not means) + counts |
+| `n_fp_layers` | i32 | run fingerprint: layer count |
+| `generate_mode` | u8(bool) | fingerprint: `--generate` was active |
+| `generate_tokens` | i32 | fingerprint: `--generate N` |
+| `token_skip` | i32 | fingerprint: `--token-skip` |
+| `layers` | i32[n_fp_layers] | fingerprint: sorted target layers |
+| `content_fnv64` | u64 | v5: rolling FNV-1a-64 over every consumed non-empty prompts line, each line followed by a `\n` byte; v4 stored a single-line hash on a retired basis (not revalidated) |
+| `n_prompts` | i32 | expected total prompts; must match the current run |
+
+FNV-1a-64 definition: offset basis `14695981039346656037`
+(`0xcbf29ce484222325`), prime `1099511628211`; for each line, hash the line
+bytes then the `'\n'` byte; the state carries across lines in file order.
+A stored `content_fnv64` of 0 with `n_iterated > 0` is refused as corrupt.
+On resume the same rolling hash is re-derived from the current prompts file
+and a mismatch refuses the resume (both hashes printed). Legacy versions:
+v4 resumes with the count check only (warning); v1/v2/v3 predate content
+checking (v3 still enforces the run fingerprint).
 
 ## Performance
 

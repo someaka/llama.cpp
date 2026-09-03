@@ -100,7 +100,7 @@ echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 # stream walk, returns bool, never exits.
 # The function must exist where this check scans it: if it moves TU the
 # sed range goes empty and the exit() scan would pass vacuously.
-if ! grep -q "static bool scan_prompts_file" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! grep -qE "static bool scan_prompts_file\(" tools/hs-extract-batch/hs-extract-batch.cpp; then
 echo "FAIL: scan_prompts_file not found in hs-extract-batch.cpp (moved TU? update this check's target)"; exit 1
 fi
 if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then

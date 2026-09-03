@@ -119,7 +119,7 @@ int main(int argc, char ** argv) {
         } else {
             // A misspelled flag would silently skip a mode and report MATCH
             // from less coverage — a probe must fail loudly on unknown input.
-            fprintf(stderr, "error: unknown argument '%s' (supported: --runtime-toggle)\n", argv[i]);
+            fprintf(stderr, "Error: unknown argument '%s' (supported: --runtime-toggle)\n", argv[i]);
             return 1;
         }
     }

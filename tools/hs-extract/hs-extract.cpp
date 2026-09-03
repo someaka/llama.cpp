@@ -180,6 +180,13 @@ int main(int argc, char ** argv) {
         std::stringstream buf;
         buf << in.rdbuf();
         prompt_str = buf.str();
+        // Strip one trailing newline so `-f prompts.txt` tokenizes like the
+        // batch tool's getline-per-line reading of the same file (the batch
+        // tool defines the prompts.txt line semantics). Without this, the
+        // file's trailing newline becomes its own token and `-f file` vs
+        // batch disagree by one token position.
+        if (!prompt_str.empty() && prompt_str.back() == '\n') prompt_str.pop_back();
+        if (!prompt_str.empty() && prompt_str.back() == '\r') prompt_str.pop_back();
         prompt_text = prompt_str.c_str();
     }
 

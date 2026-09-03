@@ -23,7 +23,7 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 - `-m, --model MODEL` - Path to GGUF model file (required)
 - `-p, --prompt TEXT` - Input prompt text
 - `-f, --file FILE` - Read prompt from file
-- `-l, --layers LIST` - Comma-separated layer indices or `all` (default: all)
+- `-l, --layers LIST` - Comma-separated layer indices or `all` (default: all) (negative indices resolve Python-style; CLI-only sugar - the server API takes non-negative integers)
 - `--raw` - Interpret prompt as comma-separated token IDs
 - `--no-bos` - Don't add BOS token. Default: BOS is added only when the
   model's tokenizer declares `add_bos_token` (e.g. gemma yes, qwen no).
@@ -31,6 +31,11 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 - `-c, --ctx-size N` - Context size (default: auto = token count, capped at n_ctx_train)
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 0)
 - `--output FILE` - Output JSON file (default: stdout)
+
+> Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
+> CUDA results for the same prompt are not value-comparable at deep layers. Pin
+> the backend (and `-ngl`) for research data.
+
 
 ## Examples
 
