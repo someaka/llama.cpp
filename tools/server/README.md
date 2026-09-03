@@ -1007,7 +1007,7 @@ This is a fork-specific endpoint for extracting per-layer hidden-state vectors f
 ]
 ```
 
-Each key in `hidden_states` is the layer index (as a string). The value is a flat float array:
+Each key in `hidden_states` is the layer index as a decimal string ("0", "34", ...). The value is a flat float array:
 - For `pool="last"` or `pool="skip_mean"`: length = `n_embd_out`
 - For `pool="none"`: length = `n_tokens * n_embd_out` (reshape to `[n_tokens, n_embd_out]` client-side)
 

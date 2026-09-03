@@ -27,8 +27,9 @@ Methodology: a CUDA-ON binary (`libggml-cuda.so*` next to the binary is
 REQUIRED; a CPU-only build is refused), `-ngl 99`, original tokenization
 flags (no `--no-bos`). Every produced artifact (`output.bin`, the
 `.records.bin` sidecar, resume full-run vs resumed output) is sha256-compared
-against the baseline. Exit 0 means all bytes identical; exit 1 means the
-refactor changed bytes.
+against the baseline. Exit 0 means all bytes identical; exit 1 means
+mismatch OR setup/run failure (messages distinguish them: `REFUSED` /
+`inputs missing` are setup problems, `MISMATCHES` is a byte regression).
 
 Determinism at `-ngl 99` on this GPU was verified empirically (2026-08-18:
 every scenario type byte-identical across repeat runs, including resume
@@ -48,19 +49,26 @@ missing model file likewise aborts (`REFUSED`) -- the gate never falls back.
   `check <cuda-bin>` (run all scenarios with the binary under test and compare
   every artifact digest against the baseline).
 - `gen_inputs.py` - deterministic generator for the gate inputs (24 prompts,
-  two assignment files). Run once to populate `/tmp/hs-batch-golden/inputs/`.
+  two assignment files). The generated fixtures are COMMITTED at
+  `golden_inputs/`; running the script regenerates them to verify
+  determinism (output must be byte-identical to the committed bytes).
+- `golden_inputs/` - the committed gate input fixtures (`prompts.txt`,
+  `assignments.bin`, `assignments_gen.bin`). These are the bytes every gate
+  run consumes; regenerate with `gen_inputs.py` to verify they are still
+  reproducible.
 - `digests_baseline.json` - the anchor. Keys are scenario names; values map
   artifact names to sha256 digests.
 
 ## The /tmp path assumption
 
-The driver hardcodes `/tmp/hs-batch-golden` as its working tree (inputs,
-baseline artifacts, digests). `/tmp` is volatile; if the layout is gone,
-recreate it: `python3 gen_inputs.py` regenerates the inputs byte-identically
-(fixed seeds), and the baseline digests are tracked in this directory --
-only the baseline ARTIFACTS are /tmp-only, and the check mode never reads
-them (it compares digests, not files). To relocate, adjust the `GOLD`
-constant.
+Input fixtures are COMMITTED at `golden_inputs/` and are what the driver
+reads (`INPUTS`) -- they are not /tmp-dependent. The driver still uses
+`/tmp/hs-batch-golden` as its working tree for VOLATILE scenario outputs,
+baseline artifacts, and digests (`GOLD`). `/tmp` is volatile; if the layout
+is gone, the check mode never needs the baseline artifacts (it compares
+digests, not files), but it does need `/tmp/hs-batch-golden/
+digests_baseline.json` (see "Re-capturing the baseline"). To relocate the
+volatile tree, adjust the `GOLD` constant.
 
 ## Required model
 

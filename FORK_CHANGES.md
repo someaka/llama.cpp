@@ -79,7 +79,8 @@ Production tool for processing thousands of prompts:
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
 - Binary I/O format (CRD2)
-- Self-test mode (17 tests, no model required)
+- Self-test mode (21 tests: 1-16 kernels, 17 checkpoint fixture, 18-21
+  conditional on 17's checkpoint write; no model required)
 - `--profile` flag for per-step timing analysis
 - Hard-error semantics on all range violations (no silent clamping, no graceful degradation)
 
@@ -91,12 +92,14 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 
 - `tools/hs-extract-batch-test`  -  warmup/toggle equivalence check: mode 2
   (the CI mode) runs both init paths in one process — CLI-style (extract on
-  from creation) and server-style (warmup, toggle on, memory clear) — and
+  from creation) and server-style (embeddings off + extract off at creation,
+  BOS+EOS warmup decode, toggle on, perf reset, memory clear) — and
   compares the captured hidden states bitwise; exit 2 on any mismatch.
   Modes 0/1 print values for manual debugging.
 - `tools/hs-probe`  -  logits-equivalence probe: greedy next-token argmax +
-  top-8 logits must be identical with extraction on vs off (regression gate
-  for the output-projection pruning fix). Exits 2 on mismatch. Runs in fork CI.
+  top-8 logit value sets compared with extraction on vs off; exits 2 on
+  mismatch (regression gate for the output-projection pruning fix). Runs in
+  fork CI.
 - `examples/hidden-states`  -  minimal public-API example (installed like
   upstream siblings).
 - `tools/cvector-generator/*-gemma4.txt`  -  manual `--cvector-file` input
@@ -124,7 +127,8 @@ Flat position-count table replacing `std::map` for O(1) lookup.
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Builds with `GGML_NATIVE=OFF` (portable binaries for the CI matrix; no
   host-specific ISA assumptions)
-- Runs self-test (17/17)
+- Runs self-test (21/21; tests 18-21 SKIP if the checkpoint fixture can't be
+  written)
 - Runs multi-ubatch pool=none integration test
 - 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2, no raw fclose, checkpoint bounds, producer-consumer pipeline)
 
@@ -141,5 +145,5 @@ machine).
 - `docs/pr-text-hidden-states.md`  -  draft PR text for upstreaming
 - `tools/hs-extract-batch/README.md`  -  batch extraction tool
 - `tools/hs-extract/README.md`  -  single-prompt tool
-- `tools/server/README.md`  -  `/hidden-states` endpoint (section 901+)
+- `tools/server/README.md`  -  `/hidden-states` endpoint ("POST /hidden-states" section)
 - `docs/history/`  -  historical audit reports

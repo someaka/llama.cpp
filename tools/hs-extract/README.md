@@ -5,7 +5,9 @@ Single-prompt hidden state extraction tool for llama.cpp models.
 Extracts residual stream activations from a single prompt and outputs them as JSON.
 
 Layer indices follow the hidden_states convention: 0 = embeddings, i = state
-entering block i, N = final block output (range [0, n_layer] inclusive).
+entering block i (= HF hidden_states[i]), N = final block output (range
+[0, n_layer] inclusive); negative indices resolve Python-style from the end
+(-1 = last slot).
 Supported architectures: llama, gemma, gemma4, qwen35. Extraction requires
 n_embd == n_embd_out (models with a separate output projection are rejected
 with an error).

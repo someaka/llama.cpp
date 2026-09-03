@@ -69,6 +69,10 @@ llama-hs-extract-batch --self-test
 **Layer specification:**
 - `all` - Extract from all layers (default)
 - `0,5,10` - Comma-separated layer indices
+- Layer indices follow the hidden_states convention: 0 = embeddings, i = state
+  entering block i (= HF hidden_states[i]), N = final block output (range
+  [0, n_layer] inclusive); negative indices resolve Python-style from the end
+  (-1 = last slot)
 
 ## Input Format
 
