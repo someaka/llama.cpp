@@ -98,8 +98,10 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
   Modes 0/1 print values for manual debugging.
 - `tools/hs-probe`  -  logits-equivalence probe: greedy next-token argmax +
   top-8 logit value sets compared with extraction on vs off; exits 2 on
-  mismatch (regression gate for the output-projection pruning fix). Runs in
-  fork CI.
+  mismatch (regression gate for the output-projection pruning fix).
+  `--runtime-toggle` additionally probes the server-style path (toggle
+  enabled after a warmup decode, memory cleared between passes). Runs in
+  fork CI (both modes).
 - `examples/hidden-states`  -  minimal public-API example (installed like
   upstream siblings).
 - `tools/cvector-generator/*-gemma4.txt`  -  manual `--cvector-file` input
