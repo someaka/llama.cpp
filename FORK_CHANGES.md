@@ -78,7 +78,7 @@ Production tool for processing thousands of prompts:
 
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
-- Binary I/O format (CRD2)
+- Binary I/O format (magic 0x43524432, "binary accumulator format v2")
 - Self-test mode (23 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 18-23
   depend on 17's checkpoint write - if the fixture write fails the self-test fails rc=1
   with the attempted count dropping accordingly; no model required)
@@ -124,8 +124,6 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 Flat position-count table replacing `std::map` for O(1) lookup.
 
 ### 9. Misc
-
-- `ggml/src/ggml-vulkan/ggml-vulkan.cpp`: one-line debug-log change.
 
 ## CI
 

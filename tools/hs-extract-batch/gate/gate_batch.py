@@ -28,8 +28,10 @@ GOLD = pathlib.Path("/tmp/hs-batch-golden")
 # volatile scenario outputs stay under /tmp by design.
 INPUTS = pathlib.Path(__file__).resolve().parent / "golden_inputs"
 
+DEFAULT_E2B = "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf"
 MODELS = {
-    "e2b": "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf",
+    # Override with HS_GATE_MODEL when the gate model lives elsewhere.
+    "e2b": os.environ.get("HS_GATE_MODEL", DEFAULT_E2B),
 }
 
 # name, model-key, layers, extra args, assignments-file key, is_resume_scenario
