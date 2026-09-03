@@ -24,7 +24,9 @@ import subprocess
 import sys
 
 GOLD = pathlib.Path("/tmp/hs-batch-golden")
-INPUTS = GOLD / "inputs"
+# Golden INPUT fixtures are committed to the repo (deterministic, ~4KB);
+# volatile scenario outputs stay under /tmp by design.
+INPUTS = pathlib.Path(__file__).resolve().parent / "golden_inputs"
 
 MODELS = {
     "e2b": "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf",
@@ -132,8 +134,9 @@ def main():
         if not pathlib.Path(model_path).exists():
             sys.exit(f"REFUSED: model {model_key} not found at {model_path} -- "
                      f"the gate runs the production path; no fallbacks.")
-    if not (INPUTS / "assignments.bin").exists():
-        sys.exit(f"inputs missing -- run gen_inputs.py first")
+    for req in ("prompts.txt", "assignments.bin", "assignments_gen.bin"):
+        if not (INPUTS / req).exists():
+            sys.exit(f"REFUSED: inputs missing at {INPUTS / req} - run gen_inputs.py")
 
     target = GOLD / mode
     if target.exists():
@@ -156,7 +159,11 @@ def main():
         return 0
 
     # check mode: compare
-    base = __import__("json").loads((GOLD / "digests_baseline.json").read_text())
+    dig_path = GOLD / "digests_baseline.json"
+    try:
+        base = __import__("json").loads(dig_path.read_text())
+    except FileNotFoundError:
+        sys.exit(f"REFUSED: baseline digests missing at {dig_path} - run gate_batch.py record first")
     fails = 0
     for name, _, _, _, _, _ in SCENARIOS:
         b, c = base.get(name, {}), digests[name]

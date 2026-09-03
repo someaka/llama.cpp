@@ -2,13 +2,28 @@
 """Generate a deterministic small assignments.bin + prompts.txt for the
 run_batch golden gate. All prompts are >= 8 tokens (tokenized by the gate's
 model, BOS added by binary), all explicit ranges stay within [0, 6) so every
-range is valid for every prompt."""
-import struct, sys, pathlib
+range is valid for every prompt.
 
-# Default to the canonical input dir gate_batch.py reads (GOLD = /tmp/hs-batch-golden).
-# The gate refuses to run if these fixtures are missing, and /tmp is wiped on
-# reboot — so the default lands exactly where gate_batch.py expects them.
-out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("/tmp/hs-batch-golden/inputs")
+The generated fixtures are COMMITTED to the repo at gate/golden_inputs/
+(the gate's default input dir). Running this script regenerates them to
+verify determinism: the output must be byte-identical to the committed
+bytes. Writes are atomic (temp file + os.replace), so an interrupted run
+can never leave a truncated fixture behind. An optional argv[1] overrides
+the output directory.
+"""
+import os, struct, sys, pathlib
+
+def atomic_write(path, data):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+# Default to the committed fixtures the gate reads (gate_batch.py INPUTS =
+# gate/golden_inputs). An optional argv[1] overrides the output directory.
+out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent / "golden_inputs"
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # 24 prompts, varied lengths, ASCII only (deterministic), all well over 6 tokens.
@@ -60,42 +75,43 @@ for i in range(len(prompts)):
     assigns_per_prompt.append(a)
 
 # prompts.txt (non-empty lines only)
-with open(out_dir / "prompts.txt", "w") as f:
-    f.write("\n".join(prompts) + "\n")
+atomic_write(out_dir / "prompts.txt", ("\n".join(prompts) + "\n").encode())
 
 # assignments.bin
-with open(out_dir / "assignments.bin", "wb") as f:
-    f.write(struct.pack("<i", 0x43524431))          # CRD1 magic
-    f.write(struct.pack("<i", len(prompts)))         # n_prompts
-    f.write(struct.pack("<i", 0))                    # n_embd (0 = no check)
-    f.write(struct.pack("<i", len(groups)))          # n_groups
-    for name in groups:
-        b = name.encode()
-        f.write(struct.pack("<i", len(b)))
-        f.write(b)
-    for a_list in assigns_per_prompt:
-        f.write(struct.pack("<i", len(a_list)))
-        for gid, mid, mtype, skip, ranges in a_list:
-            f.write(struct.pack("<iii", gid, mid, mtype))
-            if mtype == 0:
-                f.write(struct.pack("<i", skip))
-            else:
-                f.write(struct.pack("<i", len(ranges)))
-                for s, e in ranges:
-                    f.write(struct.pack("<ii", s, e))
+buf = bytearray()
+buf += struct.pack("<i", 0x43524431)          # CRD1 magic
+buf += struct.pack("<i", len(prompts))         # n_prompts
+buf += struct.pack("<i", 0)                    # n_embd (0 = no check)
+buf += struct.pack("<i", len(groups))          # n_groups
+for name in groups:
+    b = name.encode()
+    buf += struct.pack("<i", len(b))
+    buf += b
+for a_list in assigns_per_prompt:
+    buf += struct.pack("<i", len(a_list))
+    for gid, mid, mtype, skip, ranges in a_list:
+        buf += struct.pack("<iii", gid, mid, mtype)
+        if mtype == 0:
+            buf += struct.pack("<i", skip)
+        else:
+            buf += struct.pack("<i", len(ranges))
+            for s, e in ranges:
+                buf += struct.pack("<ii", s, e)
+atomic_write(out_dir / "assignments.bin", bytes(buf))
 
 # Generation-mode assignments: --generate only accepts skip=0/mask_type=0.
-with open(out_dir / "assignments_gen.bin", "wb") as f:
-    f.write(struct.pack("<i", 0x43524431))
-    f.write(struct.pack("<i", len(prompts)))
-    f.write(struct.pack("<i", 0))
-    f.write(struct.pack("<i", len(groups)))
-    for name in groups:
-        b = name.encode()
-        f.write(struct.pack("<i", len(b)))
-        f.write(b)
-    for i in range(len(prompts)):
-        f.write(struct.pack("<i", 1))
-        f.write(struct.pack("<iiii", i % 3, 0, 0, 0))  # gid, mask 0, type 0, skip 0
+buf = bytearray()
+buf += struct.pack("<i", 0x43524431)
+buf += struct.pack("<i", len(prompts))
+buf += struct.pack("<i", 0)
+buf += struct.pack("<i", len(groups))
+for name in groups:
+    b = name.encode()
+    buf += struct.pack("<i", len(b))
+    buf += b
+for i in range(len(prompts)):
+    buf += struct.pack("<i", 1)
+    buf += struct.pack("<iiii", i % 3, 0, 0, 0)  # gid, mask 0, type 0, skip 0
+atomic_write(out_dir / "assignments_gen.bin", bytes(buf))
 
 print(f"wrote {out_dir/'prompts.txt'} ({len(prompts)} prompts), {out_dir/'assignments.bin'} and {out_dir/'assignments_gen.bin'}")
