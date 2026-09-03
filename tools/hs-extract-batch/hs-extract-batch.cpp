@@ -307,7 +307,11 @@ static Args parse_args(int argc, char** argv) {
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             exit(0);
-        } else if (!arg.empty() && arg[0] == '-') {
+        } else if (!arg.empty() && arg[0] == '-' && !(arg.size() > 1 &&
+                   (isdigit((unsigned char)arg[1]) || arg[1] == '.'))) {
+            // A token starting with '-' followed by a digit is a (possibly
+            // negative) positional — the layer list, e.g. '-1' or '-3,7' —
+            // not a flag. The shared parser owns its syntax and errors.
             fprintf(stderr, "Error: unknown argument '%s'\n", arg.c_str());
             print_usage(argv[0]);
             exit(1);
@@ -782,7 +786,7 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
     // indices resolve Python-style and duplicates are rejected in the parser.
     s.target_layers = hs_parse_layer_list(args.layers_str.c_str(), s.n_layers + 1);
     if (s.target_layers.empty()) {
-        fprintf(stderr, "Error: no valid target layers\n");
+        fprintf(stderr, "Error: no valid layers in '%s'\n", args.layers_str.c_str());
         return false;
     }
 

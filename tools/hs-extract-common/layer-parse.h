@@ -14,7 +14,7 @@
 #include <vector>
 
 // n_slots = n_layer + 1 (the hidden_states slot count).
-inline static std::vector<int> hs_parse_layer_list(const char* str, int n_slots) {
+inline std::vector<int> hs_parse_layer_list(const char* str, int n_slots) {
     std::vector<int> out;
     if (std::string(str) == "all") {
         for (int i = 0; i < n_slots; i++) out.push_back(i);
@@ -29,6 +29,13 @@ inline static std::vector<int> hs_parse_layer_list(const char* str, int n_slots)
             fprintf(stderr, "Error: invalid layer '%c' in layers string '%s'\n", *p, str);
             return {};
         }
+        if (*endptr != '\0' && *endptr != ',') {
+            // Garbage suffix ("17x"): the token is not a layer number. The
+            // header comment promises a diagnostic for invalid tokens, and
+            // silently accepting the numeric prefix would hide typos.
+            fprintf(stderr, "Error: invalid layer token in layers string '%s' (junk after number)\n", str);
+            return {};
+        }
         if (errno == ERANGE) {
             fprintf(stderr, "Error: layer value out of range in '%s'\n", str);
             return {};
@@ -40,9 +47,8 @@ inline static std::vector<int> hs_parse_layer_list(const char* str, int n_slots)
             return {};
         }
         out.push_back((val < 0) ? (int)val + n_slots : (int)val);
-        while (*endptr && *endptr != ',') endptr++;
-        if (*endptr == ',') endptr++;
         p = endptr;
+        if (*p == ',') p++;
     }
     // Duplicate slots (including negative aliases such as "17,-1") would emit
     // the same layer twice; reject after resolution.

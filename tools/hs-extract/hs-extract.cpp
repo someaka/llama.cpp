@@ -53,11 +53,11 @@ static std::vector<llama_token> parse_raw_tokens(const char * str, const llama_v
         char *endp = nullptr;
         long val = strtol(item.c_str(), &endp, 10);
         if (endp == item.c_str() || *endp != '\0') {
-            fprintf(stderr, "error: invalid token '%s' (not a number)\n", item.c_str());
+            fprintf(stderr, "Error: invalid token '%s' (not a number)\n", item.c_str());
             return {};
         }
         if (val < 0) {
-            fprintf(stderr, "error: invalid token id %ld (must be non-negative)\n", val);
+            fprintf(stderr, "Error: invalid token id %ld (must be non-negative)\n", val);
             return {};
         }
         // Bounds-check against the vocabulary size. An out-of-range id passed to
@@ -65,7 +65,7 @@ static std::vector<llama_token> parse_raw_tokens(const char * str, const llama_v
         // the lookup does not validate token indices. The batch tool has this check
         // (hs-extract-batch.cpp); mirror it here.
         if (val >= n_vocab) {
-            fprintf(stderr, "error: token id %ld out of range [0, %d)\n", val, n_vocab);
+            fprintf(stderr, "Error: token id %ld out of range [0, %d)\n", val, n_vocab);
             return {};
         }
         tokens.push_back((llama_token) val);
@@ -101,72 +101,72 @@ int main(int argc, char ** argv) {
             print_usage(argv[0]);
             return 0;
         } else if (arg == "-m" || arg == "--model") {
-            if (++i >= argc) { fprintf(stderr, "error: --model requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --model requires an argument\n"); return 1; }
             model_path = argv[i];
         } else if (arg == "-p" || arg == "--prompt") {
-            if (++i >= argc) { fprintf(stderr, "error: --prompt requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --prompt requires an argument\n"); return 1; }
             prompt_text = argv[i];
         } else if (arg == "--raw") {
             raw_mode = true;
         } else if (arg == "-l" || arg == "--layers") {
-            if (++i >= argc) { fprintf(stderr, "error: --layers requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --layers requires an argument\n"); return 1; }
             layer_str = argv[i];
         } else if (arg == "-f" || arg == "--file") {
-            if (++i >= argc) { fprintf(stderr, "error: --file requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --file requires an argument\n"); return 1; }
             prompt_file = argv[i];
         } else if (arg == "--no-bos") {
             no_bos = true;
         } else if (arg == "-c" || arg == "--ctx-size") {
-            if (++i >= argc) { fprintf(stderr, "error: --ctx-size requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --ctx-size requires an argument\n"); return 1; }
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "error: --ctx-size value must be a number\n"); return 1; }
-            if (errno == ERANGE) { fprintf(stderr, "error: --ctx-size value out of range\n"); return 1; }
-            if (val < 1) { fprintf(stderr, "error: --ctx-size must be >= 1\n"); return 1; }
+            if (*endptr != '\0') { fprintf(stderr, "Error: --ctx-size value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "Error: --ctx-size value out of range\n"); return 1; }
+            if (val < 1) { fprintf(stderr, "Error: --ctx-size must be >= 1\n"); return 1; }
             ctx_size = (int) val;
         } else if (arg == "-t" || arg == "--threads") {
-            if (++i >= argc) { fprintf(stderr, "error: --threads requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --threads requires an argument\n"); return 1; }
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "error: --threads value must be a number\n"); return 1; }
-            if (errno == ERANGE) { fprintf(stderr, "error: --threads value out of range\n"); return 1; }
-            if (val < 1) { fprintf(stderr, "error: --threads must be >= 1\n"); return 1; }
+            if (*endptr != '\0') { fprintf(stderr, "Error: --threads value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "Error: --threads value out of range\n"); return 1; }
+            if (val < 1) { fprintf(stderr, "Error: --threads must be >= 1\n"); return 1; }
             n_threads = (int) val;
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
-            if (++i >= argc) { fprintf(stderr, "error: --n-gpu-layers requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --n-gpu-layers requires an argument\n"); return 1; }
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "error: --n-gpu-layers value must be a number\n"); return 1; }
-            if (errno == ERANGE) { fprintf(stderr, "error: --n-gpu-layers value out of range\n"); return 1; }
-            if (val < 0) { fprintf(stderr, "error: --n-gpu-layers must be >= 0\n"); return 1; }
+            if (*endptr != '\0') { fprintf(stderr, "Error: --n-gpu-layers value must be a number\n"); return 1; }
+            if (errno == ERANGE) { fprintf(stderr, "Error: --n-gpu-layers value out of range\n"); return 1; }
+            if (val < 0) { fprintf(stderr, "Error: --n-gpu-layers must be >= 0\n"); return 1; }
             n_gpu_layers = (int) val;
         } else if (arg == "--output") {
-            if (++i >= argc) { fprintf(stderr, "error: --output requires an argument\n"); return 1; }
+            if (++i >= argc) { fprintf(stderr, "Error: --output requires an argument\n"); return 1; }
             output_file = argv[i];
         } else {
-            fprintf(stderr, "error: unknown option '%s'\n", arg.c_str());
+            fprintf(stderr, "Error: unknown option '%s'\n", arg.c_str());
             print_usage(argv[0]);
             return 1;
         }
     }
 
     if (!model_path) {
-        fprintf(stderr, "error: --model is required\n");
+        fprintf(stderr, "Error: --model is required\n");
         print_usage(argv[0]);
         return 1;
     }
 
     if (!prompt_text && !prompt_file) {
-        fprintf(stderr, "error: must specify --prompt or --file\n");
+        fprintf(stderr, "Error: must specify --prompt or --file\n");
         print_usage(argv[0]);
         return 1;
     }
 
     if (prompt_text && prompt_file) {
-        fprintf(stderr, "error: --prompt and --file are mutually exclusive\n");
+        fprintf(stderr, "Error: --prompt and --file are mutually exclusive\n");
         return 1;
     }
 
@@ -174,7 +174,7 @@ int main(int argc, char ** argv) {
     if (prompt_file) {
         std::ifstream in(prompt_file, std::ios::binary);
         if (!in) {
-            fprintf(stderr, "error: could not open file '%s'\n", prompt_file);
+            fprintf(stderr, "Error: could not open file '%s'\n", prompt_file);
             return 1;
         }
         std::stringstream buf;
@@ -190,7 +190,7 @@ int main(int argc, char ** argv) {
 
     LlamaModel model(llama_model_load_from_file(model_path, model_params));
     if (!model) {
-        fprintf(stderr, "error: failed to load model '%s'\n", model_path);
+        fprintf(stderr, "Error: failed to load model '%s'\n", model_path);
         return 1;
     }
 
@@ -198,7 +198,7 @@ int main(int argc, char ** argv) {
     const int n_embd = llama_model_n_embd_out(model);
 
     if (n_embd <= 0) {
-        fprintf(stderr, "error: invalid model n_embd=%d (model corrupt or unsupported)\n", n_embd);
+        fprintf(stderr, "Error: invalid model n_embd=%d (model corrupt or unsupported)\n", n_embd);
         return 1;
     }
 
@@ -223,7 +223,7 @@ int main(int argc, char ** argv) {
     }
 
     if (tokens.empty()) {
-        fprintf(stderr, "error: no tokens to process\n");
+        fprintf(stderr, "Error: no tokens to process\n");
         return 1;
     }
 
@@ -247,13 +247,13 @@ int main(int argc, char ** argv) {
                 // user asked for more ctx than needed-in-principle: allow, cap
                 ctx_n = (int32_t) n_ctx_train64;
             } else {
-                fprintf(stderr, "error: prompt is %zu tokens but the model's training context is only %lld tokens; use a shorter prompt\n",
+                fprintf(stderr, "Error: prompt is %zu tokens but the model's training context is only %lld tokens; use a shorter prompt\n",
                         tokens.size(), (long long) n_ctx_train64);
                 return 1;
             }
         }
         if ((int64_t) tokens.size() > (int64_t) ctx_n) {
-            fprintf(stderr, "error: prompt is %zu tokens but context is %d tokens; pass a larger --ctx-size or a shorter prompt\n",
+            fprintf(stderr, "Error: prompt is %zu tokens but context is %d tokens; pass a larger --ctx-size or a shorter prompt\n",
                     tokens.size(), ctx_n);
             return 1;
         }
@@ -271,14 +271,14 @@ int main(int argc, char ** argv) {
 
     LlamaContext ctx(llama_init_from_model(model, ctx_params));
     if (!ctx) {
-        fprintf(stderr, "error: failed to create context\n");
+        fprintf(stderr, "Error: failed to create context\n");
         return 1;
     }
 
     llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
     int32_t decode_result = llama_decode(ctx, batch);
     if (decode_result != 0) {
-        fprintf(stderr, "error: llama_decode failed with code %d\n", decode_result);
+        fprintf(stderr, "Error: llama_decode failed with code %d\n", decode_result);
         return 1;
     }
 
@@ -288,7 +288,7 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
 
     if (n_tokens_out <= 0) {
-        fprintf(stderr, "error: invalid hidden state token count (%d)\n", n_tokens_out);
+        fprintf(stderr, "Error: invalid hidden state token count (%d)\n", n_tokens_out);
         return 1;
     }
 
@@ -296,7 +296,7 @@ int main(int argc, char ** argv) {
     if (layers.empty()) {
         // Q-P1-6: silent exit-1 gave the caller nothing to act on; match the
         // batch tool's diagnostic shape (hs-extract-batch parse_layers).
-        fprintf(stderr, "error: no valid layers in '%s'\n", layer_str);
+        fprintf(stderr, "Error: no valid layers in '%s'\n", layer_str);
         return 1;
     }
 
@@ -312,7 +312,7 @@ int main(int argc, char ** argv) {
         tmp_path = std::string(output_file) + ".tmp";
         file_out.open(tmp_path);
         if (!file_out) {
-            fprintf(stderr, "error: could not open output file '%s'\n", tmp_path.c_str());
+            fprintf(stderr, "Error: could not open output file '%s'\n", tmp_path.c_str());
             return 1;
         }
     }
@@ -328,7 +328,7 @@ int main(int argc, char ** argv) {
         float * hs = llama_get_hidden_state(ctx, layer);
 
         if (!hs) {
-            fprintf(stderr, "error: llama_get_hidden_state returned NULL for layer %d\n", layer);
+            fprintf(stderr, "Error: llama_get_hidden_state returned NULL for layer %d\n", layer);
             // Streaming opens the temp file before extraction; a failure
             // here must not leave an empty/truncated JSON behind.
             if (output_file) {
@@ -359,7 +359,7 @@ int main(int argc, char ** argv) {
     json << "}\n";
     json.flush();
     if (!json) {
-        fprintf(stderr, "error: write/flush of output '%s' failed\n",
+        fprintf(stderr, "Error: write/flush of output '%s' failed\n",
                 output_file ? tmp_path.c_str() : "stdout");
         if (output_file) {
             file_out.close();
@@ -372,7 +372,7 @@ int main(int argc, char ** argv) {
         // Atomic finalize: the final path appears only when the write is
         // complete, so a crash mid-write can never leave a truncated JSON.
         if (std::rename(tmp_path.c_str(), output_file) != 0) {
-            fprintf(stderr, "error: cannot rename %s to %s\n", tmp_path.c_str(), output_file);
+            fprintf(stderr, "Error: cannot rename %s to %s\n", tmp_path.c_str(), output_file);
             std::remove(tmp_path.c_str());
             return 1;
         }

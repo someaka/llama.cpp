@@ -1,13 +1,13 @@
 // Logits-equivalence probe: with the post-final-norm pruning fix, logits
 // must be identical whether or not extract_hidden_states is enabled.
 // Same model, same prompt, greedy next-token. Compared across extraction
-// on/off: (1) the argmax token id, and (2) the top-8 logit VALUE SETS
-// (sorted, exact comparison; falls back to a 1e-6 tolerance with the
-// measured max delta reported — same-binary same-GPU decode is
-// deterministic, so drift beyond that is a regression). Exit 0 on match,
+// on/off: (1) the argmax token id, and (2) the top-8 logit value sets
+// (sorted, compared with a 1e-6 tolerance and the measured max delta
+// reported — same-binary same-GPU decode is deterministic: measured delta
+// is 0, so any drift beyond 1e-6 is a regression). Exit 0 on match,
 // 2 on mismatch (a failed decode is reported as a probe-failure MISMATCH
 // and also exits 2), 1 on setup failure (usage, model load, prompt too
-// long, context creation).
+// long, context creation, unknown argument).
 //
 // Two extraction paths are covered:
 //   mode 1: creation-time  — context created with extract_hidden_states=true.
@@ -70,7 +70,7 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     for (int k = 0; k < 8; ++k) r.top8.push_back(lg[idx[k]]);
     printf("argmax=%d\n", best);
     fflush(stdout);
-    for (int k = 0; k < 8; ++k) printf("  top%d: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
+    for (int k = 0; k < 8; ++k) fprintf(stderr, "  top%d: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
 
     llama_batch_free(batch);
     return r;
@@ -112,7 +112,17 @@ int main(int argc, char ** argv) {
     }
     const char * model_path = argv[1];
     const char * prompt     = argv[2];
-    const bool runtime_toggle = argc > 3 && std::string(argv[3]) == "--runtime-toggle";
+    bool runtime_toggle = false;
+    for (int i = 3; i < argc; ++i) {
+        if (std::string(argv[i]) == "--runtime-toggle") {
+            runtime_toggle = true;
+        } else {
+            // A misspelled flag would silently skip a mode and report MATCH
+            // from less coverage — a probe must fail loudly on unknown input.
+            fprintf(stderr, "error: unknown argument '%s' (supported: --runtime-toggle)\n", argv[i]);
+            return 1;
+        }
+    }
 
     llama_backend_init();
     llama_model_params mparams = llama_model_default_params();
@@ -126,7 +136,7 @@ int main(int argc, char ** argv) {
     int n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false);
     if (n < 0) { toks.resize(-n); n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false); }
     toks.resize(n);
-    if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (ctx 128)\n", n); return 1; }
+    if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (probe limit 120, sized for headroom under the probe's 128-slot context)\n", n); return 1; }
 
     bool all_ok = true;
 

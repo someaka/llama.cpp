@@ -98,6 +98,11 @@ echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 # auto_size_ctx was removed by cb140146b (single-pass pre-scan
 # refactor); its successor must uphold the same contract: pure
 # stream walk, returns bool, never exits.
+# The function must exist where this check scans it: if it moves TU the
+# sed range goes empty and the exit() scan would pass vacuously.
+if ! grep -q "static bool scan_prompts_file" tools/hs-extract-batch/hs-extract-batch.cpp; then
+echo "FAIL: scan_prompts_file not found in hs-extract-batch.cpp (moved TU? update this check's target)"; exit 1
+fi
 if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then
 echo "FAIL: scan_prompts_file calls exit()"; exit 1
 fi
@@ -136,8 +141,10 @@ echo "=== Check 13: producer-consumer pipeline error notification ==="
 # thread (producer) reads prompts + assignments while the main thread
 # (consumer) does GPU decode. Error paths must notify the consumer via
 # the condition variable to avoid deadlock.
-if ! grep -q "pfq.cv.notify" tools/hs-extract-batch/hs-extract-batch.cpp; then
-  echo "FAIL: producer-consumer cv notification missing"; exit 1
+# Anchored to call shapes, not bare identifiers: a comment mentioning
+# pfq.cv.notify must not satisfy this check.
+if ! grep -qE "^\s*(pfq\.)?cv\.notify(_one|_all)?\(" tools/hs-extract-batch/hs-extract-batch.cpp; then
+  echo "FAIL: producer-consumer cv notification call missing"; exit 1
 fi
 if ! grep -q "pfq.producer_done" tools/hs-extract-batch/hs-extract-batch.cpp; then
   echo "FAIL: producer_done flag missing"; exit 1
@@ -159,14 +166,16 @@ echo "PASS"
 echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
 # The producer-consumer queue must have backpressure to prevent
 # unbounded memory growth on 200K-prompt runs.
+# Anchored to use-sites: the bound must appear in a comparison (the
+# backpressure predicate), not merely be declared or mentioned.
 if ! grep -q "cv_space" tools/hs-extract-batch/hs-extract-batch.cpp; then
   echo "FAIL: backpressure cv_space missing"; exit 1
 fi
-if ! grep -q "MAX_PREFETCH" tools/hs-extract-batch/hs-extract-batch.cpp; then
-  echo "FAIL: MAX_PREFETCH bound missing"; exit 1
+if ! grep -qE "([<>][[:space:]]*MAX_PREFETCH|MAX_PREFETCH[[:space:]]*[<>])" tools/hs-extract-batch/hs-extract-batch.cpp; then
+  echo "FAIL: MAX_PREFETCH bound not used in a comparison (backpressure predicate missing)"; exit 1
 fi
-if ! grep -q "STOP_PRODUCER_AND_JOIN\|stop_producer_and_join" tools/hs-extract-batch/hs-extract-batch.cpp; then
-  echo "FAIL: producer-stop-and-join path missing (macro STOP_PRODUCER_AND_JOIN became fn stop_producer_and_join in the decomposition)"; exit 1
+if ! grep -q "stop_producer_and_join" tools/hs-extract-batch/hs-extract-batch.cpp; then
+  echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
 echo "PASS"
 echo "=== Check 16: server pool=none response size limit ==="
@@ -177,8 +186,8 @@ if ! grep -q "MAX_POOL_NONE_FLOATS" tools/server/server-context.cpp; then
 fi
 echo "PASS"
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
-if ! grep -q "CHECKPOINT_VERSION = 4" tools/hs-extract-batch/io-util.cpp; then
-  echo "FAIL: checkpoint version is not 4 (v4 adds the resume content check)"; exit 1
+if ! grep -q "CHECKPOINT_VERSION = 5" tools/hs-extract-batch/io-util.cpp; then
+  echo "FAIL: checkpoint version is not 5 (v5: rolling content hash on the correct FNV basis)"; exit 1
 fi
 if ! grep -q "write_sum" tools/hs-extract-batch/io-util.cpp; then
   echo "FAIL: write_sum parameter missing from _write_accumulator_to_file"; exit 1

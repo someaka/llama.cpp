@@ -2,7 +2,10 @@
 // Modes 0/1 reproduce the CLI and server init paths and print values (debug).
 // Mode 1 mirrors the server /hidden-states init contract: extraction off and
 // embeddings off at creation, BOS+EOS warmup decode, toggle on, perf reset,
-// memory clear. n_ubatch = n_ctx in every mode.
+// memory clear. n_ubatch = n_ctx in every mode. Scope note: n_threads is
+// left at the backend default (the server sets cpuparams.n_threads) —
+// scheduling only; mode 2's bitwise comparison is the proof that no
+// result-affecting parameter differs.
 // Mode 2 (default) runs BOTH paths in one process and compares the captured
 // hidden states bitwise — a single-mode run can only print, never verify.
 // Exit codes: 0 = identical (mode 2) or ran (modes 0/1), 1 = setup error,

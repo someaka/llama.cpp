@@ -2515,10 +2515,9 @@ private:
                 vec.assign(hs, hs + total);
             } else if (slot.task->params.hidden_pool == "skip_mean") {
                 // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
-                int32_t start = slot.task->params.hidden_skip_offset;
-                // HTTP validation rejects negative values; clamp so a future
-                // caller cannot index before the buffer start.
-                if (start < 0) start = 0;
+                // skip_offset was range-validated at request parse (>= 0).
+                const int32_t start = slot.task->params.hidden_skip_offset;
+                GGML_ASSERT(start >= 0);
                 if (start >= n_hs_tokens) {
                     auto err = std::make_unique<server_task_result_error>();
                     err->id   = slot.task->id;
@@ -5447,7 +5446,7 @@ void server_routes::init_routes() {
             }
             pool = body["pool"].get<std::string>();
             if (pool != "last" && pool != "skip_mean" && pool != "none") {
-                res->error(format_error_response("pool must be 'last', 'skip_mean', or 'none'", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("unknown pool value '" + pool + "' (must be 'last', 'skip_mean', or 'none')", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
         }
@@ -5459,12 +5458,12 @@ void server_routes::init_routes() {
                 res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
-            // Q-P1-8 (2026-08-29 quality pass): parse as int64 first — get<int32_t>
-            // narrows before the range check, so 2^32+7 would truncate to 7.
-            // Mirrors the layer_req parse 40 lines above.
+            // Parse as int64 first: get<int32_t> narrows before the range
+            // check, so 2^32+7 would truncate to 7.
             const int64_t skip_req = body["skip_offset"].get<int64_t>();
             if (skip_req < 0 || skip_req > 2147483647LL) {
-                res->error(format_error_response("skip_offset must be in [0, INT32_MAX]", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("skip_offset " + std::to_string(skip_req) +
+                                                 " out of range [0, 2147483647]", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             skip_offset = (int32_t)skip_req;
