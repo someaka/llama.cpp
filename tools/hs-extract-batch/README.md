@@ -47,13 +47,13 @@ llama-hs-extract-batch --self-test
 
 **Common flags:**
 - `--mean` - Output token means instead of full per-token data (raw mode only)
-- `--token-skip N` - Skip first N tokens for mean computation (default: 0)
+- `--token-skip N` - Skip first N tokens for mean computation (default: 0). Applies only to `--raw --mean` and `--batch --generate`; rejected elsewhere.
 - `--assignments FILE` - Path to assignments.bin (required for batch mode)
 - `--ctx-size N` - Override auto context sizing (default: auto from prompts)
 - `--checkpoint-every N` - Save checkpoint every N prompts (default: 10000)
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)
-- `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw` and `--generate`.
+- `--save-per-record` - Also write per-record vectors to `<output>.records.bin` (per-record sidecar format: prompt_idx + group_id + mask_id + layer_idx + float32[n_embd] per record). Batch mode only; rejected with `--raw`, `--generate`, and `--resume`.
 - `--batch-size N` - Only 1 is supported (multi-prompt batching is not implemented: shared KV-cache semantics would corrupt extraction). The flag is parsed so old driver scripts keep working; values > 1 are rejected with an error at runtime.
 - `--profile` - Print per-phase timing breakdown (KV clear, decode, sync, extract, mean, accumulate)
 - `--no-bos` - Force BOS off. Default: BOS follows the tokenizer's

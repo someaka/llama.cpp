@@ -28,6 +28,7 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 - `--no-bos` - Don't add BOS token. Default: BOS is added only when the
   model's tokenizer declares `add_bos_token` (e.g. gemma yes, qwen no).
 - `-t, --threads N` - Number of CPU threads (default: 4)
+- `-c, --ctx-size N` - Context size (default: auto = token count, capped at n_ctx_train)
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 0)
 - `--output FILE` - Output JSON file (default: stdout)
 

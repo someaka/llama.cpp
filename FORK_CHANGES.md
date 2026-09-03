@@ -113,8 +113,10 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 ### 7. Shared RAII Header
 
 - `common/llama-raii.h`  -  RAII wrappers (`LlamaBackend`, `LlamaModel`,
-  `LlamaContext`, `LlamaBatch`) shared by all fork tools and tests instead
-  of per-tool copies.
+  `LlamaContext`, `LlamaBatch`, `LlamaSampler`) shared by hs-extract,
+  hs-extract-batch, hs-extract-batch-test's sibling tests
+  (tests/test-hidden-states.cpp) and examples/hidden-states instead of
+  per-tool copies.
 
 ### 8. KV-Cells Optimization
 

@@ -1,17 +1,21 @@
 // RAII wrappers for llama.cpp C API resources.
 //
-// Shared by tools/hs-extract, tools/hs-extract-batch, and
-// tests/test-hidden-states. All wrappers support move semantics; tools that
-// don't need moves simply don't use them.
+// Shared by tools/hs-extract, tools/hs-extract-batch,
+// tools/hs-extract-batch-test, tests/test-hidden-states, and
+// examples/hidden-states.
+// LlamaModel, LlamaContext and LlamaSampler are move-only; LlamaBackend and
+// LlamaBatch are neither copyable nor movable.
 //
 // Usage:
 //   LlamaBackend backend;          // calls llama_backend_init()
 //   LlamaModel model(...);          // owns llama_model*
 //   LlamaContext ctx(...);          // owns llama_context*
-//   LlamaBatch batch;               // owns llama_batch (call .init() first)
+//   LlamaBatch batch;               // owns llama_batch (call .init() first,
+//                                   // at most once per instance: a second
+//                                   // init() leaks the first batch)
 //
 // All resources are automatically freed on scope exit. Copy is disabled;
-// move is allowed.
+// move is allowed only where stated above.
 
 #pragma once
 

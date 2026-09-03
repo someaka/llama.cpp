@@ -5416,6 +5416,14 @@ void server_routes::init_routes() {
                             ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
+                    // Duplicate ids would silently collapse in the object-
+                    // keyed response; reject like the CLI tools do.
+                    if (std::find(layers.begin(), layers.end(), layer_num) != layers.end()) {
+                        res->error(format_error_response(
+                            "duplicate layer index " + std::to_string(layer_num) + " in layers array",
+                            ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
                     layers.push_back(layer_num);
                 }
             } else {

@@ -379,13 +379,24 @@ int run_self_test() {
                         // offsets may legitimately pass: a flipped float is a
                         // valid float (comment above).
                         if (structural && read_ok2) ok19 = false;
-                    }
-                    // Restore the pristine checkpoint for any later checks
-                    FILE* rf_raw = fopen(ckpt_path.c_str(), "wb");
-                    if (rf_raw) {
-                        FilePtr rf(rf_raw);
-                        fwrite(bytes.data(), 1, bytes.size(), rf);
-                        rf.reset();
+                        // Restore the pristine checkpoint before the next
+                        // variant and before any later checks run against
+                        // this file; a silent restore failure would let Test
+                        // 20 read corrupted bytes, so it is verified.
+                        {
+                            FilePtr rf(std::fopen(ckpt_path.c_str(), "wb"));
+                            if (!rf) {
+                                HS_CHECK(false, "Test 19 (restore reopen)");
+                                ok19 = false;
+                                break;
+                            }
+                            if (fwrite(bytes.data(), 1, bytes.size(), rf) != bytes.size() || rf.sync() != true) {
+                                HS_CHECK(false, "Test 19 (restore write)");
+                                ok19 = false;
+                                break;
+                            }
+                            rf.reset();
+                        }
                     }
                 }
                 HS_CHECK(ok19, "Test 19 (corruption detection)");
