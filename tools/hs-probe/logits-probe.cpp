@@ -5,7 +5,9 @@
 // (sorted, exact comparison; falls back to a 1e-6 tolerance with the
 // measured max delta reported — same-binary same-GPU decode is
 // deterministic, so drift beyond that is a regression). Exit 0 on match,
-// 2 on mismatch, 1 on setup/decode failure.
+// 2 on mismatch (a failed decode is reported as a probe-failure MISMATCH
+// and also exits 2), 1 on setup failure (usage, model load, prompt too
+// long, context creation).
 //
 // Two extraction paths are covered:
 //   mode 1: creation-time  — context created with extract_hidden_states=true.

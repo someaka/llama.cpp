@@ -122,7 +122,7 @@ Flat position-count table replacing `std::map` for O(1) lookup.
 
 ### 9. Misc
 
-- `ggml/src/ggml-vulkan.cpp`: one-line debug-log change.
+- `ggml/src/ggml-vulkan/ggml-vulkan.cpp`: one-line debug-log change.
 
 ## CI
 
