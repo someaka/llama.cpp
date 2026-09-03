@@ -5413,7 +5413,7 @@ void server_routes::init_routes() {
                     }
                     if (layer_num < 0 || layer_num >= n_hs_slots) {
                         res->error(format_error_response(
-                            "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",
+                            "layer " + std::to_string(layer_req) + " out of range [0, " + std::to_string(n_layer) + "]",
                             ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
