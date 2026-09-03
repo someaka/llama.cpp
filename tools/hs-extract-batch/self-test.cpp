@@ -11,15 +11,15 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
-#include <vector>
 #include <utility>
+#include <vector>
 #ifndef _WIN32
 #include <unistd.h>  // getpid for the temp checkpoint filename
 #endif
 
 #include "hs-accum.h"
 #include "hs-kernels.h"
-#include "io-util.h"
+#include "io-util.h"  // FilePtr RAII wrapper (Check 5 discipline)
 #include "self-test.h"
 
 // Every check increments the attempted-counter; passed/total are derived
@@ -316,14 +316,15 @@ int run_self_test() {
             {
                 bool ok19 = true;
                 std::string ckpt_path = std::string(test_ckpt) + ".checkpoint";
-                FILE* orig = fopen(ckpt_path.c_str(), "rb");
-                if (!orig) {
+                FILE* orig_raw = fopen(ckpt_path.c_str(), "rb");
+                if (!orig_raw) {
                     ok19 = false;
                 } else {
+                    FilePtr orig(orig_raw);
                     std::vector<unsigned char> bytes;
                     int c;
                     while ((c = fgetc(orig)) != EOF) bytes.push_back((unsigned char)c);
-                    fclose(orig);
+                    orig.reset();
                     const size_t n = bytes.size();
                     // Corrupt one byte at these offsets: 0 (version), 8
                     // (fingerprint fields), and payload offsets.
@@ -338,10 +339,11 @@ int run_self_test() {
                         if (offsets[oi] >= n) continue;
                         std::vector<unsigned char> corrupt = bytes;
                         corrupt[offsets[oi]] ^= 0xFF;
-                        FILE* wf = fopen(ckpt_path.c_str(), "wb");
-                        if (!wf) { ok19 = false; break; }
+                        FILE* wf_raw = fopen(ckpt_path.c_str(), "wb");
+                        if (!wf_raw) { ok19 = false; break; }
+                        FilePtr wf(wf_raw);
                         fwrite(corrupt.data(), 1, corrupt.size(), wf);
-                        fclose(wf);
+                        wf.reset();
                         AccumulatorMap junk_acc;
                         int32_t junk_iter = 0;
                         // Note: some single-byte flips in the float payload
@@ -358,10 +360,11 @@ int run_self_test() {
                         if (structural && read_ok2) ok19 = false;
                     }
                     // Restore the pristine checkpoint for any later checks
-                    FILE* rf = fopen(ckpt_path.c_str(), "wb");
-                    if (rf) {
+                    FILE* rf_raw = fopen(ckpt_path.c_str(), "wb");
+                    if (rf_raw) {
+                        FilePtr rf(rf_raw);
                         fwrite(bytes.data(), 1, bytes.size(), rf);
-                        fclose(rf);
+                        rf.reset();
                     }
                 }
                 HS_CHECK(ok19, "Test 19 (corruption detection)");
