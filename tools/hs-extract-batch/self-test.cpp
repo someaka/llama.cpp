@@ -25,12 +25,13 @@
 // Every check increments the attempted-counter; passed/total are derived
 // from it, so the suite size is never hand-maintained.
 static int hs_attempted = 0;
+static int hs_failed = 0;
 #define HS_CHECK(ok_expr, label)                                        \
     do {                                                                \
         hs_attempted++;                                                 \
         const bool hs_ok_ = (ok_expr);                                  \
         fprintf(stderr, "  %s: %s\n", (label), hs_ok_ ? "PASS" : "FAIL"); \
-        if (!hs_ok_) all_ok = false;                                    \
+        if (!hs_ok_) { all_ok = false; hs_failed++; }                   \
     } while (0)
 
 int run_self_test() {
@@ -407,7 +408,7 @@ int run_self_test() {
         remove((std::string(test_ckpt) + ".prompts.tampered").c_str());
     }
 
-    const int passed = hs_attempted - (all_ok ? 0 : 1);
+    const int passed = hs_attempted - hs_failed;
     fprintf(stderr, "\n%d/%d tests passed\n", passed, hs_attempted);
 
     if (all_ok) {
