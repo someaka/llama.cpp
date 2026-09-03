@@ -998,14 +998,19 @@ This is a fork-specific endpoint for extracting per-layer hidden-state vectors f
 ```json
 [
   {
+    "index": 0,
     "hidden_states": {
       "0":  [0.012, -0.034, ...],
       "15": [0.056,  0.078, ...],
       "34": [-0.011, 0.022, ...]
-    }
+    },
+    "tokens_evaluated": 2
   }
 ]
 ```
+
+`index` echoes the request index (batch input arrays); `tokens_evaluated` is
+the number of tokens the forward pass consumed.
 
 Each key in `hidden_states` is the layer index as a decimal string ("0", "34", ...). The value is a flat float array:
 - For `pool="last"` or `pool="skip_mean"`: length = `n_embd_out`

@@ -501,7 +501,9 @@ int64_t compute_masked_mean(
         }
         if (end > n_tokens || start > n_tokens) {
             fprintf(stderr, "Error: masked-mean range [%d, %d) exceeds n_tokens=%d  -  "
-                            "token span computation is incorrect (check BOS_OFFSET in dialogue_utils.py)\n",
+                            "the assignment's token range does not fit this prompt's tokenization "
+                            "(ranges are raw token indices, post-tokenization, BOS included per the "
+                            "tokenizer; see tools/hs-extract-batch/README.md, Input Format)\n",
                     start, end, n_tokens);
             return -1;
         }
@@ -822,7 +824,7 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
 static int run_raw(const Args& args) {
     PromptsScan scan;
     if (!scan_prompts_file(args.prompts_file, scan)) return 1;
-    // Q-P1-10 (2026-08-29 quality pass): an empty prompts file would finalize
+    // An empty prompts file would finalize
     // an output containing just the int32 0 header and exit 0 — silently
     // producing a "complete" empty dump. Reject instead.
     if (scan.n_nonempty == 0) {
@@ -1296,7 +1298,7 @@ static int generate_assignment(GenContext& g) {
 
     // Compute means from generated tokens and accumulate into the assignment buffers
     // (same path as comprehension mode, but using gen_accum instead of masked mean).
-    // Q-P1-4 (2026-08-29 quality pass): the mean gen_accum[li]/n_gen is
+    // The mean gen_accum[li]/n_gen is
     // per-LAYER, not per-assignment — hoisted out of the assignment loop
     // (A*L divides collapsed to L).
     for (size_t li = 0; li < target_layers.size(); li++) {
@@ -1554,7 +1556,7 @@ static int run_batch(const Args& args) {
             if (p_line.empty()) continue;
             auto assignment_read = read_prompt_assignments(assign_fin);
             if (assignment_read.status != AssignmentReadStatus::ok) {
-                // Q-P2-3: precise producer-side diagnostic (status, not a
+                // Precise producer-side diagnostic (status, not a
                 // generic consumer-side "assignment read failed").
                 fprintf(stderr, "Error: assignment read status=%d for prompt %d (assignments stream desync or truncated)\n",
                         (int)assignment_read.status, (int)pfq.n_produced.load());

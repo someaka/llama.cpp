@@ -79,7 +79,7 @@ Production tool for processing thousands of prompts:
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
 - Binary I/O format (CRD2)
-- Self-test mode (21 tests: 1-16 kernels, 17 checkpoint fixture, 18-21
+- Self-test mode (23 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 18-23
   conditional on 17's checkpoint write; no model required)
 - `--profile` flag for per-step timing analysis
 - Hard-error semantics on all range violations (no silent clamping, no graceful degradation)
@@ -131,10 +131,10 @@ Flat position-count table replacing `std::map` for O(1) lookup.
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Builds with `GGML_NATIVE=OFF` (portable binaries for the CI matrix; no
   host-specific ISA assumptions)
-- Runs self-test (21/21; tests 18-21 SKIP if the checkpoint fixture can't be
+- Runs self-test (23/23; tests 18-23 SKIP if the checkpoint fixture can't be
   written)
 - Runs multi-ubatch pool=none integration test
-- 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2, no raw fclose, checkpoint bounds, producer-consumer pipeline)
+- 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash, no raw fclose, checkpoint bounds, producer-consumer pipeline)
 
 GPU verification (CUDA + Vulkan) is manual  -  see CI header comments for
 commands (those manual builds configure `GGML_NATIVE=ON` on the target

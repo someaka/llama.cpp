@@ -95,7 +95,7 @@ static inline bool fsync_parent_dir(const char* path) {
 // Checked fwrite: verifies the full count was written. On failure prints an
 // error and returns false; callers must propagate the failure (never produce
 // corrupt files silently). Function form of the former CHECKED_WRITE macro.
-static inline bool checked_write(const void* ptr, size_t size, size_t count, FILE* f) {
+[[nodiscard]] static inline bool checked_write(const void* ptr, size_t size, size_t count, FILE* f) {
     if (fwrite(ptr, size, count, f) != count) {
         // No __FILE__:__LINE__ in this message: as a static inline it would
         // always report this header's location, not the caller's.
