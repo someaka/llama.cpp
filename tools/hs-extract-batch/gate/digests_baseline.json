@@ -13,5 +13,10 @@
   },
   "s8_e2b_gen_sampled": {
     "output.bin": "7337e4fefa89d2461c05a0a3a0855239d81bffb2298b642e51cdd11c49491b31"
+  },
+  "s9_e2b_gen_resume": {
+    "output.bin.fullrun": "7337e4fefa89d2461c05a0a3a0855239d81bffb2298b642e51cdd11c49491b31",
+    "output.bin.resumed": "7337e4fefa89d2461c05a0a3a0855239d81bffb2298b642e51cdd11c49491b31",
+    "fullrun_equals_resumed": true
   }
 }

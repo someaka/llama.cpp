@@ -40,6 +40,12 @@ SCENARIOS = [
     ("s8_e2b_gen_sampled",    "e2b",   "0,35",    ["--generate", "8", "--token-skip", "2",
                                                   "--temperature", "0.8", "--top-k", "40",
                                                   "--repeat-penalty", "1.1"], "gen", False),
+    # Resume parity with generation state: gen mode carries sampling params
+    # in the checkpoint fingerprint and has its own records path; only a
+    # kill-and-resume exercises that resume path end-to-end.
+    ("s9_e2b_gen_resume",     "e2b",   "0,35",    ["--generate", "8", "--token-skip", "2",
+                                                  "--temperature", "0.8", "--top-k", "40",
+                                                  "--repeat-penalty", "1.1"], "gen", True),
 ]
 
 def sha256(p):
@@ -160,10 +166,25 @@ def main():
 
     # check mode: compare
     dig_path = GOLD / "digests_baseline.json"
-    try:
-        base = __import__("json").loads(dig_path.read_text())
-    except FileNotFoundError:
-        sys.exit(f"REFUSED: baseline digests missing at {dig_path} - run gate_batch.py record first")
+    if not dig_path.exists():
+        # Fall back to the committed anchor next to this script. Never point
+        # the operator at 'record' mode: re-baselining from the binary under
+        # test would overwrite the anchor with self-certifying bytes.
+        committed = pathlib.Path(__file__).resolve().parent / "digests_baseline.json"
+        if committed.exists():
+            print(f"note: {dig_path} missing - using the committed anchor at {committed}")
+            dig_path = committed
+        else:
+            sys.exit(f"REFUSED: baseline digests missing at {dig_path} and no committed anchor at "
+                     f"{committed} - restore gate/digests_baseline.json from a trusted commit; "
+                     f"never re-baseline from the binary under test")
+    base = __import__("json").loads(dig_path.read_text())
+    # A baseline containing scenarios that were renamed/removed (or a typo'd
+    # key) would silently shrink the comparison to the intersection. Refuse.
+    stale = sorted(set(base) - {s[0] for s in SCENARIOS})
+    if stale:
+        sys.exit(f"REFUSED: baseline scenario keys drifted: {', '.join(stale)} - "
+                 f"re-capture the baseline from a trusted commit")
     fails = 0
     for name, _, _, _, _, _ in SCENARIOS:
         b, c = base.get(name, {}), digests[name]

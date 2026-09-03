@@ -1488,8 +1488,34 @@ static int run_batch(const Args& args) {
     // are consumed strictly in order, one producer thread), and stamps each
     // PrefetchedPrompt; the consumer adopts the stamped value after the
     // prompt's work completes, so a checkpoint never races a partial line.
+    // On --resume the producer still consumes (and hashes) the skipped
+    // prefix, so its rolling state stays identical to a fresh run's.
     uint64_t content_fnv = 0;
-    std::atomic<uint64_t> producer_content_fnv{0};
+    // Initialized to the FNV offset basis (not 0): a zero state would make the
+    // first line's roll differ from hash_prompts_prefix's re-derivation.
+    std::atomic<uint64_t> producer_content_fnv{14695981039346656037ull};
+    if (skip_count > 0) {
+        // Pre-roll the resume prefix so the first checkpoint of the resumed
+        // segment already carries the full consumed-prefix hash.
+        std::ifstream prefin(args.prompts_file);
+        if (!prefin) {
+            fprintf(stderr, "Error: cannot reopen %s for the resume content pre-hash\n", args.prompts_file);
+            return 1;
+        }
+        std::string line;
+        int32_t n = 0;
+        uint64_t h = 14695981039346656037ull;  // offset basis
+        while (n < skip_count && std::getline(prefin, line)) {
+            if (line.empty()) continue;
+            h = fnv_roll_line(h, line);
+            ++n;
+        }
+        if (n < skip_count) {
+            fprintf(stderr, "Error: prompts file has only %d non-empty lines but skip_count is %d\n", n, skip_count);
+            return 1;
+        }
+        producer_content_fnv.store(h, std::memory_order_relaxed);
+    }
     auto start_time = std::chrono::steady_clock::now();
 
     // Profiling accumulators
