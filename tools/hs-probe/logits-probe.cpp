@@ -1,7 +1,11 @@
 // Logits-equivalence probe: with the post-final-norm pruning fix, logits
 // must be identical whether or not extract_hidden_states is enabled.
-// Same model, same prompt, greedy next-token: compare argmax + top-8 logit
-// values across extraction on/off.
+// Same model, same prompt, greedy next-token. Compared across extraction
+// on/off: (1) the argmax token id, and (2) the top-8 logit VALUE SETS
+// (sorted, exact comparison; falls back to a 1e-6 tolerance with the
+// measured max delta reported — same-binary same-GPU decode is
+// deterministic, so drift beyond that is a regression). Exit 0 on match,
+// 2 on mismatch, 1 on setup/decode failure.
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -30,8 +34,10 @@ int main(int argc, char ** argv) {
     int n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false);
     if (n < 0) { toks.resize(-n); n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false); }
     toks.resize(n);
+    if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (ctx 128)\n", n); return 1; }
 
     int argmaxes[2];
+    std::vector<float> top8[2];
 
     for (int mode = 0; mode < 2; ++mode) {
         llama_context_params cparams = llama_context_default_params();
@@ -67,6 +73,7 @@ int main(int argc, char ** argv) {
         for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
         // simple selection of top 8
         std::partial_sort(idx.begin(), idx.begin()+8, idx.end(), [&](size_t a, size_t b){ return lg[a] > lg[b]; });
+        for (int k = 0; k < 8; ++k) top8[mode].push_back(lg[idx[k]]);
         printf("mode=%s argmax=%d\n", mode ? "EXTRACT" : "plain ", best);
         fflush(stdout);
         for (int k = 0; k < 8; ++k) printf("  top%d: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
@@ -76,7 +83,20 @@ int main(int argc, char ** argv) {
     }
 
     bool same = argmaxes[0] == argmaxes[1];
-    printf("ARGMAX_MATCH=%s\n", same ? "YES" : "NO");
+    const bool argmax_ok = same;
+    float max_delta = 0.0f;
+    for (int k = 0; k < 8; ++k) {
+        const float d = std::fabs(top8[0][k] - top8[1][k]);
+        if (d > max_delta) max_delta = d;
+        if (d > 1e-6f) same = false;
+    }
+    if (same) {
+        printf("ARGMAX_MATCH=YES\n");
+        if (max_delta > 0.0f) printf("TOP8_MAX_DELTA=%.9g (within 1e-6 tolerance)\n", max_delta);
+    } else {
+        printf("ARGMAX_MATCH=NO (top-8 value drift%s)\n", argmax_ok ? "" : "; argmax also differs");
+        printf("TOP8_MAX_DELTA=%.9g\n", max_delta);
+    }
     llama_model_free(model);
     llama_backend_free();
     return same ? 0 : 2;
