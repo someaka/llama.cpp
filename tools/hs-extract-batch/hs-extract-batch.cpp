@@ -94,6 +94,7 @@ struct Args {
     bool save_per_record = false;  // --save-per-record: write per-record vectors sidecar
     int batch_size = 1;           // --batch-size N: pack N prompts per decode (default: 1)
     bool profile = false;         // --profile: print per-phase timing breakdown
+    bool batch_size_explicit = false; // whether --batch-size was passed on the command line
     bool no_bos = false;          // --no-bos: force BOS off (default: follow tokenizer's add_bos_token)
     int generate_tokens = 0;      // --generate N: autoregressive generation mode (extract from generated tokens)
     float temperature = 0.0f;     // --temperature: sampling temperature (0 = greedy argmax, the default)
@@ -290,6 +291,7 @@ static Args parse_args(int argc, char** argv) {
                 exit(1);
             }
             args.batch_size = (int)val;
+            args.batch_size_explicit = true;
         } else if (arg == "--n-gpu-layers" || arg == "-ngl") {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: %s requires a value\n", arg.c_str());
@@ -331,6 +333,20 @@ static Args parse_args(int argc, char** argv) {
     if (args.batch_mode && args.mean_mode) {
         fprintf(stderr, "Error: --mean is not supported with --batch (it only applies to --raw mode)\n");
         exit(1);
+    }
+
+    // --batch-size and --profile act only in batch mode; in raw mode they are
+    // silently ignored (like any unknown-but-parsed flag), so reject them for
+    // parity with the documented "batch mode only" contract.
+    if (!args.batch_mode) {
+        if (args.batch_size_explicit) {
+            fprintf(stderr, "Error: --batch-size is not supported with --raw (it only applies to --batch mode)\n");
+            exit(1);
+        }
+        if (args.profile) {
+            fprintf(stderr, "Error: --profile is not supported with --raw (it only applies to --batch mode)\n");
+            exit(1);
+        }
     }
 
     // --token-skip >= --generate silently produces empty output: the gate

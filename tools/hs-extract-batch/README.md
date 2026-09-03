@@ -189,22 +189,22 @@ If interrupted, re-run with `--resume` to continue from the last checkpoint.
 
 ### Checkpoint file format (v6)
 
-A checkpoint is `<output>.checkpoint`; the format is versioned. Field order
-(all little-endian):
+A checkpoint is `<output>.checkpoint`; the format is versioned. Physical
+field order (all little-endian):
 
-| field | type | notes |
-|---|---|---|
-| `version` | i32 | 6 for current checkpoints; 1-5 load with degraded guarantees + warning |
-| `n_iterated` | i32 | number of prompts fully processed (resume skip count) |
-| accumulator records | binary | per-key sums as in `output.bin` (raw **sums**, not means) + counts |
-| `n_fp_layers` | i32 | run fingerprint: layer count |
-| `generate_mode` | u8(bool) | fingerprint: `--generate` was active |
-| `generate_tokens` | i32 | fingerprint: `--generate N` |
-| `token_skip` | i32 | fingerprint: `--token-skip` |
-| `layers` | i32[n_fp_layers] | fingerprint: sorted target layers |
-| `content_fnv64` | u64 | rolling FNV-1a-64 over every consumed non-empty prompts line, each line followed by a `\n` byte (since v5); v4 stored a single-line hash on a retired basis (not revalidated) |
-| `n_prompts` | i32 | expected total prompts; must match the current run |
-| `acc_fnv64` | u64 | v6 trailer: FNV-1a-64 over the accumulator region above (header + all records), so any in-range payload bit flip is refused |
+| # | field | type | notes |
+|---|---|---|---|
+| 1 | `version` | i32 | 6 for current checkpoints; 1-5 load with degraded guarantees + warning |
+| 2 | `n_iterated` | i32 | number of prompts fully processed (resume skip count) |
+| 3 | `n_fp_layers` | i32 | run fingerprint: layer count |
+| 4 | `generate_mode` | u8(bool) | fingerprint: `--generate` was active |
+| 5 | `generate_tokens` | i32 | fingerprint: `--generate N` |
+| 6 | `token_skip` | i32 | fingerprint: `--token-skip` |
+| 7 | `layers` | i32[n_fp_layers] | fingerprint: sorted target layers |
+| 8 | `content_fnv64` | u64 | rolling FNV-1a-64 over every consumed non-empty prompts line, each line followed by a `\n` byte (since v5); v4 stored a single-line hash on a retired basis (not revalidated) |
+| 9 | `n_prompts` | i32 | expected total prompts; must match the current run |
+| 10 | accumulator region | binary | `OUTPUT_MAGIC` i32 (`0x43524432`, "CRD2"), then `n_groups`/`n_layers`/`n_embd` i32, then per-group records: `group_id` i32, `n_masks` i32, then per mask: `mask_id` i32, `n_layers_data` i32, then per layer: `layer_idx` i32, `count` i32, `f32[n_embd]` raw sums |
+| 11 | `acc_fnv64` | u64 | v6 trailer: FNV-1a-64 over bytes of field 10 only, so any in-range payload bit flip is refused |
 
 FNV-1a-64 definition: offset basis `14695981039346656037`
 (`0xcbf29ce484222325`), prime `1099511628211`; for each line, hash the line

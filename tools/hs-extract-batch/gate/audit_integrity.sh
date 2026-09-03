@@ -1,4 +1,19 @@
 set -euo pipefail
+# Strip // and /* */ comments so identifier checks verify code, not prose
+strip_comments() {
+  python3 - "$1" <<'PY'
+import sys, re
+src = open(sys.argv[1]).read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+src = re.sub(r'//[^"]*$', '', src, flags=re.M)
+try:
+    sys.stdout.write(src)
+except BrokenPipeError:
+    pass  # downstream grep -q closed early on a match; that is success
+PY
+}
+
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
 grep -q "uint64_t key\|uint64_t make_accum_key\|uint64_t flat_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint64_t key missing"; exit 1; }
 echo "=== Check 2: output_all defined ==="
@@ -14,6 +29,7 @@ for f in src/llama-context.cpp; do
 done
 echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
 python3 - <<'PY'
+import re
 from pathlib import Path
 # post-decomposition the tool is 5 TUs; FilePtr lives in io-util.h.
 # Scan every TU so a target file with zero fclose() cannot vacuous-pass.
@@ -38,7 +54,7 @@ for tu in tool_tus:
           brace_depth += line.count('{') - line.count('}')
           if brace_depth <= 0:
               in_fileptr = False
-      elif 'fclose(' in line.split('//')[0] and not stripped.startswith(('//', '*', '/*')):
+      elif re.search(r'\bfclose\s*\(', line.split('//')[0]) and not stripped.startswith(('//', '*', '/*')):
           outside.append(f'{tu}:{lineno}: {line.strip()}')
 if outside:
     print(f'FAIL: {len(outside)} fclose calls outside FilePtr:')
@@ -63,7 +79,14 @@ import re
 bad = []
 total_calls = 0
 for tu in tool_tus:
-    lines = Path(tu).read_text().splitlines()
+    raw = Path(tu).read_text()
+    # Strip block comments and string/char literals BEFORE any paren/depth
+    # analysis: parens inside them must not poison the continuation joiner
+    # (D8: '"( v6"' used to disarm the whole rest of the TU).
+    raw = re.sub(r'/\*.*?\*/', ' ', raw, flags=re.S)
+    raw = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw)
+    raw = re.sub(r"'(?:\\.|[^'\\])*'", "''", raw)
+    lines = raw.splitlines()
     # Join continuation lines so multi-line if(...) conditions are seen as
     # one logical statement: a call on a continuation line whose statement
     # opened with if(/return/etc counts as tested. (Track open paren depth
@@ -143,10 +166,10 @@ echo "=== Check 13: producer-consumer pipeline error notification ==="
 # the condition variable to avoid deadlock.
 # Anchored to call shapes, not bare identifiers: a comment mentioning
 # pfq.cv.notify must not satisfy this check.
-if ! grep -qE "^\s*(pfq\.)?cv\.notify(_one|_all)?\(" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE "^\s*(pfq\.)?cv\.notify(_one|_all)?\("; then
   echo "FAIL: producer-consumer cv notification call missing"; exit 1
 fi
-if ! grep -q "pfq.producer_done" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "pfq.producer_done"; then
   echo "FAIL: producer_done flag missing"; exit 1
 fi
 echo "PASS"
@@ -168,20 +191,20 @@ echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
 # unbounded memory growth on 200K-prompt runs.
 # Anchored to use-sites: the bound must appear in a comparison (the
 # backpressure predicate), not merely be declared or mentioned.
-if ! grep -q "cv_space" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "cv_space"; then
   echo "FAIL: backpressure cv_space missing"; exit 1
 fi
-if ! grep -qE "([<>][[:space:]]*MAX_PREFETCH|MAX_PREFETCH[[:space:]]*[<>])" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE "([<>][[:space:]]*MAX_PREFETCH|MAX_PREFETCH[[:space:]]*[<>])"; then
   echo "FAIL: MAX_PREFETCH bound not used in a comparison (backpressure predicate missing)"; exit 1
 fi
-if ! grep -q "stop_producer_and_join" tools/hs-extract-batch/hs-extract-batch.cpp; then
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_producer_and_join"; then
   echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
 echo "PASS"
 echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to
 # prevent DoS via enormous JSON responses.
-if ! grep -q "MAX_POOL_NONE_FLOATS" tools/server/server-context.cpp; then
+if ! strip_comments tools/server/server-context.cpp | grep -q "MAX_POOL_NONE_FLOATS"; then
   echo "FAIL: pool=none response size limit missing"; exit 1
 fi
 echo "PASS"
