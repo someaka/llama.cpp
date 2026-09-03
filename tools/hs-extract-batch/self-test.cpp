@@ -1,6 +1,7 @@
 // Self-test for hs-extract-batch: synthetic tests over compute_masked_mean(),
 // compute_single_range_mean(), the accumulator key encoding, and the
-// checkpoint write/read roundtrip. No model file needed. 21 tests total.
+// checkpoint write/read roundtrip. No model file needed. The test count
+// is computed (HS_CHECK attempts), not hand-maintained.
 
 
 #include <cstdio>
@@ -21,12 +22,21 @@
 #include "io-util.h"
 #include "self-test.h"
 
+// Every check increments the attempted-counter; passed/total are derived
+// from it, so the suite size is never hand-maintained.
+static int hs_attempted = 0;
+#define HS_CHECK(ok_expr, label)                                        \
+    do {                                                                \
+        hs_attempted++;                                                 \
+        const bool hs_ok_ = (ok_expr);                                  \
+        fprintf(stderr, "  %s: %s\n", (label), hs_ok_ ? "PASS" : "FAIL"); \
+        if (!hs_ok_) all_ok = false;                                    \
+    } while (0)
+
 int run_self_test() {
     fprintf(stderr, "Running compute_masked_mean self-tests...\n\n");
 
-    int passed = 0;
-    int total = 21;  // attempted tests: 1-16 kernels, 17 fixture, 18-19 inside 17's success branch, 20-21 resume content check
-    bool all_ok = true;
+    bool all_ok = true;  // passed/total are derived from hs_attempted
 
     // All tests use data layout: 3 tokens x 2 dims, row-major
     // data[0..5] = {1, 2, 3, 4, 5, 6}
@@ -42,8 +52,7 @@ int run_self_test() {
         bool ok = (count == 3)
                && (std::abs(out[0] - 3.0f) < 1e-6f)
                && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 1 (single contiguous range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 1 (single contiguous range)");
     }
 
     // Test 2: skip first token
@@ -55,8 +64,7 @@ int run_self_test() {
         bool ok = (count == 2)
                && (std::abs(out[0] - 4.0f) < 1e-6f)
                && (std::abs(out[1] - 5.0f) < 1e-6f);
-        fprintf(stderr, "  Test 2 (skip first token): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 2 (skip first token)");
     }
 
     // Test 3: non-contiguous ranges (non-contiguous selection: tokens 0 and 2, skip 1)
@@ -68,8 +76,7 @@ int run_self_test() {
         bool ok = (count == 2)
                && (std::abs(out[0] - 3.0f) < 1e-6f)
                && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 3 (non-contiguous ranges): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 3 (non-contiguous ranges)");
     }
 
     // Test 4: empty mask (zero ranges)
@@ -81,8 +88,7 @@ int run_self_test() {
         bool ok = (count == 0)
                && (std::abs(out[0]) < 1e-6f)
                && (std::abs(out[1]) < 1e-6f);
-        fprintf(stderr, "  Test 4 (empty mask): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 4 (empty mask)");
     }
 
     // Test 5: hard error  -  range end exceeds n_tokens (no soft clamp)
@@ -91,8 +97,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
         bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 5 (hard error end > n_tokens): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 5 (hard error end > n_tokens)");
     }
 
     // Test 6: hard error  -  both start and end overshoot
@@ -101,8 +106,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
         bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 6 (hard error overshoot range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 6 (hard error overshoot range)");
     }
 
     // Test 7: hard error  -  fully out-of-bounds
@@ -111,8 +115,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
         bool ok = (count == -1);  // hard error  -  no clamping
-        fprintf(stderr, "  Test 7 (hard error fully out-of-bounds): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 7 (hard error fully out-of-bounds)");
     }
 
     // Test 8: hard error  -  negative range
@@ -121,8 +124,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int64_t count = compute_masked_mean(data1, 3, 2, ranges, out);
         bool ok = (count == -1);  // hard error
-        fprintf(stderr, "  Test 8 (hard error negative range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 8 (hard error negative range)");
     }
 
     // Test 9: hard error  -  inverted range (start > end)
@@ -131,8 +133,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int count = compute_masked_mean(data1, 3, 2, ranges, out);
         bool ok = (count == -1);  // hard error
-        fprintf(stderr, "  Test 9 (hard error inverted range): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 9 (hard error inverted range)");
     }
 
     // Test 10: compute_single_range_mean  -  basic mean
@@ -143,8 +144,7 @@ int run_self_test() {
         bool ok = (count == 3)
                && (std::abs(out[0] - 3.0f) < 1e-6f)
                && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 10 (single-range basic mean): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 10 (single-range basic mean)");
     }
 
     // Test 11: compute_single_range_mean  -  skip first token
@@ -155,8 +155,7 @@ int run_self_test() {
         bool ok = (count == 2)
                && (std::abs(out[0] - 4.0f) < 1e-6f)
                && (std::abs(out[1] - 5.0f) < 1e-6f);
-        fprintf(stderr, "  Test 11 (single-range skip first): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 11 (single-range skip first)");
     }
 
     // Test 12: compute_single_range_mean  -  single token
@@ -167,8 +166,7 @@ int run_self_test() {
         bool ok = (count == 1)
                && (std::abs(out[0] - 3.0f) < 1e-6f)
                && (std::abs(out[1] - 4.0f) < 1e-6f);
-        fprintf(stderr, "  Test 12 (single-range single token): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 12 (single-range single token)");
     }
 
     // Test 13: compute_single_range_mean  -  hard error (end > n_tokens)
@@ -176,8 +174,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int count = compute_single_range_mean(data1, 3, 2, 0, 100, out);
         bool ok = (count == -1);
-        fprintf(stderr, "  Test 13 (single-range hard error end > n_tokens): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 13 (single-range hard error end > n_tokens)");
     }
 
     // Test 14: compute_single_range_mean  -  hard error (negative)
@@ -185,8 +182,7 @@ int run_self_test() {
         float out[2] = {0, 0};
         int count = compute_single_range_mean(data1, 3, 2, -1, 3, out);
         bool ok = (count == -1);
-        fprintf(stderr, "  Test 14 (single-range hard error negative): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 14 (single-range hard error negative)");
     }
 
     // Test 15: overlapping ranges  -  verify correct token deduplication
@@ -200,8 +196,7 @@ int run_self_test() {
         bool ok = (count == 4)  // 2 + 2 tokens (token 1 counted twice)
                && (std::abs(out[0] - 3.0f) < 1e-6f)  // (1+3+3+5)/4 = 12/4 = 3.0
                && (std::abs(out[1] - 4.0f) < 1e-6f); // (2+4+4+6)/4 = 16/4 = 4.0
-        fprintf(stderr, "  Test 15 (overlapping ranges): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 15 (overlapping ranges)");
     }
 
     // Test 16: key encode/decode roundtrip
@@ -232,8 +227,7 @@ int run_self_test() {
         uint64_t k3 = make_accum_key(0, 0, 1);
         if (k1 == k2 || k1 == k3 || k2 == k3) ok = false;
 
-        fprintf(stderr, "  Test 16 (key encode/decode roundtrip): %s\n", ok ? "PASS" : "FAIL");
-        if (ok) passed++; else all_ok = false;
+        HS_CHECK(ok, "Test 16 (key encode/decode roundtrip)");
     }
 
     // Test 17: checkpoint write/read roundtrip + fingerprint enforcement
@@ -266,10 +260,10 @@ int run_self_test() {
         const char* test_ckpt = test_ckpt_buf;
         bool write_ok = write_checkpoint(test_acc, test_ckpt, 4, 42, fp);
         if (!write_ok) {
-            fprintf(stderr, "  Test 17 (checkpoint roundtrip): FAIL (write failed)\n");
-            fprintf(stderr, "  Test 18/19: SKIP (fixture unavailable)\n");
+            fprintf(stderr, "  (checkpoint fixture write failed)\n");
+            HS_CHECK(false, "Test 17 (checkpoint roundtrip)");
+            fprintf(stderr, "  Test 18-21: SKIP (fixture unavailable)\n");
             all_ok = false;
-            total += 2;  // attempted-but-failed, not silently absent
         } else {
             // Prompts fixture for the v4 content check: the checkpoint
             // records the hash of the 42nd non-empty line ("hello world").
@@ -296,8 +290,7 @@ int run_self_test() {
                     if (std::abs(av2.sum[d] - test_acc[key2].sum[d]) > 1e-6f) ok = false;
                 }
             }
-            fprintf(stderr, "  Test 17 (checkpoint roundtrip): %s\n", ok ? "PASS" : "FAIL");
-            if (ok) passed++; else all_ok = false;
+            HS_CHECK(ok, "Test 17 (checkpoint roundtrip)");
 
             // Test 18: fingerprint mismatch must be rejected loudly
             {
@@ -312,8 +305,7 @@ int run_self_test() {
                     fprintf(stderr, "    (partial-state check: %zu entries leaked)\n", junk_acc.size());
                     ok18 = false;
                 }
-                fprintf(stderr, "  Test 18 (fingerprint mismatch rejected): %s\n", ok18 ? "PASS" : "FAIL");
-                if (ok18) passed++; else all_ok = false;
+                HS_CHECK(ok18, "Test 18 (fingerprint mismatch rejected)");
             }
 
             // Test 19: corruption at any byte offset must be detected.
@@ -371,8 +363,7 @@ int run_self_test() {
                         fclose(rf);
                     }
                 }
-                fprintf(stderr, "  Test 19 (corruption detection): %s\n", ok19 ? "PASS" : "FAIL");
-                if (ok19) passed++; else all_ok = false;
+                HS_CHECK(ok19, "Test 19 (corruption detection)");
             }
 
             // Test 20: same-content resume roundtrip must pass with the
@@ -383,8 +374,7 @@ int run_self_test() {
                 int32_t same_iter = 0;
                 bool read_same = read_checkpoint(test_ckpt, same_acc, same_iter, 4, fp, prompts_path.c_str());
                 bool ok20 = read_same && (same_iter == 42) && (same_acc.size() == 2);
-                fprintf(stderr, "  Test 20 (same-content resume roundtrip): %s\n", ok20 ? "PASS" : "FAIL");
-                if (ok20) passed++; else all_ok = false;
+                HS_CHECK(ok20, "Test 20 (same-content resume roundtrip)");
             }
 
             // Test 21: tampered prompts content must be rejected loudly
@@ -404,8 +394,7 @@ int run_self_test() {
                 if (read_tampered) ok21 = false;
                 // A rejected content check must not leave partial state behind
                 if (ok21 && !junk_acc.empty()) ok21 = false;
-                fprintf(stderr, "  Test 21 (tampered prompts content rejected): %s\n", ok21 ? "PASS" : "FAIL");
-                if (ok21) passed++; else all_ok = false;
+                HS_CHECK(ok21, "Test 21 (tampered prompts content rejected)");
                 remove(tampered_path.c_str());
             }
         }
@@ -418,7 +407,8 @@ int run_self_test() {
         remove((std::string(test_ckpt) + ".prompts.tampered").c_str());
     }
 
-    fprintf(stderr, "\n%d/%d tests passed\n", passed, total);
+    const int passed = hs_attempted - (all_ok ? 0 : 1);
+    fprintf(stderr, "\n%d/%d tests passed\n", passed, hs_attempted);
 
     if (all_ok) {
         fprintf(stderr, "All self-tests passed\n");
