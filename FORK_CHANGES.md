@@ -80,7 +80,8 @@ Production tool for processing thousands of prompts:
 - Checkpoint/resume support
 - Binary I/O format (CRD2)
 - Self-test mode (23 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 18-23
-  conditional on 17's checkpoint write; no model required)
+  depend on 17's checkpoint write - if the fixture write fails the self-test fails rc=1
+  with the attempted count dropping accordingly; no model required)
 - `--profile` flag for per-step timing analysis
 - Hard-error semantics on all range violations (no silent clamping, no graceful degradation)
 
@@ -131,8 +132,8 @@ Flat position-count table replacing `std::map` for O(1) lookup.
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Builds with `GGML_NATIVE=OFF` (portable binaries for the CI matrix; no
   host-specific ISA assumptions)
-- Runs self-test (23/23; tests 18-23 SKIP if the checkpoint fixture can't be
-  written)
+- Runs self-test (23/23; a checkpoint-fixture write failure fails the run rc=1
+  rather than skipping)
 - Runs multi-ubatch pool=none integration test
 - 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline)
 

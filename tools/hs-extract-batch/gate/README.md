@@ -21,8 +21,8 @@ greedy generation, and sampled generation (seed=0 dist sampler). In detail:
 | s5_e2b_comp_records | e2b   | 0,17,35   | comprehension + `--save-per-record`      |
 | s6_e2b_resume       | e2b   | 0,17,35   | kill at 2nd checkpoint, `--resume`       |
 | s7_e2b_gen_greedy   | e2b   | 0,35      | `--generate 8`, greedy                   |
-| s8_e2b_gen_sampled  | e2b   | 0,35      | `--generate 8`, temp 0.8, top-k 40       |
-| s9_e2b_gen_resume   | e2b   | 0,35      | gen-mode kill at 2nd checkpoint + `--resume` |
+| s8_e2b_gen_sampled  | e2b   | 0,35      | `--generate 8 --token-skip 2 --temperature 0.8 --top-k 40 --repeat-penalty 1.1` |
+| s9_e2b_gen_resume   | e2b   | 0,35      | same flags as s8; kill at 2nd checkpoint, then `--resume` |
 
 Methodology: a CUDA-ON binary (`libggml-cuda.so*` next to the binary is
 REQUIRED; a CPU-only build is refused), `-ngl 99`, original tokenization

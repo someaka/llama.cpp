@@ -335,7 +335,8 @@ bool read_checkpoint(
     // Read and validate checkpoint version
     int32_t version = 0;
     if (fread(&version, sizeof(int32_t), 1, f) != 1) return false;
-    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V3 &&
+    if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V5 &&
+        version != CHECKPOINT_VERSION_V4 && version != CHECKPOINT_VERSION_V3 &&
         version != CHECKPOINT_VERSION_V2 && version != CHECKPOINT_VERSION_V1) {
         fprintf(stderr, "Error: checkpoint version mismatch (got %d, expected %d) - incompatible checkpoint format\n",
                 version, CHECKPOINT_VERSION);
@@ -385,7 +386,7 @@ bool read_checkpoint(
                     expected.token_skip, expected.layers.size(), ckpt_path.c_str());
             return false;
         }
-        if (version < CHECKPOINT_VERSION) {
+        if (version < CHECKPOINT_VERSION_V4) {
             fprintf(stderr, "Warning: checkpoint predates content check\n");
         }
     } else {
@@ -414,7 +415,7 @@ bool read_checkpoint(
                     stored_n_prompts, expected.n_prompts, ckpt_path.c_str());
             return false;
         }
-        if (n_iterated > 0 && stored_fnv == 0 && version >= CHECKPOINT_VERSION) {
+        if (n_iterated > 0 && stored_fnv == 0 && version >= CHECKPOINT_VERSION_V5) {
             // A processed prefix always has a non-zero rolling hash (the
             // empty input hashes to the offset basis), so a stored zero with
             // progress means a hand-edited or torn checkpoint: refuse loudly
@@ -426,7 +427,10 @@ bool read_checkpoint(
             return false;
         }
         if (n_iterated > 0 && prompts_file && prompts_file[0] != '\0') {
-            if (version == CHECKPOINT_VERSION_V4) {
+            if (version == CHECKPOINT_VERSION_V5) {
+                fprintf(stderr, "Warning: checkpoint is v5 (no accumulator checksum) - payload corruption "
+                                "is not detected; re-run without --resume for the full v6 guarantee.\n");
+            } else if (version == CHECKPOINT_VERSION_V4) {
                 fprintf(stderr, "Warning: checkpoint is v4 (single-line content anchor, retired basis) - "
                                 "content identity cannot be revalidated; only the prompt count is checked. "
                                 "Re-run without --resume for a full v5 content guarantee.\n");
