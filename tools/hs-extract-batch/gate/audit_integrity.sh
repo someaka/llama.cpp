@@ -186,8 +186,8 @@ if ! grep -q "MAX_POOL_NONE_FLOATS" tools/server/server-context.cpp; then
 fi
 echo "PASS"
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
-if ! grep -q "CHECKPOINT_VERSION = 5" tools/hs-extract-batch/io-util.cpp; then
-  echo "FAIL: checkpoint version is not 5 (v5: rolling content hash on the correct FNV basis)"; exit 1
+if ! grep -q "CHECKPOINT_VERSION = 6" tools/hs-extract-batch/io-util.cpp; then
+  echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
 fi
 if ! grep -q "write_sum" tools/hs-extract-batch/io-util.cpp; then
   echo "FAIL: write_sum parameter missing from _write_accumulator_to_file"; exit 1

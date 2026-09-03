@@ -26,7 +26,8 @@ static bool _write_accumulator_to_file(
     const AccumulatorMap& accumulators,
     FILE* out,
     int32_t n_embd,
-    bool write_sum = false
+    bool write_sum = false,
+    fnv_stream* acc_fnv = nullptr
 ) {
     // Collect and sort flat keys for deterministic output.
     // Key layout: group_id (bits 32-63) | mask_id (bits 16-31) | layer_idx (bits 0-15)
@@ -78,11 +79,11 @@ static bool _write_accumulator_to_file(
 
     // Write header
     int32_t magic = OUTPUT_MAGIC;
-    if (!checked_write(&magic, sizeof(int32_t), 1, out)) return false;
-    if (!checked_write(&n_groups, sizeof(int32_t), 1, out)) return false;
+    if (!checked_write_h(&magic, sizeof(int32_t), 1, out, acc_fnv)) return false;
+    if (!checked_write_h(&n_groups, sizeof(int32_t), 1, out, acc_fnv)) return false;
     int32_t n_layers = max_layer + 1;
-    if (!checked_write(&n_layers, sizeof(int32_t), 1, out)) return false;
-    if (!checked_write(&n_embd, sizeof(int32_t), 1, out)) return false;
+    if (!checked_write_h(&n_layers, sizeof(int32_t), 1, out, acc_fnv)) return false;
+    if (!checked_write_h(&n_embd, sizeof(int32_t), 1, out, acc_fnv)) return false;
 
     // Write per-group data: iterate over groups, and within each group
     // over its (group, mask) pairs. Each mask block is emitted exactly once.
@@ -100,30 +101,30 @@ static bool _write_accumulator_to_file(
             gm_idx++;
         }
 
-        if (!checked_write(&group_id, sizeof(int32_t), 1, out)) return false;
-        if (!checked_write(&n_masks, sizeof(int32_t), 1, out)) return false;
+        if (!checked_write_h(&group_id, sizeof(int32_t), 1, out, acc_fnv)) return false;
+        if (!checked_write_h(&n_masks, sizeof(int32_t), 1, out, acc_fnv)) return false;
 
         for (size_t mi = mask_start; mi < mask_start + (size_t)n_masks; mi++) {
             const auto& gm = gm_pairs[mi];
-            if (!checked_write(&gm.mask_id, sizeof(int32_t), 1, out)) return false;
+            if (!checked_write_h(&gm.mask_id, sizeof(int32_t), 1, out, acc_fnv)) return false;
 
             int32_t n_layers_data = (int32_t)gm.layer_indices.size();
-            if (!checked_write(&n_layers_data, sizeof(int32_t), 1, out)) return false;
+            if (!checked_write_h(&n_layers_data, sizeof(int32_t), 1, out, acc_fnv)) return false;
 
             for (int32_t li : gm.layer_indices) {
                 uint64_t layer_key = make_accum_key(group_id, gm.mask_id, li);
                 const auto& av = accumulators.at(layer_key);
-                if (!checked_write(&li, sizeof(int32_t), 1, out)) return false;
-                if (!checked_write(&av.count, sizeof(int32_t), 1, out)) return false;
+                if (!checked_write_h(&li, sizeof(int32_t), 1, out, acc_fnv)) return false;
+                if (!checked_write_h(&av.count, sizeof(int32_t), 1, out, acc_fnv)) return false;
 
                 if (write_sum) {
                     // Checkpoint format (v2+): write raw sum directly to avoid
                     // precision loss from mean=sum/count then sum=mean*count roundtrip.
                     if (av.count > 0 && !av.sum.empty()) {
-                        if (!checked_write(av.sum.data(), sizeof(float), n_embd, out)) return false;
+                        if (!checked_write_h(av.sum.data(), sizeof(float), n_embd, out, acc_fnv)) return false;
                     } else {
                         std::fill(mean.begin(), mean.end(), 0.0f);
-                        if (!checked_write(mean.data(), sizeof(float), n_embd, out)) return false;
+                        if (!checked_write_h(mean.data(), sizeof(float), n_embd, out, acc_fnv)) return false;
                     }
                 } else {
                     // Output format: write mean = sum / count for downstream consumers.
@@ -133,7 +134,7 @@ static bool _write_accumulator_to_file(
                     } else {
                         std::fill(mean.begin(), mean.end(), 0.0f);
                     }
-                    if (!checked_write(mean.data(), sizeof(float), n_embd, out)) return false;
+                    if (!checked_write_h(mean.data(), sizeof(float), n_embd, out, acc_fnv)) return false;
                 }
             }
         }
@@ -185,7 +186,8 @@ bool write_batch_output(
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
-static constexpr int32_t CHECKPOINT_VERSION = 5;
+static constexpr int32_t CHECKPOINT_VERSION = 6;
+static constexpr int32_t CHECKPOINT_VERSION_V5 = 5; // legacy: no accumulator checksum
 static constexpr int32_t CHECKPOINT_VERSION_V4 = 4; // legacy: single-line anchor + typo'd basis
 static constexpr int32_t CHECKPOINT_VERSION_V3 = 3; // legacy: no content check
 static constexpr int32_t CHECKPOINT_VERSION_V2 = 2; // legacy: no run fingerprint
@@ -276,11 +278,23 @@ bool write_checkpoint(
         std::remove(temp_path.c_str());
         return false;
     }
-    bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true);
+    // v6: hash the accumulator region (from here to end of records) and
+    // append the digest as a trailer. read_checkpoint recomputes over the
+    // bytes it reads and refuses any in-range payload corruption.
+    fnv_stream acc_fnv;
+    bool ok = _write_accumulator_to_file(accumulators, f, n_embd, /*write_sum=*/true, &acc_fnv);
     if (!ok) {
         f.reset();
         std::remove(temp_path.c_str());  // no orphaned .tmp on write failure
         return false;
+    }
+    if (CHECKPOINT_VERSION >= 6) {
+        uint64_t acc_digest = acc_fnv.h;
+        if (!checked_write(&acc_digest, sizeof(uint64_t), 1, f)) {
+            f.reset();
+            std::remove(temp_path.c_str());
+            return false;
+        }
     }
     if (!f.sync()) {  // flush + fsync: check for failures before rename
         fprintf(stderr, "Error: sync failed for checkpoint %s\n", temp_path.c_str());
@@ -435,6 +449,7 @@ bool read_checkpoint(
     }
 
     // Read accumulator state (binary accumulator format)
+    const long acc_region_start = ftell(f);  // for the v6 checksum pass
     int32_t magic = 0;
     if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != OUTPUT_MAGIC) {
         return false;
@@ -548,6 +563,48 @@ bool read_checkpoint(
                 }
             }
         }
+    }
+
+    // v6: verify the accumulator-region checksum. The trailer is 8 bytes
+    // immediately after the last record; the checksum covers every byte of
+    // the accumulator region before it. Any in-range flip inside the
+    // embedded accumulator state is caught here.
+    if (version >= CHECKPOINT_VERSION) {
+        const long acc_region_end = ftell(f);
+        uint64_t stored_acc_fnv = 0;
+        if (fread(&stored_acc_fnv, sizeof(uint64_t), 1, f) != 1) {
+            fprintf(stderr, "Error: checkpoint %s truncated (missing accumulator checksum)\n", ckpt_path.c_str());
+            return false;
+        }
+        if (acc_region_end < 0 || acc_region_start < 0 || acc_region_end < acc_region_start) {
+            fprintf(stderr, "Error: checkpoint %s accumulator region has invalid bounds\n", ckpt_path.c_str());
+            return false;
+        }
+        fnv_stream acc_fnv;
+        char buf[65536];
+        if (fseek(f, acc_region_start, SEEK_SET) != 0) {
+            fprintf(stderr, "Error: cannot seek checkpoint %s for checksum verification\n", ckpt_path.c_str());
+            return false;
+        }
+        size_t remaining = (size_t)(acc_region_end - acc_region_start);
+        while (remaining > 0) {
+            size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+            if (fread(buf, 1, chunk, f) != chunk) {
+                fprintf(stderr, "Error: I/O error re-reading checkpoint %s for checksum verification\n", ckpt_path.c_str());
+                return false;
+            }
+            acc_fnv.update(buf, chunk);
+            remaining -= chunk;
+        }
+        if (acc_fnv.h != stored_acc_fnv) {
+            fprintf(stderr, "Error: checkpoint %s accumulator checksum mismatch - stored 0x%016llx but region "
+                            "hashes to 0x%016llx. The checkpoint payload is corrupt (a flipped byte inside "
+                            "the accumulated sums). Discard it (remove %s) and start over.\n",
+                    ckpt_path.c_str(), (unsigned long long)stored_acc_fnv,
+                    (unsigned long long)acc_fnv.h, ckpt_path.c_str());
+            return false;
+        }
+        // rewind past the trailer is unnecessary: nothing reads the file after this
     }
 
     fprintf(stderr, "Checkpoint restored: %d prompts already processed\n", n_iterated);

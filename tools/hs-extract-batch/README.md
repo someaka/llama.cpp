@@ -187,14 +187,14 @@ llama-hs-extract-batch model.gguf prompts.txt all output.bin \
 
 If interrupted, re-run with `--resume` to continue from the last checkpoint.
 
-### Checkpoint file format (v5)
+### Checkpoint file format (v6)
 
 A checkpoint is `<output>.checkpoint`; the format is versioned. Field order
 (all little-endian):
 
 | field | type | notes |
 |---|---|---|
-| `version` | i32 | 5 for current checkpoints; 1-4 load with degraded guarantees + warning |
+| `version` | i32 | 6 for current checkpoints; 1-5 load with degraded guarantees + warning |
 | `n_iterated` | i32 | number of prompts fully processed (resume skip count) |
 | accumulator records | binary | per-key sums as in `output.bin` (raw **sums**, not means) + counts |
 | `n_fp_layers` | i32 | run fingerprint: layer count |
@@ -202,17 +202,21 @@ A checkpoint is `<output>.checkpoint`; the format is versioned. Field order
 | `generate_tokens` | i32 | fingerprint: `--generate N` |
 | `token_skip` | i32 | fingerprint: `--token-skip` |
 | `layers` | i32[n_fp_layers] | fingerprint: sorted target layers |
-| `content_fnv64` | u64 | v5: rolling FNV-1a-64 over every consumed non-empty prompts line, each line followed by a `\n` byte; v4 stored a single-line hash on a retired basis (not revalidated) |
+| `content_fnv64` | u64 | rolling FNV-1a-64 over every consumed non-empty prompts line, each line followed by a `\n` byte (since v5); v4 stored a single-line hash on a retired basis (not revalidated) |
 | `n_prompts` | i32 | expected total prompts; must match the current run |
+| `acc_fnv64` | u64 | v6 trailer: FNV-1a-64 over the accumulator region above (header + all records), so any in-range payload bit flip is refused |
 
 FNV-1a-64 definition: offset basis `14695981039346656037`
 (`0xcbf29ce484222325`), prime `1099511628211`; for each line, hash the line
 bytes then the `'\n'` byte; the state carries across lines in file order.
 A stored `content_fnv64` of 0 with `n_iterated > 0` is refused as corrupt.
 On resume the same rolling hash is re-derived from the current prompts file
-and a mismatch refuses the resume (both hashes printed). Legacy versions:
-v4 resumes with the count check only (warning); v1/v2/v3 predate content
-checking (v3 still enforces the run fingerprint).
+and a mismatch refuses the resume (both hashes printed). The v6 accumulator
+checksum is recomputed on resume and a mismatch refuses with both digests
+(any in-range payload bit flip — group ids, counts, float bytes — is caught).
+Legacy versions: v5 resumes without the accumulator checksum (warning);
+v4 with the count check only (warning); v1/v2/v3 predate content checking
+(v3 still enforces the run fingerprint).
 
 ## Performance
 

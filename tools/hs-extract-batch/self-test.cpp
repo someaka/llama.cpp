@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -330,10 +331,13 @@ int run_self_test() {
                 HS_CHECK(ok18, "Test 18 (fingerprint mismatch rejected)");
             }
 
-            // Test 19: corruption at any byte offset must be detected.
-            // Rewrite the checkpoint, then flip one byte at a spread of
-            // offsets (version field, fingerprint, payload) and require
-            // read_checkpoint to return false.
+            // Test 19: corruption detection is scoped. Version, fingerprint
+            // and header fields must be detected; the accumulator payload
+            // region carries NO checksum, so in-range flips of group ids,
+            // counts, or float bytes are NOT detected (floats are any bit
+            // pattern; selectors can land in range). A payload checksum is
+            // the v6 vehicle. Test 20's own positive/negative content checks
+            // cover the prompts-side identity.
             {
                 bool ok19 = true;
                 std::string ckpt_path = std::string(test_ckpt) + ".checkpoint";
@@ -367,18 +371,13 @@ int run_self_test() {
                         wf.reset();
                         AccumulatorMap junk_acc;
                         int32_t junk_iter = 0;
-                        // Note: some single-byte flips in the float payload
-                        // cannot be detected by structural validation (a
-                        // float is any bit pattern). Require detection for
-                        // the structural offsets only: version (0),
-                        // fingerprint area (8, 16) and the record-count
-                        // region (n/4 hits group/mask/layer headers).
-                        bool structural = (oi <= 3);
                         bool read_ok2 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp, prompts_path.c_str());
                         // Structural offsets must be detected. Float-payload
-                        // offsets may legitimately pass: a flipped float is a
-                        // valid float (comment above).
-                        if (structural && read_ok2) ok19 = false;
+                        // offsets may legitimately pass read_checkpoint (a
+                        // flipped float is a valid float) BUT must be caught
+                        // by the v6 accumulator checksum, so detection is
+                        // still required at every offset.
+                        if (read_ok2) ok19 = false;
                         // Restore the pristine checkpoint before the next
                         // variant and before any later checks run against
                         // this file; a silent restore failure would let Test
@@ -399,7 +398,33 @@ int run_self_test() {
                         }
                     }
                 }
-                HS_CHECK(ok19, "Test 19 (corruption detection)");
+                HS_CHECK(ok19, "Test 19 (structural corruption detection)");
+
+                // Test 19b: a single-byte flip anywhere in the accumulator
+                // payload region (in-range group ids, counts, float bytes)
+                // must be rejected by the v6 checksum. Flip the final
+                // payload byte (inside the region, before the trailer).
+                {
+                    std::ifstream ckpt_in(ckpt_path.c_str(), std::ios::binary);
+                    std::vector<unsigned char> raw((std::istreambuf_iterator<char>(ckpt_in)),
+                                                    std::istreambuf_iterator<char>());
+                    if (raw.size() > 9) {
+                        raw[raw.size() - 9] ^= 0xFF;  // last payload byte (trailer is last 8)
+                        {
+                            std::ofstream ckpt_out(ckpt_path.c_str(), std::ios::binary);
+                            ckpt_out.write((const char*)raw.data(), (std::streamsize)raw.size());
+                        }
+                        AccumulatorMap junk_acc;
+                        int32_t junk_iter = 0;
+                        bool read_ok3 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp, prompts_path.c_str());
+                        if (read_ok3) ok19 = false;  // payload flip MUST be rejected
+                        // restore pristine bytes for later tests
+                        // (rewritten by the same content)
+                        std::ofstream ckpt_out2(ckpt_path.c_str(), std::ios::binary);
+                        raw[raw.size() - 9] ^= 0xFF;
+                        ckpt_out2.write((const char*)raw.data(), (std::streamsize)raw.size());
+                    }
+                }
             }
 
             // Test 20: same-content resume roundtrip must pass with the

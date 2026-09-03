@@ -95,6 +95,33 @@ static inline bool fsync_parent_dir(const char* path) {
 // Checked fwrite: verifies the full count was written. On failure prints an
 // error and returns false; callers must propagate the failure (never produce
 // corrupt files silently). Function form of the former CHECKED_WRITE macro.
+// Rolling FNV state: byte-at-a-time FNV-1a-64 with explicit basis (see
+// hs_fnv1a64 above). Used for the checkpoint v6 accumulator-region checksum.
+struct fnv_stream {
+    uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
+    void update(const void* data, size_t n) {
+        const unsigned char* p = (const unsigned char*)data;
+        for (size_t i = 0; i < n; i++) {
+            h ^= p[i];
+            h *= 1099511628211ull;  // FNV prime
+        }
+    }
+};
+
+// checked_write that also folds the written bytes into a rolling FNV state
+// (checkpoint v6 accumulator-region checksum). Byte-identical to checked_write
+// otherwise.
+[[nodiscard]] static inline bool checked_write_h(const void* ptr, size_t size, size_t count, FILE* f, fnv_stream* fnv) {
+    if (fwrite(ptr, size, count, f) != count) {
+        // No __FILE__:__LINE__: a static inline would always report this
+        // header's location, not the caller's.
+        fprintf(stderr, "Error: short write (%zu x %zu bytes)\n", count, size);
+        return false;
+    }
+    if (fnv) fnv->update(ptr, size * count);
+    return true;
+}
+
 [[nodiscard]] static inline bool checked_write(const void* ptr, size_t size, size_t count, FILE* f) {
     if (fwrite(ptr, size, count, f) != count) {
         // No __FILE__:__LINE__ in this message: as a static inline it would
@@ -155,12 +182,14 @@ struct checkpoint_fingerprint {
     int32_t token_skip      = 0;
     std::vector<int32_t> layers;     // target layer indices; writer sorts, identity is order-independent
     // v4/v5 content identity: a hash over consumed prompts-file content and
-    // the expected prompt count. v5 (current) stores a rolling FNV-1a-64
-    // over every consumed line, newline-terminated: any change anywhere in
-    // the processed prefix is caught. Zero fnv64 with progress > 0 is
-    // rejected as a corrupt/hand-edited checkpoint. (v4 stored a hash of
-    // only the last processed line on a retired basis; such checkpoints
-    // resume with the count check only, plus a warning.)
+    // the expected prompt count. v5 stores a rolling FNV-1a-64 over every
+    // consumed line, newline-terminated: any change anywhere in the
+    // processed prefix is caught. Zero fnv64 with progress > 0 is rejected
+    // as a corrupt/hand-edited checkpoint. (v4 stored a hash of only the
+    // last processed line on a retired basis; such checkpoints resume with
+    // the count check only, plus a warning.)
+    // v6 adds an accumulator-region checksum (acc_fnv64 trailer, same FNV):
+    // any in-range flip inside the embedded accumulator state is detected.
     uint64_t content_fnv64  = 0;
     int32_t n_prompts       = 0;
 };
