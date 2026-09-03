@@ -221,6 +221,9 @@ jobs:
           echo "::group::llama-hs-probe (logits identical with/without extraction)"
           LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox"
           echo "::endgroup::"
+          echo "::group::llama-hs-probe (runtime-toggle path, as used by /hidden-states)"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox" --runtime-toggle
+          echo "::endgroup::"
           echo "::group::llama-hs-extract-batch-test (warmup/toggle equivalence, bitwise)"
           LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 2
           echo "::endgroup::"
