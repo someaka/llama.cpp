@@ -6,7 +6,7 @@ import sys, re
 src = open(sys.argv[1]).read()
 src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
-src = re.sub(r'//[^"]*$', '', src, flags=re.M)
+src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
 try:
     sys.stdout.write(src)
     sys.stdout.flush()
@@ -18,9 +18,10 @@ PY
 }
 
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
-grep -q "uint64_t key\|uint64_t make_accum_key\|uint64_t flat_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint64_t key missing"; exit 1; }
+strip_comments tools/hs-extract-batch/hs-accum.h | grep -q "inline uint64_t make_accum_key" && echo "PASS" || { echo "FAIL: uint64_t make_accum_key missing in code"; exit 1; }
 echo "=== Check 2: output_all defined ==="
 strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparams\.embeddings;" && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
+strip_comments src/llama-context.cpp | grep -q "if (output_all) {" && echo "PASS" || { echo "FAIL: output_all primary use missing or inverted"; exit 1; }
 echo "=== Check 3: RAII LlamaBackend ==="
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
   grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
@@ -28,7 +29,7 @@ done
 echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
 for f in src/llama-context.cpp; do
   grep -q "llama_context::get_hidden_state\b" "$f" || { echo "FAIL: get_hidden_state impl missing"; exit 1; }
-  grep -A2 "^float \* llama_get_hidden_state(" "$f" | grep -q "ctx->synchronize()" && echo "PASS: getters sync" || { echo "FAIL: llama_get_hidden_state does not synchronize"; exit 1; }
+  sed -n '/^float \* llama_get_hidden_state(/,/^}/p' "$f" | grep -v '^\s*//' | grep -q "ctx->synchronize()" && echo "PASS: getters sync" || { echo "FAIL: llama_get_hidden_state does not synchronize"; exit 1; }
 done
 echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
 python3 - <<'PY'
@@ -197,8 +198,8 @@ echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "cv_space"; then
   echo "FAIL: backpressure cv_space missing"; exit 1
 fi
-if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE "([<>][[:space:]]*MAX_PREFETCH|MAX_PREFETCH[[:space:]]*[<>])"; then
-  echo "FAIL: MAX_PREFETCH bound not used in a comparison (backpressure predicate missing)"; exit 1
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE "queue\.size\(\) < MAX_PREFETCH"; then
+  echo "FAIL: backpressure predicate 'queue.size() < MAX_PREFETCH' missing"; exit 1
 fi
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_producer_and_join"; then
   echo "FAIL: producer-stop-and-join path missing"; exit 1
@@ -215,7 +216,7 @@ echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 6"; then
   echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
 fi
-if ! grep -q "write_sum" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "write_sum"; then
   echo "FAIL: write_sum parameter missing from _write_accumulator_to_file"; exit 1
 fi
 echo "PASS"

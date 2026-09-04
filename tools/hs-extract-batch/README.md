@@ -220,6 +220,10 @@ v4 with the count check only (warning); v1/v2/v3 predate content checking
 
 ## Performance
 
+Throughput figures below are from large-run measurements (>=10K-prompt
+datasets, 2026-08); small runs are startup/latency-dominated — measure yours
+with `--profile`.
+
 Tested on RTX 3090 (CUDA):
 
 | Dataset Size | GPU Layers | Time | Throughput |
