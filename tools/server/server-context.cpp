@@ -2552,11 +2552,19 @@ private:
             }
 
             if (slot.task->params.hidden_normalize) {
-                float norm = 0.0f;
-                for (float v : vec) norm += v * v;
-                norm = std::sqrt(norm);
-                if (norm > 0.0f) {
-                    for (float & v : vec) v /= norm;
+                // pool=none returns per-token ROWS; a single scalar norm over
+                // the flattened block would scale every row by the same wrong
+                // factor, so normalize is only defined for pooled vectors.
+                // Mirrors upstream: "normalize only when there is pooling".
+                if (slot.task->params.hidden_pool == "none") {
+                    SLT_DBG(slot, "%s", "normalize ignored for pool=none\n");
+                } else {
+                    float norm = 0.0f;
+                    for (float v : vec) norm += v * v;
+                    norm = std::sqrt(norm);
+                    if (norm > 0.0f) {
+                        for (float & v : vec) v /= norm;
+                    }
                 }
             }
 

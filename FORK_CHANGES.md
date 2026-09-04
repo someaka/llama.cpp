@@ -70,7 +70,7 @@ curl -X POST http://localhost:8080/hidden-states \
 Pooling modes: `last` (last token), `skip_mean` (masked mean), `none` (per-token).
 
 Per-request limit: the input must fit in one decode call — more than `n_batch`
-tokens (server default 2048) is refused with 400 (`raise -b or shorten the
+tokens (the server's `-b` value; upstream default 2048) is refused with 400 (`raise -b or shorten the
 input`). This is a hard correctness boundary: the capture resets per decode
 call, so a split prompt would silently return only its tail.
 

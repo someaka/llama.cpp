@@ -986,7 +986,7 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 | `layers` | int[] or `"all"` | no | `"all"` | Which layers to extract. Array of integers in `[0, n_layer]` (hidden_states convention: 0 = embeddings, i = state entering block i, n_layer = final block output) or `"all"` |
 | `pool` | string | no | `"last"` | Pooling mode: `"last"`, `"skip_mean"`, or `"none"` |
 | `skip_offset` | int | no | `0` | Number of initial tokens to skip when `pool="skip_mean"` (default pools over all tokens) |
-| `normalize` | bool | no | `false` | L2-normalize each output vector |
+| `normalize` | bool | no | `false` | L2-normalize each output vector (no effect with `pool="none"`; per-token rows are returned unnormalized) |
 
 *Pooling modes:*
 
