@@ -45,9 +45,10 @@ Zero redundancy.
 
 ## Design notes
 
-- Capture buffers sync once per decode (not per token) — verified race-free
-  against multi-ubatch decode (see test-hidden-states.cpp multi-ubatch
-  consistency test).
+- Capture buffers sync once per decode (not per token). The runtime-toggle
+  path is exercised bitwise by `llama-hs-extract-batch-test` mode 2 and
+  `llama-hs-probe --runtime-toggle` (fork CI); multi-ubatch pool=none by the
+  fork-CI integration test.
 - Models opt in by appending to `t_hidden_layers` in the layer loop; archs
   with the last-layer `inp_out_ids` optimization also extend that guard
   (see `src/models/llama.cpp`).
@@ -57,8 +58,8 @@ Zero redundancy.
 
 ## Testing
 
-- `test-hidden-states` (CPU): API contract — enable/toggle, single + batch
-  getters, multi-ubatch consistency.
+- `test-hidden-states` (CPU): API contract — enable at creation, single +
+  batch getters, boundary rejection, ladder top slot.
 - `hs-extract-batch --self-test`: passes end-to-end, including the
   accumulator checkpoint/resume roundtrip.
 - The stack restores upstream test coverage that intermediate branch

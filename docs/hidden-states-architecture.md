@@ -213,8 +213,9 @@ Verification (all on real runs):
 
 - Byte-equivalence with upstream access points: the same `ggml_tensor*` is
   stored by upstream's `t_layer_inp[il+1]` and our capture at loop bottom
-  (`inpL = cur` identity). Full evidence table:
-  `docs/AUDIT-2026-08-16-HIDDEN-STATE-BYTE-EQUIVALENCE.md` (CrimsonRed repo).
+  (`inpL = cur` — identity by construction). Full-dump `cmp` of capture
+  output vs upstream's tensors was byte-equal on llama / qwen35 /
+  gemma4-E2B / gemma4-E4B (verified 2026-08-16).
 - Unsupported-arch behavior before this branch: decode returned 0, getters
-  NULL, server answered a misleading 500. Design study evidence in the
-  session record (deleg_3e4d4382 archive).
+  NULL, server answered a misleading 500 (fixed by the capability-registry
+  check; the server now answers 400 naming the architecture).
