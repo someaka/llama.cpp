@@ -367,7 +367,23 @@ jobs:
           assert hidden_size > 0, 'hidden size must be positive'
           assert len(vec) == tokens * hidden_size, 'flat pool=none array size mismatch'
           assert any(v != 0.0 for v in vec), 'pool=none hidden states are all zero'
+          # Row count must equal the REAL prompt length vs a hardcoded hidden
+          # size: an internally-consistent tail (decode-split) would still pass
+          # the two asserts above. gemma E2B n_embd = 1536.
+          assert len(vec) == tokens * 1536, f'expected {tokens * 1536} floats for {tokens} tokens, got {len(vec)}'
           print(f'PASS: multi-ubatch pool=none extraction, {tokens} tokens, hidden_size={hidden_size}')
+          # Decode-split refusal: a prompt longer than n_batch (2048 here) must
+          # answer 400, not silently return only the tail chunk (the capture
+          # resets on every llama_decode call).
+          SPLIT_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 250)")
+          SPLIT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8098/hidden-states \
+            -H "Content-Type: application/json" \
+            -d "{\"input\":\"$SPLIT_TEXT\",\"layers\":[0],\"normalize\":false,\"pool\":\"none\"}")
+          if [ "$SPLIT_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for prompt longer than n_batch (decode-split), got $SPLIT_CODE"
+            exit 1
+          fi
+          echo "PASS: decode-split prompt refused with 400"
           "
 
       - name: Quick audit fix integrity check

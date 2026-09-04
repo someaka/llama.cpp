@@ -69,6 +69,11 @@ curl -X POST http://localhost:8080/hidden-states \
 
 Pooling modes: `last` (last token), `skip_mean` (masked mean), `none` (per-token).
 
+Per-request limit: the input must fit in one decode call — more than `n_batch`
+tokens (server default 2048) is refused with 400 (`raise -b or shorten the
+input`). This is a hard correctness boundary: the capture resets per decode
+call, so a split prompt would silently return only its tail.
+
 The `--no-hidden-states` flag disables the endpoint and enables upstream
 output-allocation optimization for pure-generation workloads.
 
@@ -126,7 +131,7 @@ The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
   host-specific ISA assumptions)
 - Runs self-test (24/24; a checkpoint-fixture write failure fails the run rc=1
   rather than skipping)
-- Runs multi-ubatch pool=none integration test
+- Runs multi-ubatch pool=none integration test (hard row-count vs n_embd) and a decode-split refusal check (prompt > n_batch must 400)
 - 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline)
 
 GPU verification (CUDA + Vulkan) is manual  -  see CI header comments for

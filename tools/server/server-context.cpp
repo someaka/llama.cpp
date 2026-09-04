@@ -456,9 +456,13 @@ struct server_slot {
         GGML_ASSERT(task);
 
         // hidden-state extraction: captures each ubatch into a
-        // preallocated full-prompt buffer and pools after decode, so it can
-        // split safely across ubatches. The upstream embedding restriction
-        // does not apply here.
+        // preallocated full-prompt buffer and pools after decode. This is
+        // safe across U BATCHES (one decode call), but NOT across decode
+        // CALLS: the capture resets per llama_decode(), so a prompt split
+        // at n_batch granularity would silently leave only the tail chunk.
+        // Keep can_split() true for the ubatch path and enforce the
+        // n_batch limit at launch (see the n_tokens > n_batch refusal in
+        // update_slots).
         if (task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
             return true;
         }
@@ -3371,6 +3375,22 @@ private:
                             send_final_response(slot);
                             slot.release();
 
+                            return;
+                        }
+
+                        // hidden-state extraction resets its capture on every
+                        // llama_decode(), so a prompt that splits across decode
+                        // calls (n_batch granularity) would silently return only
+                        // the last chunk. Refuse loudly instead.
+                        if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES &&
+                            slot.task->n_tokens() > n_batch) {
+                            send_error(slot,
+                                       string_format(
+                                           "input (%d tokens) exceeds the per-request extraction limit "
+                                           "(n_batch = %d); raise -b or shorten the input",
+                                           slot.task->n_tokens(), n_batch),
+                                       ERROR_TYPE_INVALID_REQUEST);
+                            slot.release();
                             return;
                         }
 
