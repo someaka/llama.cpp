@@ -119,8 +119,6 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
   (tests/test-hidden-states.cpp) and examples/hidden-states instead of
   per-tool copies.
 
-### 8. Misc
-
 ## CI
 
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
