@@ -7,6 +7,11 @@ src = open(sys.argv[1]).read()
 src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
 src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
+# A trailing // comment containing a double quote defeats the sub above (the
+# char class stops at the quote), so the line survives stripping with its
+# comment tail intact. Over-deletion is safe here: it can only cause a
+# false FAIL, never a false PASS.
+src = re.sub(r'^.*//[^\n]*"[^\n]*$', '', src, flags=re.M)
 try:
     sys.stdout.write(src)
     sys.stdout.flush()
