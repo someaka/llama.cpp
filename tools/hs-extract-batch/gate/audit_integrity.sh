@@ -20,7 +20,7 @@ PY
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
 grep -q "uint64_t key\|uint64_t make_accum_key\|uint64_t flat_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint64_t key missing"; exit 1; }
 echo "=== Check 2: output_all defined ==="
-grep -q "const bool output_all" src/llama-context.cpp && echo "PASS" || { echo "FAIL: output_all missing"; exit 1; }
+grep -q "const bool output_all *= *cparams\.embeddings;" src/llama-context.cpp && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
 echo "=== Check 3: RAII LlamaBackend ==="
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
   grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
@@ -212,7 +212,7 @@ if ! strip_comments tools/server/server-context.cpp | grep -q "MAX_POOL_NONE_FLO
 fi
 echo "PASS"
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
-if ! grep -q "CHECKPOINT_VERSION = 6" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 6"; then
   echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
 fi
 if ! grep -q "write_sum" tools/hs-extract-batch/io-util.cpp; then
