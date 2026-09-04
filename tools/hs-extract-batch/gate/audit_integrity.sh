@@ -9,8 +9,11 @@ src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
 src = re.sub(r'//[^"]*$', '', src, flags=re.M)
 try:
     sys.stdout.write(src)
+    sys.stdout.flush()
 except BrokenPipeError:
-    pass  # downstream grep -q closed early on a match; that is success
+    import os
+    os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    os._exit(0)  # downstream grep -q closed early on a match; that is success
 PY
 }
 
