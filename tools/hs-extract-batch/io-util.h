@@ -180,7 +180,7 @@ struct checkpoint_fingerprint {
     bool    generate_mode   = false; // --generate N > 0 was active
     int32_t generate_tokens = 0;
     int32_t token_skip      = 0;
-    std::vector<int32_t> layers;     // target layer indices; writer sorts, identity is order-independent
+    std::vector<int32_t> layers;     // target layer indices; the caller (make_fingerprint) sorts them — the stored fingerprint is byte-compared verbatim
     // v4/v5 content identity: a hash over consumed prompts-file content and
     // the expected prompt count. v5 stores a rolling FNV-1a-64 over every
     // consumed line, newline-terminated: any change anywhere in the

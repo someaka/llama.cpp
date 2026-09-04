@@ -427,8 +427,9 @@ int run_self_test() {
             }
 
             // Test 20: same-content resume roundtrip must pass with the
-            // content check active (skip_count > 0, v4 hash re-verified
-            // against the fixture's 42nd non-empty line).
+            // content check active (skip_count > 0; the v6 rolling content
+            // hash re-derives cleanly from the fixture prompts — the
+            // tampered variant is rejected by Test 21).
             {
                 AccumulatorMap same_acc;
                 int32_t same_iter = 0;

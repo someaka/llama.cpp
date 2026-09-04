@@ -430,10 +430,26 @@ bool read_checkpoint(
             if (version == CHECKPOINT_VERSION_V5) {
                 fprintf(stderr, "Warning: checkpoint is v5 (no accumulator checksum) - payload corruption "
                                 "is not detected; re-run without --resume for the full v6 guarantee.\n");
+                // v5 still re-derives the rolling content hash and refuses a
+                // mismatch (fall through to the v6 re-derivation below); only
+                // the payload checksum is absent.
+                uint64_t current_fnv = 0;
+                if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
+                    return false;
+                }
+                if (current_fnv != stored_fnv) {
+                    fprintf(stderr, "Error: prompts file content mismatch at resume - the first %d prompt line(s) hash "
+                                    "to 0x%016llx but the checkpoint recorded 0x%016llx. The prompts file changed "
+                                    "since the checkpoint; the accumulator holds results for different content. "
+                                    "Discard the checkpoint (remove %s) or restore the original prompts file.\n",
+                            n_iterated, (unsigned long long)current_fnv,
+                            (unsigned long long)stored_fnv, ckpt_path.c_str());
+                    return false;
+                }
             } else if (version == CHECKPOINT_VERSION_V4) {
                 fprintf(stderr, "Warning: checkpoint is v4 (single-line content anchor, retired basis) - "
                                 "content identity cannot be revalidated; only the prompt count is checked. "
-                                "Re-run without --resume for a full v5 content guarantee.\n");
+                                "Re-run without --resume for a full v6 content guarantee.\n");
             } else {
             uint64_t current_fnv = 0;
             if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
