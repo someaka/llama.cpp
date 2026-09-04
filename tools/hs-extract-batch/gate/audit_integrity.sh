@@ -20,7 +20,7 @@ PY
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
 grep -q "uint64_t key\|uint64_t make_accum_key\|uint64_t flat_key" tools/hs-extract-batch/hs-extract-batch.cpp && echo "PASS" || { echo "FAIL: uint64_t key missing"; exit 1; }
 echo "=== Check 2: output_all defined ==="
-grep -q "const bool output_all *= *cparams\.embeddings;" src/llama-context.cpp && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
+strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparams\.embeddings;" && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
 echo "=== Check 3: RAII LlamaBackend ==="
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
   grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }

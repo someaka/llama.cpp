@@ -430,9 +430,10 @@ bool read_checkpoint(
             if (version == CHECKPOINT_VERSION_V5) {
                 fprintf(stderr, "Warning: checkpoint is v5 (no accumulator checksum) - payload corruption "
                                 "is not detected; re-run without --resume for the full v6 guarantee.\n");
-                // v5 still re-derives the rolling content hash and refuses a
-                // mismatch (fall through to the v6 re-derivation below); only
-                // the payload checksum is absent.
+                // v5 re-derives the rolling content hash itself (same logic
+                // as the v6 branch below; duplicated deliberately so v5
+                // keeps its own warning). Only the v6 accumulator-region
+                // checksum is absent.
                 uint64_t current_fnv = 0;
                 if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
                     return false;
