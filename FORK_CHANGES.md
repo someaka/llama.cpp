@@ -119,11 +119,7 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
   (tests/test-hidden-states.cpp) and examples/hidden-states instead of
   per-tool copies.
 
-### 8. KV-Cells Optimization
-
-Flat position-count table replacing `std::map` for O(1) lookup.
-
-### 9. Misc
+### 8. Misc
 
 ## CI
 

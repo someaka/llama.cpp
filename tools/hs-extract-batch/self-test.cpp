@@ -20,7 +20,7 @@
 
 #include "hs-accum.h"
 #include "hs-kernels.h"
-#include "io-util.h"  // FilePtr RAII wrapper (Check 5 discipline)
+#include "io-util.h"  // FilePtr RAII wrapper (raw fclose is confined to this wrapper)
 #include "self-test.h"
 
 // Every check increments the attempted-counter; passed/total are derived

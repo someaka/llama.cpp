@@ -28,10 +28,9 @@ GOLD = pathlib.Path("/tmp/hs-batch-golden")
 # volatile scenario outputs stay under /tmp by design.
 INPUTS = pathlib.Path(__file__).resolve().parent / "golden_inputs"
 
-DEFAULT_E2B = "/home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf"
+DEFAULT_E2B = os.environ.get("HS_GATE_MODEL")
 MODELS = {
-    # Override with HS_GATE_MODEL when the gate model lives elsewhere.
-    "e2b": os.environ.get("HS_GATE_MODEL", DEFAULT_E2B),
+    "e2b": DEFAULT_E2B,
 }
 
 # name, model-key, layers, extra args, assignments-file key, is_resume_scenario
@@ -139,6 +138,9 @@ def main():
     # Hard requirements -- no fallbacks. The e2b model is the gate's only
     # model; a missing model aborts the gate, it does not fall back.
     for model_key, model_path in MODELS.items():
+        if not model_path:
+            sys.exit("REFUSED: set HS_GATE_MODEL=/path/to/model.gguf -- "
+                     "the gate runs the production path; no fallbacks.")
         if not pathlib.Path(model_path).exists():
             sys.exit(f"REFUSED: model {model_key} not found at {model_path} -- "
                      f"the gate runs the production path; no fallbacks.")
