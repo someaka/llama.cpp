@@ -372,6 +372,7 @@ jobs:
           # the two asserts above. gemma E2B n_embd = 1536.
           assert len(vec) == tokens * 1536, f'expected {tokens * 1536} floats for {tokens} tokens, got {len(vec)}'
           print(f'PASS: multi-ubatch pool=none extraction, {tokens} tokens, hidden_size={hidden_size}')
+          "
           # Decode-split refusal: a prompt longer than n_batch (2048 here) must
           # answer 400, not silently return only the tail chunk (the capture
           # resets on every llama_decode call).
@@ -384,7 +385,6 @@ jobs:
             exit 1
           fi
           echo "PASS: decode-split prompt refused with 400"
-          "
 
       - name: Quick audit fix integrity check
         run: |
