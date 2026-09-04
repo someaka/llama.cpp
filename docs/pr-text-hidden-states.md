@@ -37,8 +37,8 @@ Zero redundancy.
 4. **`/hidden-states` server endpoint** (`tools/server/`): POST prompt →
    per-layer vectors, no generation; three pooling modes (`last` default,
    `skip_mean`, per-token `none` with a 25M-float DoS cap), `normalize`,
-   `skip_offset`, and `all_layers` request fields (full surface in
-   `tools/server/README.md` §901+);
+   `skip_offset`, and `layers: "all"` request fields (full surface in
+   `tools/server/README.md` ("POST /hidden-states" section));
    `--no-hidden-states` flag disables the route.
 5. **Tests + example** (`tests/test-hidden-states.{cpp,c}`,
    `examples/hidden-states/`): API contract tests + minimal end-to-end example.

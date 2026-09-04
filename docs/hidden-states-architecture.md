@@ -52,11 +52,14 @@ void llm_graph_context::capture_layer_output(int il, ggml_tensor * cur) {
         return;
     }
 
-    // Capture order is the storage order: the context-side copy requires
-    // exactly n_layer entries in increasing layer order.
+    // The residual stream leaving block il is the state entering block il+1,
+    // so it is stored at hidden_states index il+1: one uniform ladder mapping
+    // for every builder (slot 0, the embeddings, is captured separately by
+    // capture_embeddings before the loop).
     GGML_ASSERT(cur != nullptr);
-    GGML_ASSERT((int) res->t_hidden_layers.size() == il &&
-                "capture_layer_output called out of layer order");
+    GGML_ASSERT((int) res->t_hidden_layers.size() == il + 1 &&
+                "capture_layer_output called out of layer order "
+                "(capture_embeddings must run first)");
 
     cb(cur, "hidden_state", il);
     res->t_hidden_layers.push_back(cur);
@@ -144,7 +147,7 @@ refused it; decode only sees such a context if the gates were bypassed).
    the adoption manifest — some have no single well-defined residual.)
 2. Add `capture_layer_output(il, cur);` right after the reassignment.
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
-4. Rebuild, self-test 17/17, `test-hidden-states <gguf>` on a real GGUF of
+4. Rebuild, self-test 24/24, `test-hidden-states <gguf>` on a real GGUF of
    that arch.
 
 Refusal needs no code: an unlisted arch is refused by name at context
