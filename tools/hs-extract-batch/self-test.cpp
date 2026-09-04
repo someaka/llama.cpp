@@ -331,13 +331,12 @@ int run_self_test() {
                 HS_CHECK(ok18, "Test 18 (fingerprint mismatch rejected)");
             }
 
-            // Test 19: corruption detection is scoped. Version, fingerprint
-            // and header fields must be detected; the accumulator payload
-            // region carries NO checksum, so in-range flips of group ids,
-            // counts, or float bytes are NOT detected (floats are any bit
-            // pattern; selectors can land in range). A payload checksum is
-            // the v6 vehicle. Test 20's own positive/negative content checks
-            // cover the prompts-side identity.
+            // Test 19: corruption detection at every offset. Version,
+            // fingerprint and header fields are caught by field validation;
+            // accumulator payload flips (group ids, counts, float bytes) are
+            // caught by the v6 region checksum. Detection is required at
+            // every sampled offset. Test 20/21 cover the prompts-side
+            // content identity.
             {
                 bool ok19 = true;
                 std::string ckpt_path = std::string(test_ckpt) + ".checkpoint";
@@ -417,7 +416,7 @@ int run_self_test() {
                         AccumulatorMap junk_acc;
                         int32_t junk_iter = 0;
                         bool read_ok3 = read_checkpoint(ckpt_path.c_str(), junk_acc, junk_iter, 4, fp, prompts_path.c_str());
-                        if (read_ok3) ok19 = false;  // payload flip MUST be rejected
+                        HS_CHECK(!read_ok3, "Test 19b (v6 payload-flip rejected)");
                         // restore pristine bytes for later tests
                         // (rewritten by the same content)
                         std::ofstream ckpt_out2(ckpt_path.c_str(), std::ios::binary);
