@@ -340,6 +340,16 @@ if not ok_struct:
     print("FAIL: hs_toggle_reset scope guard missing in send_hidden_states"); raise SystemExit(1)
 if not ok_use:
     print("FAIL: hs_toggle_reset guard not instantiated with slot.ctx_tgt"); raise SystemExit(1)
+# position pin: the guard must be instantiated BEFORE the first return in the
+# function body - a guard moved below the early returns re-leaks the toggle.
+body_start = src.find("void send_hidden_states")
+body = src[body_start:]
+guard_pos = body.find("hs_reset{slot.ctx_tgt}")
+if guard_pos == -1:
+    print("FAIL: hs_toggle_reset guard not instantiated"); raise SystemExit(1)
+first_return = body.find("return")
+if first_return != -1 and first_return < guard_pos:
+    print("FAIL: hs_toggle_reset guard instantiated after an early return (leak path)"); raise SystemExit(1)
 print("PASS: capture disable is structural (scope guard)")
 PY
 echo "OK: All audit fix patterns verified"
