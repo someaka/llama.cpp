@@ -258,6 +258,23 @@ fi
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "pfq.producer_done"; then
   echo "FAIL: producer_done flag missing"; exit 1
 fi
+python3 - <<'PY'
+import re
+src = open("tools/hs-extract-batch/hs-extract-batch.cpp").read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+i = src.find("if (prompts_fin.bad())")
+if i == -1:
+    print("FAIL: bad-stream handler missing (prompts_fin.bad())"); raise SystemExit(1)
+j = src.find("return;", i)
+block = src[i:j] if j != -1 else src[i:]
+has_done = "producer_done = true;" in block
+has_notify = re.search(r"pfq\.cv\.notify_all\(\);", block) is not None
+ordered = has_done and has_notify and block.find("producer_done = true;") < block.find("pfq.cv.notify_all();")
+if not (has_done and has_notify and ordered):
+    print("FAIL: bad-stream handler lost its consumer wakeup (must set producer_done then notify_all)"); raise SystemExit(1)
+print("PASS: bad-stream handler notifies consumer")
+PY
 echo "PASS"
 echo "=== Check 14: shared RAII header used by all fork tools ==="
 # RAII wrappers (LlamaBackend, LlamaModel, LlamaContext, LlamaBatch)
