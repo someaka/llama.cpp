@@ -12,6 +12,11 @@ src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
 # comment tail intact. Over-deletion is safe here: it can only cause a
 # false FAIL, never a false PASS.
 src = re.sub(r'^.*//[^\n]*"[^\n]*$', '', src, flags=re.M)
+# String/char literals are stripped last: a pinned token inside a literal
+# must not satisfy a code check (and literal text cannot mask real code,
+# because the literal CONTENT is removed, not the line).
+src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
+src = re.sub(r"'(?:\\.|[^'\\])*'", "''", src)
 try:
     sys.stdout.write(src)
     sys.stdout.flush()
@@ -151,20 +156,45 @@ echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this c
 fi
 echo "PASS"
 echo "=== Check 9: No off-by-one ==="
-# Var-name-agnostic: forbid <= against every layer-count limit the tools use
-# (verifier-verified bypass: 'li <= layers.size()' slipped the literal 'i <= n_layer').
-for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp; do
-  if strip_comments "$f" | grep -qE '(^|[^A-Za-z0-9_])[A-Za-z_][A-Za-z_0-9]*[[:space:]]*<=[[:space:]]*(n_layers_total|layers\.size\(\)|n_layer)'; then
-    echo "FAIL: found '<= <layer-count>' in $f (must be <)"; exit 1
-  fi
-done
-echo "PASS"
+# Alias-tolerant: collect every identifier bound to a layer-count expression
+# (e.g. 'const size_t nl = layers.size();'), then reject '<=' against the
+# canonical limits AND every collected alias. Python pass so aliases are
+# resolved, not pattern-matched. (Verifier bypass history: 'li <= layers.size()'
+# and 'li <= nl' both slipped earlier literal greps.)
+python3 - <<'PY'
+import re
+LIMITS = r"(?:n_layers_total|layers\.size\(\)|n_layer\b|n_layers\b)"
+failed = False
+for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract-batch.cpp"]:
+    src = open(tu).read()
+    src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+    src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+    src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
+    src = re.sub(r'^.*//[^\n]*"[^"\n]*$', '', src, flags=re.M)
+    stripped = src
+    aliases = set(re.findall(r"(?:const\s+)?(?:size_t|int32_t|int|auto)\s+(\w+)\s*=\s*" + LIMITS, stripped))
+    alias_alt = "|".join(re.escape(a) for a in sorted(aliases))
+    pat = r"(^|[^A-Za-z0-9_])\w+\s*<=\s*(?:" + LIMITS
+    if alias_alt:
+        pat += "|" + alias_alt
+    pat += r")"
+    for lineno, line in enumerate(stripped.splitlines(), 1):
+        if re.search(pat, line):
+            print(f"FAIL: off-by-one risk in {tu}:{lineno}: {line.strip()}")
+            failed = True
+if failed:
+    raise SystemExit(1)
+print("PASS: no <= against layer-count limits or their aliases")
+PY
 echo "=== Check 10: checkpoint n_masks/n_layers_data bounds validation ==="
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "if (n_masks < 0 || n_masks > MAX_MASKS)"; then
-  echo "FAIL: checkpoint n_masks bounds check missing"; exit 1
+# Pin ENFORCEMENT, not text: the guarded block must contain 'return false;'
+# (a guard whose body was emptied must fail). -A3 reaches the body on
+# stripped source; the condition line and the return must co-occur.
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -F "if (n_masks < 0 || n_masks > MAX_MASKS)" | grep -q "return false;"; then
+  echo "FAIL: checkpoint n_masks bounds check not enforced"; exit 1
 fi
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "if (n_layers_data < 0 || n_layers_data > MAX_LAYERS)"; then
-  echo "FAIL: checkpoint n_layers_data bounds check missing"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -F "if (n_layers_data < 0 || n_layers_data > MAX_LAYERS)" | grep -q "return false;"; then
+  echo "FAIL: checkpoint n_layers_data bounds check not enforced"; exit 1
 fi
 echo "PASS"
 echo "=== Check 11: output writer uses pre-built index (not O(K^2) rescan) ==="
@@ -173,11 +203,11 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[[A-
 fi
 echo "PASS"
 echo "=== Check 12: checkpoint count/layer_idx validation ==="
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "if \(count < 0\)"; then
-  echo "FAIL: checkpoint count validation missing"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -E "if \(count < 0\)" | grep -q "return false;"; then
+  echo "FAIL: checkpoint count validation not enforced"; exit 1
 fi
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "layer_idx < 0 \|\| layer_idx > 0xFFFF"; then
-  echo "FAIL: checkpoint layer_idx validation missing"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -E "layer_idx < 0 \|\| layer_idx > 0xFFFF" | grep -q "return false;"; then
+  echo "FAIL: checkpoint layer_idx validation not enforced"; exit 1
 fi
 echo "PASS"
 echo "=== Check 13: producer-consumer pipeline error notification ==="
@@ -226,8 +256,8 @@ echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to
 # prevent DoS via enormous JSON responses. Pin the guard predicate at
 # its use site (the error message mentioning the constant is not proof).
-if ! strip_comments tools/server/server-context.cpp | grep -q "if (total_all_layers > MAX_POOL_NONE_FLOATS)"; then
-  echo "FAIL: pool=none response size limit missing"; exit 1
+if ! strip_comments tools/server/server-context.cpp | grep -A6 -F "if (total_all_layers > MAX_POOL_NONE_FLOATS)" | grep -qE "server_task_result_error|send_error"; then
+  echo "FAIL: pool=none response size limit not enforced"; exit 1
 fi
 echo "PASS"
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
@@ -236,6 +266,11 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VER
 fi
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "bool write_sum"; then
   echo "FAIL: write_sum parameter missing from _write_accumulator_to_file signature"; exit 1
+fi
+# Pin the use polarity: the parameter must gate lossless sum writes positively
+# (inverting it to if (!write_sum) would silently swap payloads to lossy means).
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "if \(write_sum\)"; then
+  echo "FAIL: write_sum positive-use branch missing (polarity inverted?)"; exit 1
 fi
 echo "PASS"
 echo "OK: All audit fix patterns verified"
