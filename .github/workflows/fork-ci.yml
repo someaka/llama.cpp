@@ -386,6 +386,14 @@ jobs:
           fi
           echo "PASS: decode-split prompt refused with 400"
 
+      - name: Adoption manifest drift check
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          # The manifest's file:line evidence must match HEAD; a builder edit
+          # that moves a capture site fails here until the row is regenerated.
+          python3 tools/hs-extract-batch/gate/regen_manifest_lines.py --check
+
       - name: Quick audit fix integrity check
         run: |
           set -euo pipefail

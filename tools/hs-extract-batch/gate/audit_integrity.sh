@@ -143,17 +143,19 @@ echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 if ! grep -qE "static bool scan_prompts_file\(" tools/hs-extract-batch/hs-extract-batch.cpp; then
 echo "FAIL: scan_prompts_file not found in hs-extract-batch.cpp (moved TU? update this check's target)"; exit 1
 fi
-if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "exit("; then
-echo "FAIL: scan_prompts_file calls exit()"; exit 1
+if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE '\b(exit|abort|quick_exit|terminate|_Exit)[[:space:]]*\('; then
+echo "FAIL: scan_prompts_file calls an exit-family function"; exit 1
 fi
 if ! grep -q "struct PromptsScan" tools/hs-extract-batch/hs-extract-batch.cpp; then
 echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this check)"; exit 1
 fi
 echo "PASS"
 echo "=== Check 9: No off-by-one ==="
+# Var-name-agnostic: forbid <= against every layer-count limit the tools use
+# (verifier-verified bypass: 'li <= layers.size()' slipped the literal 'i <= n_layer').
 for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp; do
-  if strip_comments "$f" | grep -qE 'i[[:space:]]*<=[[:space:]]*n_layer'; then
-    echo "FAIL: found incorrect i <= n_layer in $f (should be < n_layer)"; exit 1
+  if strip_comments "$f" | grep -qE '(^|[^A-Za-z0-9_])[A-Za-z_][A-Za-z_0-9]*[[:space:]]*<=[[:space:]]*(n_layers_total|layers\.size\(\)|n_layer)'; then
+    echo "FAIL: found '<= <layer-count>' in $f (must be <)"; exit 1
   fi
 done
 echo "PASS"
@@ -166,8 +168,8 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "if (n_layers_d
 fi
 echo "PASS"
 echo "=== Check 11: output writer uses pre-built index (not O(K^2) rescan) ==="
-if ! { grep -q "group_index\|gm_pairs" tools/hs-extract-batch/io-util.cpp; }; then
-  echo "FAIL: output writer pre-built index missing"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[[A-Za-z_][A-Za-z_0-9]*\]'; then
+  echo "FAIL: output writer pre-built index (gm_pairs) missing at use site"; exit 1
 fi
 echo "PASS"
 echo "=== Check 12: checkpoint count/layer_idx validation ==="
