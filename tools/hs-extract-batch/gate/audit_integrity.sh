@@ -29,7 +29,7 @@ strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparam
 strip_comments src/llama-context.cpp | grep -q "if (output_all) {" && echo "PASS" || { echo "FAIL: output_all primary use missing or inverted"; exit 1; }
 echo "=== Check 3: RAII LlamaBackend ==="
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
-  grep -q "LlamaBackend" "$f" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend in $f"; exit 1; }
+  strip_comments "$f" | grep -qE "LlamaBackend +[A-Za-z_][A-Za-z_0-9]*;" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend declaration in $f"; exit 1; }
 done
 echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
 for f in src/llama-context.cpp; do
@@ -51,7 +51,15 @@ tool_tus = [
 ]
 outside = []
 for tu in tool_tus:
-  lines = Path(tu).read_text().splitlines()
+  raw = Path(tu).read_text()
+  # Strip comments and string/char literals first: a literal containing
+  # 'fclose(' must not fail the gate (F-7), and a comment mentioning it
+  # must not either.
+  raw = re.sub(r'/\*.*?\*/', ' ', raw, flags=re.S)
+  raw = re.sub(r'^\s*//.*$', '', raw, flags=re.M)
+  raw = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw)
+  raw = re.sub(r"'(?:\\.|[^'\\])*'", "''", raw)
+  lines = raw.splitlines()
   in_fileptr = False
   brace_depth = 0
   for lineno, line in enumerate(lines, 1):
@@ -125,7 +133,7 @@ if bad:
 print(f'PASS ({total_calls} checked_write call sites, all tested)')
 PY
 echo "=== Check 7: assignment reader uses explicit status ==="
-grep -q "enum class AssignmentReadStatus" tools/hs-extract-batch/assignments-io.h && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
+strip_comments tools/hs-extract-batch/assignments-io.h | grep -q "AssignmentReadStatus::error" && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
 echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 # auto_size_ctx was removed by cb140146b (single-pass pre-scan
 # refactor); its successor must uphold the same contract: pure
@@ -143,15 +151,17 @@ echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this c
 fi
 echo "PASS"
 echo "=== Check 9: No off-by-one ==="
-if grep -qE 'i[[:space:]]*<=[[:space:]]*n_layer' tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp 2>/dev/null; then
-  echo "FAIL: found incorrect i <= n_layer (should be < n_layer)"; exit 1
-fi
+for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp; do
+  if strip_comments "$f" | grep -qE 'i[[:space:]]*<=[[:space:]]*n_layer'; then
+    echo "FAIL: found incorrect i <= n_layer in $f (should be < n_layer)"; exit 1
+  fi
+done
 echo "PASS"
 echo "=== Check 10: checkpoint n_masks/n_layers_data bounds validation ==="
-if ! grep -q "n_masks.*out of range" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "if (n_masks < 0 || n_masks > MAX_MASKS)"; then
   echo "FAIL: checkpoint n_masks bounds check missing"; exit 1
 fi
-if ! grep -q "n_layers_data.*out of range" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "if (n_layers_data < 0 || n_layers_data > MAX_LAYERS)"; then
   echo "FAIL: checkpoint n_layers_data bounds check missing"; exit 1
 fi
 echo "PASS"
@@ -161,10 +171,10 @@ if ! { grep -q "group_index\|gm_pairs" tools/hs-extract-batch/io-util.cpp; }; th
 fi
 echo "PASS"
 echo "=== Check 12: checkpoint count/layer_idx validation ==="
-if ! grep -q "count.*negative.*corrupt checkpoint" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "if \(count < 0\)"; then
   echo "FAIL: checkpoint count validation missing"; exit 1
 fi
-if ! grep -q "layer_idx.*out of range.*corrupt checkpoint" tools/hs-extract-batch/io-util.cpp; then
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "layer_idx < 0 \|\| layer_idx > 0xFFFF"; then
   echo "FAIL: checkpoint layer_idx validation missing"; exit 1
 fi
 echo "PASS"
@@ -203,8 +213,8 @@ echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "cv_space"; then
   echo "FAIL: backpressure cv_space missing"; exit 1
 fi
-if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE "queue\.size\(\) < MAX_PREFETCH"; then
-  echo "FAIL: backpressure predicate 'queue.size() < MAX_PREFETCH' missing"; exit 1
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -qF 'pfq.cv_space.wait(lk, [&]{ return pfq.queue.size() < MAX_PREFETCH || pfq.producer_done.load(); })'; then
+  echo "FAIL: live backpressure wait predicate missing"; exit 1
 fi
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_producer_and_join"; then
   echo "FAIL: producer-stop-and-join path missing"; exit 1
@@ -212,8 +222,9 @@ fi
 echo "PASS"
 echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to
-# prevent DoS via enormous JSON responses.
-if ! strip_comments tools/server/server-context.cpp | grep -q "MAX_POOL_NONE_FLOATS"; then
+# prevent DoS via enormous JSON responses. Pin the guard predicate at
+# its use site (the error message mentioning the constant is not proof).
+if ! strip_comments tools/server/server-context.cpp | grep -q "if (total_all_layers > MAX_POOL_NONE_FLOATS)"; then
   echo "FAIL: pool=none response size limit missing"; exit 1
 fi
 echo "PASS"
@@ -221,8 +232,8 @@ echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 6"; then
   echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
 fi
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "write_sum"; then
-  echo "FAIL: write_sum parameter missing from _write_accumulator_to_file"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "bool write_sum"; then
+  echo "FAIL: write_sum parameter missing from _write_accumulator_to_file signature"; exit 1
 fi
 echo "PASS"
 echo "OK: All audit fix patterns verified"
