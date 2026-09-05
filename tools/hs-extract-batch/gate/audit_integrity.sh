@@ -336,9 +336,6 @@ src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
 ok_struct = re.search(r"struct hs_toggle_reset \{[^}]*llama_set_extract_hidden_states\(c, false\);", src)
 ok_use = re.search(r"hs_reset\{slot\.ctx_tgt\}", src)
-i = src.find("void send_hidden_states")
-sig_end = src.find("\n", i)
-first_disable = src.find("llama_set_extract_hidden_states", i)
 if not ok_struct:
     print("FAIL: hs_toggle_reset scope guard missing in send_hidden_states"); raise SystemExit(1)
 if not ok_use:

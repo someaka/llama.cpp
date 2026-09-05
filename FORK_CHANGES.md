@@ -22,6 +22,7 @@ Adds per-layer residual stream activation extraction to the llama.cpp compute gr
 - **`llama_get_hidden_state(ctx, layer)`**  -  get all tokens for a layer (row i = `ptr + i * n_embd`)
 - **`llama_get_hidden_state_n_tokens(ctx)`**  -  token count
 - **`llama_get_hidden_states_batch()`**  -  batch-get multiple layers in one call
+- **`llama_model_supports_hidden_states(model)`**  -  capability registry query (single source of truth in `llm_arch_supports_hidden_states()`)
 
 Model builders push the residual stream output of each decoder layer into
 `t_hidden_layers` through the `capture_layer_output()` graph helper
@@ -132,7 +133,7 @@ The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Runs self-test (24/24; a checkpoint-fixture write failure fails the run rc=1
   rather than skipping)
 - Runs multi-ubatch pool=none integration test (hard row-count vs n_embd) and a decode-split refusal check (prompt > n_batch must 400)
-- 18 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline, checkpoint durability order)
+- 19 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline, checkpoint durability order)
 
 GPU verification (CUDA + Vulkan) is manual  -  see CI header comments for
 commands (those manual builds configure `GGML_NATIVE=ON` on the target
