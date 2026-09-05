@@ -23,6 +23,10 @@ def atomic_write(path, data):
 
 # Default to the committed fixtures the gate reads (gate_batch.py INPUTS =
 # gate/golden_inputs). An optional argv[1] overrides the output directory.
+# A flag-looking argv is refused (a typo like --help used to mkdir "--help").
+if any(a.startswith("-") for a in sys.argv[1:]):
+    sys.exit(f"REFUSED: unknown flag {next(a for a in sys.argv[1:] if a.startswith('-'))} - "
+             "usage: gen_inputs.py [output-dir]")
 out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent / "golden_inputs"
 out_dir.mkdir(parents=True, exist_ok=True)
 

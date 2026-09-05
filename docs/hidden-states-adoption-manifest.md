@@ -86,13 +86,13 @@ reassignment that follows the final residual add listed below.
 
 | # | builder | file | final residual add (line) |
 |---|---|---|---|
-| 1 | llama_model_afmoe | src/models/afmoe.cpp | 262 |
-| 2 | llama_model_apertus | src/models/apertus.cpp | 146 |
-| 3 | llama_model_arcee | src/models/arcee.cpp | 131 |
-| 4 | llama_model_arctic | src/models/arctic.cpp | 154 |
-| 5 | llama_model_baichuan | src/models/baichuan.cpp | 130 |
-| 6 | llama_model_bailingmoe | src/models/bailingmoe.cpp | 155 |
-| 7 | llama_model_bailingmoe2 | src/models/bailingmoe2.cpp | 191 |
+| 1 | llama_model_afmoe | afmoe.cpp | 262 |
+| 2 | llama_model_apertus | apertus.cpp | 146 |
+| 3 | llama_model_arcee | arcee.cpp | 131 |
+| 4 | llama_model_arctic | arctic.cpp | 154 |
+| 5 | llama_model_baichuan | baichuan.cpp | 130 |
+| 6 | llama_model_bailingmoe | bailingmoe.cpp | 155 |
+| 7 | llama_model_bailingmoe2 | bailingmoe2.cpp | 188 |
 | 8 | bailingmoe3 | bailingmoe3.cpp | 389 |
 | 9 | bert | bert.cpp | 218 |
 | 10 | bitnet | bitnet.cpp | 143 |
@@ -108,59 +108,59 @@ reassignment that follows the final residual add listed below.
 | 20 | deepseek32 | deepseek32.cpp | 456 |
 | 21 | dots1 | dots1.cpp | 171 |
 | 22 | dream | dream.cpp | 116 |
-| 23 | ernie4_5 | src/models/ernie4-5.cpp | 142 |
-| 24 | ernie4_5_moe | src/models/ernie4-5-moe.cpp | 110 |
+| 23 | ernie4_5 | ernie4-5.cpp | 142 |
+| 24 | ernie4_5_moe | ernie4-5-moe.cpp | 110 |
 | 25 | eurobert | eurobert.cpp | 109 |
 | 26 | exaone | exaone.cpp | 113 |
 | 27 | exaone4 | exaone4.cpp | 166 |
-| 28 | exaone_moe | src/models/exaone-moe.cpp | 221 |
+| 28 | exaone_moe | exaone-moe.cpp | 218 |
 | 29 | gemma | gemma.cpp | 116 |
 | 30 | gemma2 | gemma2.cpp | 148 |
 | 31 | gemma3 | gemma3.cpp | 192 |
 | 32 | gemma4 | gemma4.cpp | 362 |
-| 33 | gemma4_assistant | src/models/gemma4-assistant.cpp | 181 |
-| 34 | gemma_embedding | src/models/gemma-embedding.cpp | 161 |
+| 33 | gemma4_assistant | gemma4-assistant.cpp | 178 |
+| 34 | gemma_embedding | gemma-embedding.cpp | 161 |
 | 35 | glm4 | glm4.cpp | 165 |
-| 36 | glm4_moe | src/models/glm4-moe.cpp | 259 |
-| 37 | glm_dsa | src/models/glm-dsa.cpp | 508 |
+| 36 | glm4_moe | glm4-moe.cpp | 416 |
+| 37 | glm_dsa | glm-dsa.cpp | 500 |
 | 38 | gpt2 | gpt2.cpp | 125 |
-| 39 | granite | src/models/granite.cpp | 175 (in build_layer_ffn helper) |
+| 39 | granite | granite.cpp | 149 |
 | 40 | grok | grok.cpp | 190 |
 | 41 | grovemoe | grovemoe.cpp | 170 |
-| 42 | hunyuan_moe | src/models/hunyuan-moe.cpp | 164 |
-| 43 | hunyuan_vl | src/models/hunyuan-vl.cpp | 167 |
-| 44 | hy_v3 | src/models/hy-v3.cpp | 208 |
+| 42 | hunyuan_moe | hunyuan-moe.cpp | 164 |
+| 43 | hunyuan_vl | hunyuan-vl.cpp | 167 |
+| 44 | hy_v3 | hy-v3.cpp | 204 |
 | 45 | internlm2 | internlm2.cpp | 115 |
 | 46 | jais | jais.cpp | 110 |
-| 47 | jais2 | src/models/jais2.cpp | 140 |
+| 47 | jais2 | jais2.cpp | 140 |
 | 48 | jamba | jamba.cpp | 177 |
 | 49 | laguna | laguna.cpp | 316 |
 | 50 | llada | llada.cpp | 136 |
-| 51 | llada_moe | src/models/llada-moe.cpp | 139 |
+| 51 | llada_moe | llada-moe.cpp | 139 |
 | 52 | llama | llama.cpp | 221 |
 | 53 | llama4 | llama4.cpp | 245 |
 | 54 | maincoder | maincoder.cpp | 127 |
 | 55 | mellum | mellum.cpp | 197 |
 | 56 | mimo2 | mimo2.cpp | 222 |
 | 57 | minicpm3 | minicpm3.cpp | 223 |
-| 58 | minimax_01 | src/models/minimax-01.cpp | 494 |
-| 59 | minimax_m2 | src/models/minimax-m2.cpp | 144 |
-| 60 | minimax_m3 | src/models/minimax-m3.cpp | 582 |
+| 58 | minimax_01 | minimax-01.cpp | 457 |
+| 59 | minimax_m2 | minimax-m2.cpp | 144 |
+| 60 | minimax_m3 | minimax-m3.cpp | 582 |
 | 61 | mistral3 | mistral3.cpp | 210 |
-| 62 | modern_bert | src/models/modern-bert.cpp | 159 |
+| 62 | modern_bert | modern-bert.cpp | 159 |
 | 63 | mpt | mpt.cpp | 148 |
-| 64 | muse_glimmer | src/models/muse-glimmer.cpp | 175 |
-| 65 | nanbeige | src/models/nanbeige.cpp | 155 (dormant tap added 2026-08-17) |
+| 64 | muse_glimmer | muse-glimmer.cpp | 175 |
+| 65 | nanbeige | nanbeige.cpp | 156 |
 | 66 | nemotron | nemotron.cpp | 125 |
-| 67 | neo_bert | src/models/neo-bert.cpp | 119 |
+| 67 | neo_bert | neo-bert.cpp | 119 |
 | 68 | olmo | olmo.cpp | 117 |
 | 69 | olmo2 | olmo2.cpp | 182 |
 | 70 | olmoe | olmoe.cpp | 150 |
-| 71 | openai_moe | src/models/openai-moe.cpp | 147 |
+| 71 | openai_moe | openai-moe.cpp | 147 |
 | 72 | openelm | openelm.cpp | 148 |
 | 73 | orion | orion.cpp | 117 |
 | 74 | paddleocr | paddleocr.cpp | 85 |
-| 75 | pangu_embed | src/models/pangu-embed.cpp | 132 |
+| 75 | pangu_embed | pangu-embed.cpp | 132 |
 | 76 | phi2 | phi2.cpp | 117 |
 | 77 | phi3 | phi3.cpp | 166 |
 | 78 | plamo | plamo.cpp | 112 |
@@ -178,7 +178,7 @@ reassignment that follows the final residual add listed below.
 | 90 | qwen3vlmoe | qwen3vlmoe.cpp | 166 |
 | 91 | refact | refact.cpp | 136 |
 | 92 | rnd1 | rnd1.cpp | 153 |
-| 93 | seed_oss | src/models/seed-oss.cpp | 126 |
+| 93 | seed_oss | seed-oss.cpp | 126 |
 | 94 | smallthinker | smallthinker.cpp | 166 |
 | 95 | smollm3 | smollm3.cpp | 127 |
 | 96 | stablelm | stablelm.cpp | 147 |
@@ -248,9 +248,11 @@ is_recr dispatch — and refusals win over adoption-order suggestions.)
 Later waves: remaining CLASSIC rows, family cluster by family cluster.
 Refused archs stay out until a per-builder semantic decision is made and recorded.
 
-## The 24 unlisted files (151 on disk - 127 classified; upstream drift since the 2026-08-17 syncs added clip, deepseek2ocr, dots3note, granite-moe/swa, hunyuan-dense, jina-bert-v2/v3, lfm2moe, llama-embed, mamba-base/2, minicpm, mistral4, nemotron-h-moe, nomic-bert/-moe, phimoe, qwen3tts, qwen4exp, rwkv6/7-base, t5encoder, delta-net-base)
+## The 24 files not yet classified (151 on disk - 127 classified; upstream drift since the 2026-08-17 syncs added clip, deepseek2ocr, delta-net-base, dots3note, granite-moe/swa, hunyuan-dense, jina-bert-v2/v3, lfm2moe, llama-embed, mamba-base/2, minicpm, mistral4, nemotron-h-moe, nomic-bert/-moe, phimoe, qwen3tts, qwen4exp, rwkv6/7-base, t5encoder)
 
-Not omissions -- each is covered by proxy through a classified builder:
+21 of the 24 are covered by proxy through a classified builder; 3 are
+standalone builders with no dormant tap and no classification yet — they are
+real omissions of this manifest, listed at the bottom.
 
 - **11 registered alias archs** inherit a builder's graph (and its dormant
   tap) via `using graph =` aliases in models.h: llama-embed -> llama,
@@ -264,4 +266,14 @@ Not omissions -- each is covered by proxy through a classified builder:
   rwkv6-base, rwkv7-base) -- no standalone graph to classify.
 - **clip** is a vision encoder (not a text decoder ladder); **qwen3tts** is a
   registered arch whose graph comes from another builder.
+
+**Not covered by proxy — open work, not silently safe:**
+
+- `dots3note.cpp` (476 lines): registered standalone arch with a CLASSIC
+  residual tail (`cur = ggml_add(ctx0, cur, ffn_inp)` at :455) — adoptable,
+  no dormant tap sewn yet.
+- `granite-swa.cpp` (319 lines): same — classic tail at :312, adoptable,
+  no dormant tap sewn yet.
+- `qwen4exp.cpp` (1279 lines): registered standalone arch, hc-stream hybrid
+  residual — needs a refusal-or-adopt decision before a tap can be honest.
 

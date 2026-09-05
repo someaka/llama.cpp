@@ -273,4 +273,41 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "if \(write_su
   echo "FAIL: write_sum positive-use branch missing (polarity inverted?)"; exit 1
 fi
 echo "PASS"
+echo "=== Check 18: checkpoint durability order (fsync before rename) ==="
+# The durability guarantee: the tmp file is flushed+fsynced and closed before
+# the rename publishes it. Pin the ordered sequence inside write_checkpoint's
+# tmp-handling: if (!f.sync()) -> f.reset() -> rename(...). A reorder that
+# publishes unsynced bytes must fail here.
+python3 - <<'PY'
+import re
+src = open("tools/hs-extract-batch/io-util.cpp").read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
+src = re.sub(r'^.*//[^\n]*"[^\n]*$', '', src, flags=re.M)
+
+def ordered(sync_handle, rename_arg):
+    """True iff the exact sequence sync-handle-check -> handle.reset(); ->
+    rename(rename_arg) occurs contiguously (only whitespace between the
+    reset and the rename)."""
+    i = src.find(f"rename({rename_arg}")
+    if i == -1:
+        return False
+    pat = (r"if \(!" + re.escape(sync_handle) + r"\.sync\(\)\) \{"
+           r"[^}]*}"                       # sync failure block, closed
+           r"\s*" + re.escape(sync_handle) + r"\.reset\(\);\s*"
+           r"(?:if \(\s*)?rename\(" + re.escape(rename_arg))
+    return re.search(pat, src) is not None
+
+ok_ckpt = ordered("f", "temp_path.c_str(), ckpt_path")
+ok_out = ordered("out", "temp_path.c_str(), output_path")
+if not ok_ckpt:
+    print("FAIL: checkpoint durability order broken (fsync -> reset -> rename(ckpt))")
+if not ok_out:
+    print("FAIL: output durability order broken (fsync -> reset -> rename(output))")
+if ok_ckpt and ok_out:
+    print("PASS: fsync -> reset -> rename order enforced on both writers")
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
 echo "OK: All audit fix patterns verified"
