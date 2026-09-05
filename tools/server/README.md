@@ -994,6 +994,10 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 - **`skip_mean`**: Returns the mean over tokens `[skip_offset, n_tokens)`. Shape per layer: `[1, n_embd_out]`.
 - **`none`**: Returns all per-token hidden states without pooling. Shape per layer: `[n_tokens, n_embd_out]`.
 
+> Numeric parity: values agree with the `hs-extract` / `hs-extract-batch` CLIs to
+> ~1e-6 relative on the same pinned backend, but are not guaranteed bit-identical
+> across front-ends. Use one front-end (and one pinned `-ngl`) for a research run.
+
 *Response format:*
 
 ```json

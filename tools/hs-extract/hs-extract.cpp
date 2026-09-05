@@ -77,7 +77,7 @@ static std::string format_float(float v) {
     char buf[64];
     if (std::isinf(v)) { return "null"; }  // JSON has no Inf/NaN
     if (std::isnan(v)) { return "null"; }
-    snprintf(buf, sizeof(buf), "%.8g", v);
+    snprintf(buf, sizeof(buf), "%.9g", v);  // 9 significant digits round-trip float32 losslessly
     return std::string(buf);
 }
 

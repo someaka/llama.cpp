@@ -2476,8 +2476,8 @@ private:
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
                 err->err_type = ERROR_TYPE_INVALID_REQUEST;
-                err->err_msg = "hidden state layer " + std::to_string(layer) +
-                               " out of range [0, " + std::to_string(n_hs_slots) + ")";
+                err->err_msg = "layer " + std::to_string(layer) +
+                               " out of range [0, " + std::to_string(n_hs_slots - 1) + "]";
                 queue_results.send(std::move(err));
                 return;
             }

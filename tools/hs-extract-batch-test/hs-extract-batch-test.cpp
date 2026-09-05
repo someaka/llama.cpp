@@ -120,7 +120,17 @@ int main(int argc, char ** argv) {
 
     const char * model_path = argv[1];
     const char * prompt     = argv[2];
-    const int    mode       = argc > 3 ? atoi(argv[3]) : 2;
+    int mode = 2;
+    if (argc > 3) {
+        char * mode_end = nullptr;
+        const long parsed = strtol(argv[3], &mode_end, 10);
+        if (mode_end == argv[3] || *mode_end != '\0' || parsed < 0 || parsed > 2) {
+            fprintf(stderr, "Error: invalid mode '%s' (expected 0, 1, or 2)\n", argv[3]);
+            fprintf(stderr, "Usage: %s <model.gguf> [prompt] [mode 0|1|2]\n", argv[0]);
+            return 1;
+        }
+        mode = (int) parsed;
+    }
 
     llama_backend_init();
 

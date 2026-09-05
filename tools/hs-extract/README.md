@@ -35,6 +35,14 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
 > CUDA results for the same prompt are not value-comparable at deep layers. Pin
 > the backend (and `-ngl`) for research data.
+>
+> JSON serialization uses 9 significant digits, which round-trips float32
+> losslessly, so hs-extract and hs-extract-batch / the server can be compared
+> bit-for-bit on the same pinned backend. Note the outputs of different
+> FRONT-ENDS are not guaranteed bit-identical to each other (they agree to
+> ~1e-6 relative); at `-ngl 0` (CPU) layer 0 may already diverge in the 8th
+> significant digit. hs-extract-batch / the server are the parity-of-record
+> for probe data.
 
 
 ## Examples

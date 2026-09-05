@@ -11,12 +11,18 @@ src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
 # char class stops at the quote), so the line survives stripping with its
 # comment tail intact. Over-deletion is safe here: it can only cause a
 # false FAIL, never a false PASS.
-src = re.sub(r'^.*//[^\n]*"[^\n]*$', '', src, flags=re.M)
-# String/char literals are stripped last: a pinned token inside a literal
-# must not satisfy a code check (and literal text cannot mask real code,
-# because the literal CONTENT is removed, not the line).
-src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
-src = re.sub(r"'(?:\\.|[^'\\])*'", "''", src)
+src = re.sub(r'//[^\n]*"[^"\n]*$', '', src, flags=re.M)
+# String/char literals are stripped per LINE: a file-level scan can mis-sync on
+# an escaped quote or continuation and swallow real code (this ate the pool=none
+# guard when run whole-file). Per-line keeps any mis-sync local to one line.
+_out = []
+for _line in src.splitlines(keepends=True):
+    if _line.count('"') >= 2:
+        _line = re.sub(r'"(?:\\.|[^"\\])*"', '""', _line)
+    if _line.count("'") >= 2:
+        _line = re.sub(r"'(?:\\.|[^'\\])*'", "''", _line)
+    _out.append(_line)
+src = "".join(_out)
 try:
     sys.stdout.write(src)
     sys.stdout.flush()
@@ -170,9 +176,9 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
     src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
     src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
     src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
-    src = re.sub(r'^.*//[^\n]*"[^"\n]*$', '', src, flags=re.M)
+    src = re.sub(r'//[^\n]*"[^"\n]*$', '', src, flags=re.M)
     stripped = src
-    aliases = set(re.findall(r"(?:const\s+)?(?:size_t|int32_t|int|auto)\s+(\w+)\s*=\s*" + LIMITS, stripped))
+    aliases = set(re.findall(r"(?:const\s+)?(?:[A-Za-z_][A-Za-z_0-9_]*\s+)+(\w+)\s*=\s*" + LIMITS, stripped))
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases))
     pat = r"(^|[^A-Za-z0-9_])\w+\s*<=\s*(?:" + LIMITS
     if alias_alt:
@@ -284,7 +290,7 @@ src = open("tools/hs-extract-batch/io-util.cpp").read()
 src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
 src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
-src = re.sub(r'^.*//[^\n]*"[^\n]*$', '', src, flags=re.M)
+src = re.sub(r'//[^\n]*"[^\n]*$', '', src, flags=re.M)
 
 def ordered(sync_handle, rename_arg):
     """True iff the exact sequence sync-handle-check -> handle.reset(); ->
