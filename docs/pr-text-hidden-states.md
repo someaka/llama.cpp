@@ -52,8 +52,7 @@ Zero redundancy.
 - Models opt in by appending to `t_hidden_layers` in the layer loop; archs
   with the last-layer `inp_out_ids` optimization also extend that guard
   (see `src/models/llama.cpp`).
-- Server endpoint preserves upstream output-allocation optimization when the
-  endpoint is disabled.
+- The `--no-hidden-states` flag disables the endpoint (kill-switch; nothing else in the server reads it).
 - Binary output formats use stable magic constants, documented in README.
 
 ## Testing

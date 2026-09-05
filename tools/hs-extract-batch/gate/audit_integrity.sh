@@ -192,6 +192,11 @@ if not aliases:
     # fail-closed: a collector that never fires means the grammar has rotted
     print(f"FAIL: Check 9 alias collector matched nothing in {tu} (grammar rot?)")
     failed = True
+# canary: the grammar itself must cover the live consumer limit
+# (target_layers.size()); catches silent grammar reversion.
+if "target_" not in LIMITS:
+    print("FAIL: Check 9 canary lost: LIMITS no longer covers target_layers.size()")
+    failed = True
 if failed:
     raise SystemExit(1)
 print("PASS: no <= against layer-count limits or their aliases")
@@ -319,5 +324,25 @@ if ok_ckpt and ok_out:
     print("PASS: fsync -> reset -> rename order enforced on both writers")
     raise SystemExit(0)
 raise SystemExit(1)
+PY
+echo "=== Check 19: /hidden-states capture toggle cleared on all return paths ==="
+# The capture disable must be structural (a scope guard declared at function
+# entry), not a manual call at the end of the success path: manual disables
+# leave the toggle enabled on early-error returns.
+python3 - <<'PY'
+import re
+src = open("tools/server/server-context.cpp").read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+ok_struct = re.search(r"struct hs_toggle_reset \{[^}]*llama_set_extract_hidden_states\(c, false\);", src)
+ok_use = re.search(r"hs_reset\{slot\.ctx_tgt\}", src)
+i = src.find("void send_hidden_states")
+sig_end = src.find("\n", i)
+first_disable = src.find("llama_set_extract_hidden_states", i)
+if not ok_struct:
+    print("FAIL: hs_toggle_reset scope guard missing in send_hidden_states"); raise SystemExit(1)
+if not ok_use:
+    print("FAIL: hs_toggle_reset guard not instantiated with slot.ctx_tgt"); raise SystemExit(1)
+print("PASS: capture disable is structural (scope guard)")
 PY
 echo "OK: All audit fix patterns verified"
