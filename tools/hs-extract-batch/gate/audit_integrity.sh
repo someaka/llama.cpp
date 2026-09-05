@@ -169,7 +169,7 @@ echo "=== Check 9: No off-by-one ==="
 # and 'li <= nl' both slipped earlier literal greps.)
 python3 - <<'PY'
 import re
-LIMITS = r"(?:n_layers_total|layers\.size\(\)|n_layer\b|n_layers\b)"
+LIMITS = r"(?:(?:target_|hs_)?layers?\.size\(\)|n_layers_total|n_layer\b|n_layers\b)"
 failed = False
 for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract-batch.cpp"]:
     src = open(tu).read()
@@ -178,7 +178,7 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
     src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
     src = re.sub(r'//[^\n]*"[^"\n]*$', '', src, flags=re.M)
     stripped = src
-    aliases = set(re.findall(r"(?:const\s+)?(?:[A-Za-z_][A-Za-z_0-9_]*\s+)+(\w+)\s*=\s*" + LIMITS, stripped))
+    aliases = set(re.findall(r"(\w+)\s*=\s*[^;\n]*" + LIMITS, stripped))
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases))
     pat = r"(^|[^A-Za-z0-9_])\w+\s*<=\s*(?:" + LIMITS
     if alias_alt:
@@ -188,6 +188,10 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
         if re.search(pat, line):
             print(f"FAIL: off-by-one risk in {tu}:{lineno}: {line.strip()}")
             failed = True
+if not aliases:
+    # fail-closed: a collector that never fires means the grammar has rotted
+    print(f"FAIL: Check 9 alias collector matched nothing in {tu} (grammar rot?)")
+    failed = True
 if failed:
     raise SystemExit(1)
 print("PASS: no <= against layer-count limits or their aliases")

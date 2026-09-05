@@ -2408,6 +2408,14 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
     void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
+        // Every return path below must leave capture off: the toggle is
+        // context-lifetime state on a shared context, and a leaked enable
+        // would make the server capture every decode for every request.
+        struct hs_toggle_reset {
+            llama_context * c;
+            ~hs_toggle_reset() { llama_set_extract_hidden_states(c, false); }
+        } hs_reset{slot.ctx_tgt};
+
         (void) batch;
 
         auto res = std::make_unique<server_task_result_hidden_states>();
@@ -2571,8 +2579,7 @@ private:
             res->hidden_states[layer] = std::move(vec);
         }
 
-        // disable hidden state extraction after reading
-        llama_set_extract_hidden_states(slot.ctx_tgt, false);
+        // capture is disabled by hs_toggle_reset on scope exit
 
         SLT_DBG(slot, "%s", "sending hidden states\n");
         queue_results.send(std::move(res));
