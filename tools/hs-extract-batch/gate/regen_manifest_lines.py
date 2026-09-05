@@ -10,7 +10,7 @@ Rule: find the capture call; walk back (max 60 lines) to the last line matching
 """
 import os, re, sys
 
-REPO = "/home/a/Bureau/Work/llama.cpp"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 MANIFEST = os.path.join(REPO, "docs/hidden-states-adoption-manifest.md")
 
 def last_add_before(lines, capture_idx, window=60):
