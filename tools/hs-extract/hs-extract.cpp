@@ -276,6 +276,15 @@ int main(int argc, char ** argv) {
     ctx_params.extract_hidden_states = true;
     ctx_params.no_perf = true;
 
+    std::vector<int> layers = hs_parse_layer_list(layer_str, n_layers + 1);
+    if (layers.empty()) {
+        // A failed parse is reported, not silently ignored: the error names
+        // the offending string, matching the shared parser's diagnostics
+        // (hs_parse_layer_list, tools/hs-extract-common/layer-parse.h).
+        fprintf(stderr, "Error: no valid layers in '%s'\n", layer_str);
+        return 1;
+    }
+
     LlamaContext ctx(llama_init_from_model(model, ctx_params));
     if (!ctx) {
         fprintf(stderr, "Error: failed to create context\n");
@@ -296,15 +305,6 @@ int main(int argc, char ** argv) {
 
     if (n_tokens_out <= 0) {
         fprintf(stderr, "Error: invalid hidden state token count (%d)\n", n_tokens_out);
-        return 1;
-    }
-
-    std::vector<int> layers = hs_parse_layer_list(layer_str, n_layers + 1);
-    if (layers.empty()) {
-        // A failed parse is reported, not silently ignored: the error names
-        // the offending string, matching the shared parser's diagnostics
-        // (hs_parse_layer_list, tools/hs-extract-common/layer-parse.h).
-        fprintf(stderr, "Error: no valid layers in '%s'\n", layer_str);
         return 1;
     }
 
