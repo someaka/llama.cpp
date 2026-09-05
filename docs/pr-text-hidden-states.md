@@ -28,7 +28,7 @@ Zero redundancy.
    capture conditional on cparams flag; models append `t_hidden_layers` at the
    end of each decoder block.
 2. **`hs-extract` CLI** (`tools/hs-extract/`): single-prompt JSON extraction
-   with layer selection, token-skip pooling, BOS suppression.
+   with layer selection and BOS suppression.
 3. **`hs-extract-batch` CLI** (`tools/hs-extract-batch/`): high-throughput
    batch extraction — thousands of prompts per model load; raw mean-pool mode
    and streaming-accumulator mode with checkpoint/resume; per-record sidecar

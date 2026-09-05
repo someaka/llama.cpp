@@ -73,12 +73,9 @@ volatile tree, adjust the `GOLD` constant.
 
 ## Required model
 
-- Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default; if
-  unset or the file is missing the gate aborts with `REFUSED`). Gate model:
-  gemma E2B Q4_K_M (sha256
+- Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default). Gate
+  model: gemma E2B Q4_K_M (sha256
   `389c868898bffed97fd178646f88562cafecc6f60983a636bac53b131fd068a2`).
-  Hard requirement: if absent the gate aborts with `REFUSED` and the path --
-  no fallback.
 
 ## Running the gate after a refactor
 

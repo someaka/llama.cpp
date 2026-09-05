@@ -74,8 +74,8 @@ tokens (the server's `-b` value; upstream default 2048) is refused with 400 (`ra
 input`). This is a hard correctness boundary: the capture resets per decode
 call, so a split prompt would silently return only its tail.
 
-The `--no-hidden-states` flag disables the endpoint and enables upstream
-output-allocation optimization for pure-generation workloads.
+The `--no-hidden-states` flag disables the endpoint. It is a kill-switch:
+nothing else in the server reads it.
 
 ### 4. Batch Extraction CLI (`hs-extract-batch`)
 

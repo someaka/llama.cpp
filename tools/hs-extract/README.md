@@ -37,12 +37,12 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > the backend (and `-ngl`) for research data.
 >
 > JSON serialization uses 9 significant digits, which round-trips float32
-> losslessly, so hs-extract and hs-extract-batch / the server can be compared
-> bit-for-bit on the same pinned backend. Note the outputs of different
-> FRONT-ENDS are not guaranteed bit-identical to each other (they agree to
-> ~1e-6 relative); at `-ngl 0` (CPU) layer 0 may already diverge in the 8th
-> significant digit. hs-extract-batch / the server are the parity-of-record
-> for probe data.
+> losslessly (JSON text → float32 reproduces the exact binary bits), so any
+> output can be compared bit-for-bit against binary captures on the same
+> pinned backend. Front-END outputs (hs-extract vs hs-extract-batch vs the
+> server) agree to ~1e-6 relative but are NOT bit-identical to each other;
+> at `-ngl 0` (CPU) they can diverge in the 8th significant digit.
+> hs-extract-batch / the server are the parity-of-record for probe data.
 
 
 ## Examples
