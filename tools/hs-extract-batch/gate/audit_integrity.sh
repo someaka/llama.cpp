@@ -45,7 +45,20 @@ done
 echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
 for f in src/llama-context.cpp; do
   grep -q "llama_context::get_hidden_state\b" "$f" || { echo "FAIL: get_hidden_state impl missing"; exit 1; }
-  sed -n '/^float \* llama_get_hidden_state(/,/^}/p' "$f" | grep -v '^\s*//' | grep -q "ctx->synchronize()" && echo "PASS: getters sync" || { echo "FAIL: llama_get_hidden_state does not synchronize"; exit 1; }
+  python3 - "$f" <<'CHK'
+import sys, re
+src = open(sys.argv[1]).read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
+body = src[src.find("float * llama_get_hidden_state("):]
+sync = body.find("ctx->synchronize()")
+first_ret = body.find("return")
+if sync == -1:
+    print("FAIL: llama_get_hidden_state does not synchronize"); raise SystemExit(1)
+if first_ret != -1 and sync > first_ret:
+    print("FAIL: synchronize must precede the first return"); raise SystemExit(1)
+print("PASS: getters sync (position-pinned)")
+CHK
 done
 echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
 python3 - <<'PY'
