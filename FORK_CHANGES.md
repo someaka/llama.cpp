@@ -132,7 +132,7 @@ The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Runs self-test (24/24; a checkpoint-fixture write failure fails the run rc=1
   rather than skipping)
 - Runs multi-ubatch pool=none integration test (hard row-count vs n_embd) and a decode-split refusal check (prompt > n_batch must 400)
-- 17 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline)
+- 18 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline, checkpoint durability order)
 
 GPU verification (CUDA + Vulkan) is manual  -  see CI header comments for
 commands (those manual builds configure `GGML_NATIVE=ON` on the target

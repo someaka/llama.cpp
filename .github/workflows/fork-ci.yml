@@ -397,6 +397,6 @@ jobs:
       - name: Quick audit fix integrity check
         run: |
           set -euo pipefail
-          # The 17 structural checks live in a committed script so the
+          # The 18 structural checks live in a committed script so the
           # same audit runs locally (gate) and in CI — one source of truth.
           bash tools/hs-extract-batch/gate/audit_integrity.sh
