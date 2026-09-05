@@ -55,8 +55,15 @@ sync = body.find("ctx->synchronize()")
 first_ret = body.find("return")
 if sync == -1:
     print("FAIL: llama_get_hidden_state does not synchronize"); raise SystemExit(1)
-if first_ret != -1 and sync > first_ret:
+# first-statement pin: synchronize must precede the first return AND be the
+# first statement of the function body (catches throw/reorder hoists)
+_first_ret = body.find("return")
+if _first_ret != -1 and sync > _first_ret:
     print("FAIL: synchronize must precede the first return"); raise SystemExit(1)
+_brace = body.find("{")
+_stmt = re.sub(r"//[^\n]*", " ", body[_brace + 1 : sync]).strip()
+if _stmt:
+    print("FAIL: synchronize must be the first statement of llama_get_hidden_state"); raise SystemExit(1)
 print("PASS: getters sync (position-pinned)")
 CHK
 done
@@ -363,6 +370,13 @@ if guard_pos == -1:
 first_return = body.find("return")
 if first_return != -1 and first_return < guard_pos:
     print("FAIL: hs_toggle_reset guard instantiated after an early return (leak path)"); raise SystemExit(1)
+# first-statement pin: nothing but whitespace between the function's opening
+# brace and the guard (catches return- AND throw-class early exits)
+_first_brace = body.find("{")
+_guard_decl = body.find("struct hs_toggle_reset")
+between = re.sub(r"//[^\n]*", " ", body[_first_brace + 1 : _guard_decl]).strip()
+if between:
+    print("FAIL: hs_toggle_reset guard must be the first statement of send_hidden_states"); raise SystemExit(1)
 print("PASS: capture disable is structural (scope guard)")
 PY
 echo "OK: All audit fix patterns verified"
