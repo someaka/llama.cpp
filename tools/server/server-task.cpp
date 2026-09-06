@@ -1488,29 +1488,50 @@ json server_task_result_embd::to_json_oaicompat() {
 // server_task_result_hidden_states
 //
 json server_task_result_hidden_states::to_json() {
-    // Round each float through %.9g so the wire form carries exactly the float32's
-    // value with compact digits (nlohmann's float->double widening otherwise prints
-    // shortest-double digits, ~40% larger and unlike the CLI's %.9g text). 9
-    // significant digits round-trip float32 losslessly, so parsed values are
-    // bit-identical to the CLI pipeline's.
-    auto to_json_f32 = [](const std::vector<float> & vec) {
-        json arr = json::array();
-        for (float v : vec) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%.9g", (double) v);
-            arr.push_back(strtod(buf, nullptr));
-        }
-        return arr;
-    };
+    // Generic form (used by task-pipeline consumers): doubles as-is. The
+    // /hidden-states endpoint writes to_json_text() instead -- nlohmann's
+    // double writer re-expands ~0.3% of %.9g values past 9 digits, so the
+    // wire form is built as text there.
     json layers = json::object();
     for (const auto & kv : hidden_states) {
-        layers[std::to_string(kv.first)] = to_json_f32(kv.second);
+        layers[std::to_string(kv.first)] = kv.second;
     }
     return json {
         {"index",            index},
         {"hidden_states",    layers},
         {"tokens_evaluated", n_tokens},
     };
+}
+
+std::string server_task_result_hidden_states::to_json_text() const {
+    // Same envelope as to_json(), but every value is a %.9g literal -- the
+    // CLI tools' exact text precision, emitted as raw JSON numbers (9
+    // significant digits round-trip float32 losslessly).
+    auto render_values = [](const std::vector<float> & vec) {
+        std::string out = "[";
+        for (size_t i = 0; i < vec.size(); i++) {
+            if (i > 0) {
+                out += ",";
+            }
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.9g", (double) vec[i]);
+            out += buf;
+        }
+        out += "]";
+        return out;
+    };
+    // Envelope matches to_json()'s shape (one result object per call).
+    std::string out = "{\"index\":" + std::to_string(index) + ",\"hidden_states\":{";
+    bool first_layer = true;
+    for (const auto & kv : hidden_states) {
+        if (!first_layer) {
+            out += ",";
+        }
+        first_layer = false;
+        out += "\"" + std::to_string(kv.first) + "\":" + render_values(kv.second);
+    }
+    out += "},\"tokens_evaluated\":" + std::to_string(n_tokens) + "}";
+    return out;
 }
 
 //

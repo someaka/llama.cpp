@@ -5527,7 +5527,7 @@ void server_routes::init_routes() {
         }
 
         // Create and queue the task
-        json responses = json::array();
+        std::vector<std::string> res_texts;
         auto & rd = res->rd;
         {
             std::vector<server_task> tasks;
@@ -5564,13 +5564,25 @@ void server_routes::init_routes() {
         } else {
             for (auto & result : all_results.results) {
                 GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(result.get()) != nullptr);
-                responses.push_back(result->to_json());
+                auto * hs_result = dynamic_cast<server_task_result_hidden_states*>(result.get());
+                // %.9g text form: nlohmann's double writer re-expands ~0.3% of
+                // values past 9 significant digits, so the wire numbers are
+                // emitted raw instead of through the json serializer.
+                res_texts.push_back(hs_result->to_json_text());
             }
         }
 
-        // Format response
-        json root = json(responses);
-        res->ok(root);
+        // Format response (values are raw %.9g JSON numbers)
+        std::string root_text = "[";
+        for (size_t i = 0; i < res_texts.size(); i++) {
+            if (i > 0) {
+                root_text += ",";
+            }
+            root_text += res_texts[i];
+        }
+        root_text += "]";
+        res->status = 200;
+        res->data = std::move(root_text);
         return res;
     };
 

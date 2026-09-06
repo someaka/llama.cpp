@@ -491,6 +491,12 @@ struct server_task_result_hidden_states : server_task_result {
     int32_t n_tokens;
 
     virtual json to_json() override;
+
+    // Full response text with each value rendered as a %.9g JSON number --
+    // byte-identical to the CLI tools' text precision. nlohmann cannot emit
+    // this (its double writer re-expands ~0.3% of values past 9 digits), so
+    // the endpoint writes this text directly instead of dumping to_json().
+    std::string to_json_text() const;
 };
 
 struct server_task_result_rerank : server_task_result {
