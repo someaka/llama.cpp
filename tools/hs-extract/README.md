@@ -40,9 +40,12 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > losslessly (JSON text → float32 reproduces the exact binary bits), so any
 > output can be compared bit-for-bit against binary captures on the same
 > pinned backend. Front-END outputs (hs-extract vs hs-extract-batch vs the
-> server) agree to ~1e-6 relative but are NOT bit-identical to each other;
-> at `-ngl 0` (CPU) they can diverge in the 8th significant digit.
-> hs-extract-batch / the server are the parity-of-record for probe data.
+> server) are bit-identical to each other when the backend build AND the
+> effective Flash-Attention setting are pinned (verified on CUDA and CPU);
+> when the front-ends resolve Flash-Attention differently (possible at
+> `-ngl 0`: this CLI enables it, the server disables it), values diverge
+> grossly. hs-extract-batch / the server are the parity-of-record for
+> probe data.
 
 
 ## Examples

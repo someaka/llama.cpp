@@ -980,10 +980,13 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 
 Values on the wire are JSON numbers rounded through 9 significant digits
 (the same precision as the CLI tools' text output); each number parses back
-to the exact float32 value, so for the same model, backend build, and
-`-ngl`, extracted values are bit-identical to the CLI pipeline after
-parsing. Across different front-ends or builds, values agree only to float
-rounding noise (see the accuracy note below).
+to the exact float32 value. Numeric parity across front-ends: on the same
+pinned backend build AND the same effective Flash-Attention setting, all
+fork front-ends are bit-identical after parsing (verified on CUDA and CPU).
+When the effective Flash-Attention resolution differs between front-ends
+(observed at `-ngl 0`: the CLI enables it, the server disables it), values
+diverge grossly (up to ~1e3 relative at deep layers) -- see the accuracy
+note below.
 
 *Request body (JSON):*
 
@@ -1001,9 +1004,12 @@ rounding noise (see the accuracy note below).
 - **`skip_mean`**: Returns the mean over tokens `[skip_offset, n_tokens)`. Shape per layer: `[1, n_embd_out]`.
 - **`none`**: Returns all per-token hidden states without pooling. Shape per layer: `[n_tokens, n_embd_out]`.
 
-> Numeric parity: values agree with the `hs-extract` / `hs-extract-batch` CLIs to
-> ~1e-6 relative on the same pinned backend, but are not guaranteed bit-identical
-> across front-ends. Use one front-end (and one pinned `-ngl`) for a research run.
+> Numeric parity: on the same pinned backend build AND the same effective
+> Flash-Attention setting, the `/hidden-states` values are bit-identical to the
+> `hs-extract` / `hs-extract-batch` CLIs after parsing (verified on CUDA and CPU).
+> If the two front-ends resolve Flash-Attention differently (possible at `-ngl 0`),
+> values diverge grossly. Use one front-end, one pinned `-ngl`, and one effective
+> Flash-Attention setting for a research run.
 
 *Response format:*
 
