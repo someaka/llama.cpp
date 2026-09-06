@@ -128,12 +128,22 @@ bad = []
 total_calls = 0
 for tu in tool_tus:
     raw = Path(tu).read_text()
+    raw_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
+    # Strip line comments FIRST: apostrophes inside // comments can pair into a
+    # fake multi-line char literal during the literal pass and swallow real code
+    # (this ate 3 of 8 checked_write sites in hs-extract-batch.cpp once).
+    raw = re.sub(r'//[^\n]*', '', raw)
     # Strip block comments and string/char literals BEFORE any paren/depth
     # analysis: parens inside them must not poison the continuation joiner
     # (D8: '"( v6"' used to disarm the whole rest of the TU).
     raw = re.sub(r'/\*.*?\*/', ' ', raw, flags=re.S)
     raw = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw)
     raw = re.sub(r"'(?:\\.|[^'\\])*'", "''", raw)
+    stripped_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
+    if stripped_calls < raw_calls:
+        # fail-closed: the literal stripper mis-synced and ate real call sites
+        print(f"FAIL: literal stripper ate {raw_calls - stripped_calls} checked_write call sites in {tu}; fix the strip order")
+        raise SystemExit(1)
     lines = raw.splitlines()
     # Join continuation lines so multi-line if(...) conditions are seen as
     # one logical statement: a call on a continuation line whose statement
