@@ -2407,7 +2407,7 @@ private:
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
-    void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
+    void send_hidden_states(const server_slot & slot) {
         // Every return path below must leave capture off: the toggle is
         // context-lifetime state on a shared context, and a leaked enable
         // would make the server capture every decode for every request.
@@ -2415,8 +2415,6 @@ private:
             llama_context * c;
             ~hs_toggle_reset() { llama_set_extract_hidden_states(c, false); }
         } hs_reset{slot.ctx_tgt};
-
-        (void) batch;
 
         auto res = std::make_unique<server_task_result_hidden_states>();
         res->id       = slot.task->id;
@@ -4067,7 +4065,7 @@ private:
                 }
 
                 if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
-                    send_hidden_states(slot, batch_view);
+                    send_hidden_states(slot);
                     slot.release();
                     slot.i_batch = -1;
                     return;

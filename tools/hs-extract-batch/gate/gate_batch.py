@@ -17,6 +17,7 @@ output must be byte-identical to the full run's output (checkpoints v2+
 store raw sums losslessly, so float accumulation order is preserved).
 """
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -97,6 +98,10 @@ def run_kill_and_resume(bin_path, model, layers, out, extra, assign_key="main"):
     # kill run
     cmd = base_cmd(bin_path, model, layers, out, extra + ["--checkpoint-every", "5"], assign_key)
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # Wall-clock bound on the kill phase: symmetric with run_full's timeout so a
+    # wedged binary (GPU hang after checkpoint 1) fails the gate instead of
+    # hanging the stderr drain forever.
+    deadline = time.monotonic() + 1800
     checkpoints_seen = 0
     killed = False
     for line in proc.stderr:
@@ -106,7 +111,11 @@ def run_kill_and_resume(bin_path, model, layers, out, extra, assign_key="main"):
                 proc.send_signal(signal.SIGKILL)
                 killed = True
                 break
-    proc.wait()
+        if time.monotonic() > deadline:
+            proc.kill()
+            proc.wait()
+            sys.exit(f"FAIL: kill run exceeded 1800s wall clock (saw {checkpoints_seen} checkpoints)")
+    proc.wait(timeout=60)
     if not killed:
         proc.kill()
         sys.exit(f"FAIL: never saw 2nd checkpoint in kill run (saw {checkpoints_seen})")
@@ -182,7 +191,7 @@ def main():
         print(f"[{mode}] {name} ...", flush=True)
         digests[name] = do_scenario(bin_path, name, model_key, layers, extra, assign_key, is_resume, target / name)
 
-    (GOLD / f"digests_{mode}.json").write_text(__import__("json").dumps(digests, indent=2))
+    (GOLD / f"digests_{mode}.json").write_text(json.dumps(digests, indent=2))
 
     if mode == "baseline":
         n = sum(len(v) for v in digests.values())
@@ -203,7 +212,7 @@ def main():
             sys.exit(f"REFUSED: baseline digests missing at {dig_path} and no committed anchor at "
                      f"{committed} - restore gate/digests_baseline.json from a trusted commit; "
                      f"never re-baseline from the binary under test")
-    base = __import__("json").loads(dig_path.read_text())
+    base = json.loads(dig_path.read_text())
     # A baseline containing scenarios that were renamed/removed (or a typo'd
     # key) would silently shrink the comparison to the intersection. Refuse.
     stale = sorted(set(base) - {s[0] for s in SCENARIOS})

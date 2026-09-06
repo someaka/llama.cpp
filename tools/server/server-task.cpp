@@ -1488,9 +1488,23 @@ json server_task_result_embd::to_json_oaicompat() {
 // server_task_result_hidden_states
 //
 json server_task_result_hidden_states::to_json() {
+    // Round each float through %.9g so the wire form carries exactly the float32's
+    // value with compact digits (nlohmann's float->double widening otherwise prints
+    // shortest-double digits, ~40% larger and unlike the CLI's %.9g text). 9
+    // significant digits round-trip float32 losslessly, so parsed values are
+    // bit-identical to the CLI pipeline's.
+    auto to_json_f32 = [](const std::vector<float> & vec) {
+        json arr = json::array();
+        for (float v : vec) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.9g", (double) v);
+            arr.push_back(strtod(buf, nullptr));
+        }
+        return arr;
+    };
     json layers = json::object();
     for (const auto & kv : hidden_states) {
-        layers[std::to_string(kv.first)] = kv.second;
+        layers[std::to_string(kv.first)] = to_json_f32(kv.second);
     }
     return json {
         {"index",            index},

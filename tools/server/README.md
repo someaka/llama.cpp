@@ -978,6 +978,11 @@ Same as the `/v1/embeddings` endpoint.
 
 This endpoint extracts per-layer hidden-state vectors from a forward pass. It does not generate tokens.
 
+Values on the wire are JSON numbers rounded through 9 significant digits
+(the same precision as the CLI tools' text output); each number parses back
+to the exact float32 value, so values are bit-identical to the CLI pipeline
+after parsing.
+
 *Request body (JSON):*
 
 | Field | Type | Required | Default | Description |
