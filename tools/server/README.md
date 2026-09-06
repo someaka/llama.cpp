@@ -980,8 +980,10 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 
 Values on the wire are JSON numbers rounded through 9 significant digits
 (the same precision as the CLI tools' text output); each number parses back
-to the exact float32 value, so values are bit-identical to the CLI pipeline
-after parsing.
+to the exact float32 value, so for the same model, backend build, and
+`-ngl`, extracted values are bit-identical to the CLI pipeline after
+parsing. Across different front-ends or builds, values agree only to float
+rounding noise (see the accuracy note below).
 
 *Request body (JSON):*
 

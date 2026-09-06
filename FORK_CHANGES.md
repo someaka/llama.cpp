@@ -114,10 +114,10 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 - `examples/hidden-states`  -  minimal public-API example (installed like
   upstream siblings).
 - `tools/cvector-generator/{positive,negative}-gemma4.txt`  -  sample
-  `--cvector-file` conversation pairs in Gemma chat format (the upstream
-  samples are llama-format; these exercise the same tool against a gemma4
-  model). Data only: not referenced by any build or test target.
-  data for Gemma-4 cvector generation.
+  conversation pairs in Gemma chat format for the cvector generator's
+  `--positive-file` / `--negative-file` options (the upstream samples are
+  llama-format; these exercise the same tool against a gemma4 model).
+  Data only: not referenced by any build or test target.
 - `tests/test-hidden-states.cpp` / `tests/test-hidden-states.c`  -  model
   exercising tests for the public extraction API in both C++ and C (run in
   fork CI against a real GGUF).
