@@ -19,15 +19,31 @@ store raw sums losslessly, so float accumulation order is preserved).
 import hashlib
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import sys
+import time
 
 # Per-process scratch root: two concurrent gate instances must never share
 # scenario dirs (one's rmtree would delete the other's in-flight writes).
 # Digest comparison is against the committed anchor, so distinct scratch roots
 # change nothing about what is compared.
 GOLD = pathlib.Path("/tmp/hs-batch-golden") / f"proc-{os.getpid()}"
+
+def _prune_stale_scratch():
+    """Remove proc-* scratch roots older than a day (crashed gate runs)."""
+    root = pathlib.Path("/tmp/hs-batch-golden")
+    if not root.is_dir():
+        return
+    now = time.time()
+    for d in root.glob("proc-*"):
+        try:
+            if now - d.stat().st_mtime > 86400:
+                shutil.rmtree(d)
+        except OSError:
+            pass  # a live instance owns it; skip
+
 # Golden INPUT fixtures are committed to the repo (deterministic, ~4KB);
 # volatile scenario outputs stay under /tmp by design.
 INPUTS = pathlib.Path(__file__).resolve().parent / "golden_inputs"
@@ -152,11 +168,12 @@ def main():
         if not (INPUTS / req).exists():
             sys.exit(f"REFUSED: inputs missing at {INPUTS / req} - run gen_inputs.py")
 
+    _prune_stale_scratch()
+
     target = GOLD / mode
     if target.exists():
         for p in target.iterdir():
             if p.is_dir():
-                import shutil
                 shutil.rmtree(p)
     target.mkdir(parents=True, exist_ok=True)
 

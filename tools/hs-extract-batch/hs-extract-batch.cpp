@@ -1530,7 +1530,7 @@ static int run_batch(const Args& args) {
     if (args.save_per_record) {
         records_path = std::string(args.output_path) + ".records.bin";
         records_temp_path = records_path + ".tmp";
-        records_closer.fp = fopen(records_temp_path.c_str(), "wb");
+        records_closer = FilePtr(fopen(records_temp_path.c_str(), "wb"));
         if (!records_closer) {
             fprintf(stderr, "Error: cannot open per-record file %s: %s\n",
                     records_temp_path.c_str(), strerror(errno));

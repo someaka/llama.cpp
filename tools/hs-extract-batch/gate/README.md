@@ -46,7 +46,7 @@ missing model file likewise aborts (`REFUSED`) -- the gate never falls back.
 
 - `gate_batch.py` - the gate driver. Two modes: `baseline <cuda-bin>` (run all
   scenarios with the PRE-refactor binary, save every artifact digest under
-  `/tmp/hs-batch-golden/baseline/` and write `digests_baseline.json`), and
+  the per-process scratch `baseline/` and write `digests_baseline.json`), and
   `check <cuda-bin>` (run all scenarios with the binary under test and compare
   every artifact digest against the baseline).
 - `gen_inputs.py` - deterministic generator for the gate inputs (24 prompts,
@@ -64,12 +64,15 @@ missing model file likewise aborts (`REFUSED`) -- the gate never falls back.
 
 Input fixtures are COMMITTED at `golden_inputs/` and are what the driver
 reads (`INPUTS`) -- they are not /tmp-dependent. The driver still uses
-`/tmp/hs-batch-golden` as its working tree for VOLATILE scenario outputs,
-baseline artifacts, and digests (`GOLD`). `/tmp` is volatile; if the layout
-is gone, the check mode never needs the baseline artifacts (it compares
-digests, not files), but it does need `/tmp/hs-batch-golden/
-digests_baseline.json` (see "Re-capturing the baseline"). To relocate the
-volatile tree, adjust the `GOLD` constant.
+`/tmp/hs-batch-golden/proc-<pid>/` as its per-process working tree for
+VOLATILE scenario outputs, baseline artifacts, and digests (`GOLD`); the
+`proc-<pid>` keying lets concurrent gate instances never share scratch
+state (a shared tree raced: one instance's scenario cleanup deleted
+another's in-flight directory). Startup prunes `proc-*` trees older than a
+day (crashed runs). `/tmp` is volatile; if the layout is gone, check mode
+never needs the baseline artifacts (it compares digests, not files) and
+falls back to the COMMITTED anchor at `gate/digests_baseline.json`. To
+relocate the volatile tree, adjust the `GOLD` constant.
 
 ## Required model
 
@@ -107,7 +110,7 @@ NOT comparable -- never mix anchors across backends; re-capture instead:
 ```bash
 python3 tools/hs-extract-batch/gate/gate_batch.py baseline \
     build-cuda/bin/llama-hs-extract-batch
-cp /tmp/hs-batch-golden/digests_baseline.json \
+cp /tmp/hs-batch-golden/proc-*/digests_baseline.json \
    tools/hs-extract-batch/gate/digests_baseline.json
 ```
 
