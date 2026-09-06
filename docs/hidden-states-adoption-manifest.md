@@ -2,7 +2,7 @@
 
 Generated 2026-08-16 from the exhaustive classification pass over src/models/
 (151 arch files at the 2026-09-04 HEAD; the 2026-08-17 syncs brought bailingmoe3
-(earlier same-day sync, 373336672, before the ec5368b2a merge);
+(earlier same-day sync, before the large-models sync merge);
 127 builders with graph loops classified; every row carries
 file:line evidence from source reads, not sampling).
 

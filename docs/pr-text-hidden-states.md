@@ -20,8 +20,9 @@ Zero redundancy.
 
 ## What's included
 
-1. **Core API** (`include/llama.h`, `src/llama-context.cpp`, graph, cparams,
-   4 model files): `llama_set_extract_hidden_states`, `llama_get_hidden_state`,
+1. **Core API** (`include/llama.h`, `src/llama-context.cpp`, graph, cparams;
+   a per-block capture tap sewn into all 101 graph builders, plus an
+   embeddings-capture hook in 4 of them): `llama_set_extract_hidden_states`, `llama_get_hidden_state`,
    `llama_get_hidden_state_n_tokens`,
    `llama_get_hidden_states_batch`. The getters synchronize the context
    (same convention as the logits/embeddings getters). Graph capture buffers allocated per decode;

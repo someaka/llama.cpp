@@ -386,6 +386,20 @@ jobs:
           fi
           echo "PASS: decode-split prompt refused with 400"
 
+      - name: PR-surface whitespace check
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          # PR-facing files must be whitespace-clean: no trailing whitespace,
+          # no blank line at EOF (docs/history Markdown hard-breaks exempt).
+          BAD=$(git diff 8887a48f0..HEAD --check -- \
+            tools/server tools/hs-extract tools/hs-extract-batch \
+            tools/hs-extract-common tools/hs-extract-batch-test \
+            common/llama-raii.h include/llama.h \
+            ':!docs/history' || true)
+          if [ -n "$BAD" ]; then echo "$BAD"; exit 1; fi
+          echo "PASS: PR-surface whitespace clean"
+
       - name: Adoption manifest drift check
         timeout-minutes: 5
         run: |

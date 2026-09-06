@@ -632,4 +632,3 @@ bool read_checkpoint(
     accumulators = std::move(restored);
     return true;
 }
-
