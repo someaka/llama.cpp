@@ -29,8 +29,8 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx  = 2048;
     cparams.n_batch = 2048;
-    // One ubatch per prompt: the capture path parity rule (fork D2/C1). A
-    // split ubatch changes which kernel shapes produce the capture.
+    // One ubatch per prompt: a split ubatch changes which kernel shapes
+    // produce the capture, so both paths must decode the same way.
     cparams.n_ubatch = cparams.n_ctx;
     // Server init keeps embeddings off for every request type (common_params
     // default); logits are a decode-time batch flag in both paths.
