@@ -1532,7 +1532,8 @@ static int run_batch(const Args& args) {
         records_temp_path = records_path + ".tmp";
         records_closer.fp = fopen(records_temp_path.c_str(), "wb");
         if (!records_closer) {
-            fprintf(stderr, "Error: cannot open per-record file %s\n", records_temp_path.c_str());
+            fprintf(stderr, "Error: cannot open per-record file %s: %s\n",
+                    records_temp_path.c_str(), strerror(errno));
             return 1;
         }
         FILE* records_fp = records_closer.fp;

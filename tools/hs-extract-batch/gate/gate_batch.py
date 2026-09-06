@@ -23,7 +23,11 @@ import signal
 import subprocess
 import sys
 
-GOLD = pathlib.Path("/tmp/hs-batch-golden")
+# Per-process scratch root: two concurrent gate instances must never share
+# scenario dirs (one's rmtree would delete the other's in-flight writes).
+# Digest comparison is against the committed anchor, so distinct scratch roots
+# change nothing about what is compared.
+GOLD = pathlib.Path("/tmp/hs-batch-golden") / f"proc-{os.getpid()}"
 # Golden INPUT fixtures are committed to the repo (deterministic, ~4KB);
 # volatile scenario outputs stay under /tmp by design.
 INPUTS = pathlib.Path(__file__).resolve().parent / "golden_inputs"
