@@ -6,7 +6,7 @@ capture works post-refactor, who may join, and how refusals surface.
 # Layer Index Convention (canonical)
 
 > This section is the single source of truth for layer numbering across the
-> fork's hidden-state surface and CrimsonRed's consumers. The same wording
+> fork's hidden-state surface and the CLIs' consumers. The same wording
 > appears in every doc that discusses layer indices; do not paraphrase it.
 
 The public layer index follows the **hidden_states convention**, matching

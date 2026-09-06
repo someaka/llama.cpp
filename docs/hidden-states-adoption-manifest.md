@@ -10,7 +10,7 @@ file:line evidence from source reads, not sampling).
 # Layer Index Convention (canonical)
 
 > This section is the single source of truth for layer numbering across the
-> fork's hidden-state surface and CrimsonRed's consumers. The same wording
+> fork's hidden-state surface and the CLIs' consumers. The same wording
 > appears in every doc that discusses layer indices; do not paraphrase it.
 
 The public layer index follows the **hidden_states convention**, matching
@@ -276,4 +276,3 @@ real omissions of this manifest, listed at the bottom.
   no dormant tap sewn yet.
 - `qwen4exp.cpp` (1279 lines): registered standalone arch, hc-stream hybrid
   residual — needs a refusal-or-adopt decision before a tap can be honest.
-

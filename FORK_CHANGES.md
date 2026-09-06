@@ -65,7 +65,8 @@ New POST endpoint on llama-server for extracting hidden states via HTTP:
 ```bash
 curl -X POST http://localhost:8080/hidden-states \
   -H "Content-Type: application/json" \
-  -d '{"input":"text to analyze","layers":[0,5,10],"pool":"skip_mean","skip_offset":2}' 
+  -d '{"input":"text to analyze","layers":[0,5,10],"pool":"skip_mean","skip_offset":2}'
+
 ```
 
 Pooling modes: `last` (last token), `skip_mean` (masked mean), `none` (per-token).

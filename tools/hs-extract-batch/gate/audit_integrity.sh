@@ -166,8 +166,8 @@ PY
 echo "=== Check 7: assignment reader uses explicit status ==="
 strip_comments tools/hs-extract-batch/assignments-io.h | grep -q "AssignmentReadStatus::error" && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
 echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
-# auto_size_ctx was removed by cb140146b (single-pass pre-scan
-# refactor); its successor must uphold the same contract: pure
+# auto_size_ctx was removed in the single-pass pre-scan
+# refactor; its successor must uphold the same contract: pure
 # stream walk, returns bool, never exits.
 # The function must exist where this check scans it: if it moves TU the
 # sed range goes empty and the exit() scan would pass vacuously.

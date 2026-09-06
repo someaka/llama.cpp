@@ -99,8 +99,8 @@ volatile tree, adjust the `GOLD` constant.
 
 Only meaningful from a commit that is TRUSTED (e.g. the tree before a
 refactor lands). The current baseline was captured 2026-08-18 on the
-production CUDA path (RTX 3090, from-scratch `build-cuda` at fork commit
-`e6a499a7e`, `-ngl 99`, inputs from `gen_inputs.py`). The CPU-era digests
+production CUDA path (RTX 3090, from-scratch `build-cuda`, `-ngl 99`,
+inputs from `gen_inputs.py`). The CPU-era digests
 (before 2026-08-18) were captured on a CUDA-off binary at `-ngl 0` and are
 NOT comparable -- never mix anchors across backends; re-capture instead:
 
