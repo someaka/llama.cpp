@@ -24,7 +24,9 @@ Zero redundancy.
    a per-block capture tap sewn into all 101 graph builders, plus an
    embeddings-capture hook in 4 of them): `llama_set_extract_hidden_states`, `llama_get_hidden_state`,
    `llama_get_hidden_state_n_tokens`,
-   `llama_get_hidden_states_batch`. The getters synchronize the context
+   `llama_get_hidden_states_batch`, plus `llama_model_supports_hidden_states(model)`
+   (capability-registry query) and `llama_model_arch_name(model)` (names the
+   architecture in refusal errors). The getters synchronize the context
    (same convention as the logits/embeddings getters). Graph capture buffers allocated per decode;
    capture conditional on cparams flag; models append `t_hidden_layers` at the
    end of each decoder block.
@@ -68,12 +70,9 @@ Zero redundancy.
   `test-recurrent-state-rollback-nemotron-h` registration in
   `tests/CMakeLists.txt`. Both files are zero-diff (resp. add-only)
   against upstream after the restores.
-- One included change is deliberately outside the extraction feature:
-  `src/llama-kv-cells.h` replaces a per-position `std::map` with a flat
-  count table. It is included here because sustained extraction
-  workloads (200K+ prompts, millions of decode cycles) exposed heap churn
-  in the rb-tree node allocator; the flat table removes that surface. Happy
-  to split it out if maintainers prefer.
+- No performance side-changes are included; sustained extraction workloads
+  (200K+ prompts) showed rb-tree allocator churn in llama-kv-cells — if it
+  reproduces on master we'll file it separately.
 - Both CLIs + server endpoint exercised daily on RTX 3090 (CUDA) and AMD
   Renoir iGPU (Vulkan/RADV) — cross-backend validated, identical results
   within quantization tolerance.

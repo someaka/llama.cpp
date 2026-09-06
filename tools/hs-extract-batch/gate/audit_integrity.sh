@@ -126,6 +126,7 @@ tool_tus = [
 import re
 bad = []
 total_calls = 0
+sum_raw = 0
 for tu in tool_tus:
     raw = Path(tu).read_text()
     raw_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
@@ -136,7 +137,7 @@ for tu in tool_tus:
     # Strip block comments and string/char literals BEFORE any paren/depth
     # analysis: parens inside them must not poison the continuation joiner
     # (D8: '"( v6"' used to disarm the whole rest of the TU).
-    raw = re.sub(r'/\*.*?\*/', ' ', raw, flags=re.S)
+    raw = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), raw, flags=re.S)
     raw = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw)
     raw = re.sub(r"'(?:\\.|[^'\\])*'", "''", raw)
     stripped_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
@@ -144,6 +145,7 @@ for tu in tool_tus:
         # fail-closed: the literal stripper mis-synced and ate real call sites
         print(f"FAIL: literal stripper ate {raw_calls - stripped_calls} checked_write call sites in {tu}; fix the strip order")
         raise SystemExit(1)
+    sum_raw += raw_calls
     lines = raw.splitlines()
     # Join continuation lines so multi-line if(...) conditions are seen as
     # one logical statement: a call on a continuation line whose statement
@@ -171,7 +173,7 @@ for tu in tool_tus:
 if bad:
     print('\n'.join(bad))
     raise SystemExit(1)
-print(f'PASS ({total_calls} checked_write call sites, all tested)')
+print(f'PASS ({total_calls} checked_write call statements ({sum_raw} call sites), all tested)')
 PY
 echo "=== Check 7: assignment reader uses explicit status ==="
 strip_comments tools/hs-extract-batch/assignments-io.h | grep -q "AssignmentReadStatus::error" && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
@@ -294,8 +296,13 @@ if [ ! -f common/llama-raii.h ]; then
   echo "FAIL: common/llama-raii.h missing"; exit 1
 fi
 for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp tests/test-hidden-states.cpp; do
-  if ! grep -q 'llama-raii.h' "$f"; then
-    echo "FAIL: $f does not include llama-raii.h"; exit 1
+  # code, not prose: the raw file must carry the include, AND the stripped
+  # file must still carry an include statement at that spot (so a commented-out
+  # include cannot satisfy this; the literal pass empties quoted names).
+  raw_has=$(grep -cE '^#[[:space:]]*include[[:space:]]*"llama-raii\.h"' "$f" || true)
+  stripped_has=$(strip_comments "$f" | grep -cE '^#[[:space:]]*include[[:space:]]*""' || true)
+  if [ "$raw_has" -lt 1 ] || [ "$stripped_has" -lt 1 ]; then
+    echo "FAIL: $f does not include llama-raii.h (raw=$raw_has stripped_includes=$stripped_has)"; exit 1
   fi
 done
 echo "PASS"

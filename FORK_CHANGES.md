@@ -23,6 +23,7 @@ Adds per-layer residual stream activation extraction to the llama.cpp compute gr
 - **`llama_get_hidden_state_n_tokens(ctx)`**  -  token count
 - **`llama_get_hidden_states_batch()`**  -  batch-get multiple layers in one call
 - **`llama_model_supports_hidden_states(model)`**  -  capability registry query (single source of truth in `llm_arch_supports_hidden_states()`)
+- **`llama_model_arch_name(model)`**  -  architecture name string; used to name the architecture in extraction-refusal errors (context creation, runtime setter, server 400)
 
 Model builders push the residual stream output of each decoder layer into
 `t_hidden_layers` through the `capture_layer_output()` graph helper
