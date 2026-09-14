@@ -87,9 +87,11 @@ Production tool for processing thousands of prompts:
 - Async double-buffered pipeline (CPU masked-mean overlaps GPU decode)
 - Checkpoint/resume support
 - Binary I/O format (magic 0x43524432, "binary accumulator format v2")
-- Self-test mode (24 tests: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 19b payload-flip reject, 18-21
+- Self-test mode (28 checks: 1-16 kernels, 16b/16c FNV vectors, 17 checkpoint fixture, 19b payload-flip reject, 18-21
   depend on 17's checkpoint write - if the fixture write fails the self-test fails rc=1
-  with the attempted count dropping accordingly; no model required)
+  with the attempted count dropping accordingly; 22 CRD2 output round-trip
+  (mean = sum/count), 23 CRD1 reader status contract + exact EOF, 23b negative-skip
+  parse-site rejection, 24 legacy v1 checkpoint restore; no model required)
 - `--profile` flag for per-step timing analysis
 - Hard-error semantics on all range violations (no silent clamping, no graceful degradation)
 
@@ -135,7 +137,7 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Builds with `GGML_NATIVE=OFF` (portable binaries for the CI matrix; no
   host-specific ISA assumptions)
-- Runs self-test (24/24; a checkpoint-fixture write failure fails the run rc=1
+- Runs self-test (28/28; a checkpoint-fixture write failure fails the run rc=1
   rather than skipping)
 - Runs multi-ubatch pool=none integration test (hard row-count vs n_embd) and a decode-split refusal check (prompt > n_batch must 400)
 - 19 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline, checkpoint durability order)
