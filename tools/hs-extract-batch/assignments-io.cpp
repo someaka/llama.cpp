@@ -120,6 +120,13 @@ AssignmentReadResult read_prompt_assignments(FILE* f) {
 
         if (a.mask_type == 0) {
             if (fread(&a.skip, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
+            // B4: skip gets the same parse-site validation as group_id/mask_id.
+            // A negative skip would only surface as a compute_masked_mean
+            // failure deep in the consumer, after that prompt's GPU work.
+            if (a.skip < 0) {
+                fprintf(stderr, "Error: negative skip %d in assignments.bin - corrupt record\n", a.skip);
+                return {AssignmentReadStatus::error, {}};
+            }
         } else if (a.mask_type == 1) {
             int32_t n_ranges = 0;
             if (fread(&n_ranges, sizeof(int32_t), 1, f) != 1) return {AssignmentReadStatus::error, {}};
@@ -156,4 +163,23 @@ AssignmentReadResult read_prompt_assignments(FILE* f) {
         }
     }
     return {AssignmentReadStatus::ok, std::move(assignments)};
+}
+
+// W4: verify the stream ends exactly at the last record. read_prompt_assignments
+// detects short reads (truncation), but an assignments.bin with SURPLUS trailing
+// records (e.g. from a different pipeline run with the same header count) would
+// be silently accepted and the extra records ignored - the file was validated by
+// count, not content. Call once after the last expected record.
+bool read_assignments_exact_eof(FILE* f) {
+    int32_t probe = 0;
+    size_t got = fread(&probe, 1, sizeof(int32_t), f);
+    if (got == 0) {
+        if (feof(f)) return true;   // clean EOF: exactly consumed
+        fprintf(stderr, "Error: I/O error probing for trailing records in assignments.bin\n");
+        return false;
+    }
+    fprintf(stderr, "Error: assignments.bin has trailing data after the last expected record "
+                    "(%zu surplus byte(s) read) - the file does not belong to this prompts file\n",
+            got);
+    return false;
 }

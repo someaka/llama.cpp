@@ -1422,6 +1422,11 @@ static int run_batch(const Args& args) {
     if (!read_assignments_header(assign_fin, n_prompts_expected, n_embd_expected, groups)) {
         return 1;
     }
+    const long assign_records_offset = ftell(assign_fin.fp);
+    if (assign_records_offset < 0) {
+        fprintf(stderr, "Error: cannot determine assignments.bin record start offset\n");
+        return 1;
+    }
 
     // Validate prompt count: assignments.bin and prompts.txt must agree
     // (count from the single pre-scan). Without this, a mismatch between
@@ -1440,6 +1445,33 @@ static int run_batch(const Args& args) {
         fprintf(stderr, "Error: assignments.bin expects n_embd=%d but model has n_embd=%d\n",
                 n_embd_expected, n_embd);
         return 1;
+    }
+
+    // W4: validate the ENTIRE assignments file up front - every record must
+    // parse cleanly AND the stream must end exactly at the last expected
+    // record. The hot path reads records lazily, so without this pass a
+    // corrupt record late in the file would abort mid-run (after that
+    // prompt's GPU work) and a file with surplus trailing records would be
+    // silently accepted (validated by count, not content). Sequential parse
+    // of the full file is milliseconds even at 150K prompts; fail fast here
+    // instead. Rewind afterwards so the producer's sequential reads start
+    // at the first record.
+    {
+        for (int32_t w4_idx = 0; w4_idx < n_prompts_expected; w4_idx++) {
+            auto ar = read_prompt_assignments(assign_fin.fp);
+            if (ar.status != AssignmentReadStatus::ok) {
+                fprintf(stderr, "Error: assignments.bin record %d failed to parse (status=%d) - "
+                                "the file is truncated or corrupt\n", w4_idx, (int)ar.status);
+                return 1;
+            }
+        }
+        if (!read_assignments_exact_eof(assign_fin.fp)) {
+            return 1;
+        }
+        if (fseek(assign_fin.fp, assign_records_offset, SEEK_SET) != 0) {
+            fprintf(stderr, "Error: cannot rewind assignments.bin after validation\n");
+            return 1;
+        }
     }
 
     // -- Hot loop --
@@ -1775,7 +1807,10 @@ static int run_batch(const Args& args) {
         auto t_decode_start = std::chrono::steady_clock::now();
         int ret = llama_decode(ctx, batch);
         if (ret != 0) {
-            fprintf(stderr, "Error: decode failed for prompt %d (ret=%d)\n", prompt_idx, ret);
+            // B6: name the prompt by its OWN index (pp.prompt_idx), matching
+            // every neighboring diagnostic - the bare consumer counter is
+            // drift-prone if the two ever diverge (e.g. --resume).
+            fprintf(stderr, "Error: decode failed for prompt %d (ret=%d)\n", pp.prompt_idx, ret);
             stop_producer_and_join(pfq, producer_thread, records_temp_path);
             return 1;
         }

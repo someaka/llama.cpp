@@ -74,3 +74,11 @@ bool read_assignments_header(
  * records cannot be confused.
  */
 AssignmentReadResult read_prompt_assignments(FILE* f);
+
+/**
+ * Verify the assignments stream ends exactly at the last expected record.
+ * Read once, AFTER the final read_prompt_assignments call. Returns false if
+ * any trailing bytes exist (surplus records from a foreign/desynced pipeline
+ * run) or on an I/O error; true only on clean EOF.
+ */
+bool read_assignments_exact_eof(FILE* f);

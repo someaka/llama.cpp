@@ -120,6 +120,16 @@ static bool _write_accumulator_to_file(
                 if (write_sum) {
                     // Checkpoint format (v2+): write raw sum directly to avoid
                     // precision loss from mean=sum/count then sum=mean*count roundtrip.
+                    // W2: the guard invariant is SIZE, not emptiness. A count>0
+                    // accumulator must hold exactly n_embd floats; a short/non-empty
+                    // sum is inconsistent state (memory corruption), not a zero-fill
+                    // case - hard-error instead of reading out of bounds.
+                    if (av.count > 0 && av.sum.size() != (size_t)n_embd) {
+                        fprintf(stderr, "Error: accumulator group=%d mask=%d layer=%d has count=%d "
+                                        "but sum.size()=%zu != n_embd=%d - corrupt in-memory state\n",
+                                group_id, gm.mask_id, li, av.count, av.sum.size(), n_embd);
+                        return false;
+                    }
                     if (av.count > 0 && !av.sum.empty()) {
                         if (!checked_write_h(av.sum.data(), sizeof(float), n_embd, out, acc_fnv)) return false;
                     } else {
@@ -128,6 +138,13 @@ static bool _write_accumulator_to_file(
                     }
                 } else {
                     // Output format: write mean = sum / count for downstream consumers.
+                    // W2: same size invariant as the checkpoint branch above.
+                    if (av.count > 0 && av.sum.size() != (size_t)n_embd) {
+                        fprintf(stderr, "Error: accumulator group=%d mask=%d layer=%d has count=%d "
+                                        "but sum.size()=%zu != n_embd=%d - corrupt in-memory state\n",
+                                group_id, gm.mask_id, li, av.count, av.sum.size(), n_embd);
+                        return false;
+                    }
                     if (av.count > 0 && !av.sum.empty()) {
                         float inv = 1.0f / (float)av.count;
                         for (int d = 0; d < n_embd; d++) mean[d] = av.sum[d] * inv;
