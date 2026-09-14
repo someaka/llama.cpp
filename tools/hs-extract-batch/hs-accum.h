@@ -8,7 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
-static constexpr int32_t OUTPUT_MAGIC      = 0x43524432;  // binary accumulator format v2
+static constexpr int32_t OUTPUT_MAGIC      = 0x43524432;  // binary accumulator format v2 (little-endian, see assignments-io.h W3 note)
+static constexpr int32_t RECORDS_MAGIC     = 0x53545231;  // "STR1" per-record sidecar format (little-endian; W5: named alongside the other magics)
 
 // Per (group, mask, layer): running sum and count for accumulating means.
 // Flat key: (group_id << 32) | (mask_id << 16) | layer_idx for single hash lookup.

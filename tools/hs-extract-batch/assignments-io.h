@@ -28,7 +28,11 @@ static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max batch size for mul
 
 // -- Argument Parsing ---------------------------------------------------
 
-static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1"
+// Binary formats are LITTLE-ENDIAN by definition (W3). All int32/float fields
+// are written and read as raw little-endian bytes via fwrite/fread; a
+// big-endian host fails the magic check loudly (fail-safe, no corruption) but
+// cannot read the files - this matches llama.cpp's own binary-tool conventions.
+static constexpr int32_t ASSIGNMENTS_MAGIC = 0x43524431;  // "CRD1" (little-endian)
 
 // One (group, mask) assignment for a prompt.
 struct Assignment {

@@ -16,8 +16,10 @@
 
 // RAII wrappers are in common/llama-raii.h (shared with hs-extract-batch, tests)
 #include "llama-raii.h"
-// Shared layer-list parser (same file as hs-extract-batch uses)
+
 #include "layer-parse.h"
+// Shared bounded tokenizer (D3): same implementation as hs-extract-batch
+#include "tokenize.h"
 
 static void print_usage(const char * prog) {
     printf("usage: %s [options]\n\n", prog);
@@ -225,7 +227,10 @@ int main(int argc, char ** argv) {
     } else {
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
         std::string prompt(prompt_text);
-        tokens = common_tokenize(vocab, prompt, add_bos, true);
+        // D3: shared bounded tokenizer (tools/hs-extract-common/tokenize.h) -
+        // identical output to common_tokenize(vocab, prompt, add_bos, true)
+        // on the happy path, plus per-token vocab-bound validation.
+        tokens = hs_tokenize_bounded(vocab, prompt.c_str(), prompt.size(), add_bos);
         fprintf(stderr, "%s: tokenized prompt into %zu tokens\n", __func__, tokens.size());
     }
 

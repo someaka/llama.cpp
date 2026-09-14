@@ -74,6 +74,8 @@
 #include "assignments-io.h"
 // Shared layer-list parser (same file as hs-extract uses)
 #include "layer-parse.h"
+// Shared bounded tokenizer (D3: single source of truth for both tools)
+#include "tokenize.h"
 
 struct Args {
     const char* model_path = nullptr;
@@ -679,27 +681,12 @@ static bool process_prompt(
  * now tokenizer-faithful; --no-bos remains as a force-off override.
  */
 static std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool follow_vocab_default = true, bool no_bos = false) {
+    // D3: the bounded tokenizer lives in tools/hs-extract-common/tokenize.h and
+    // is shared with hs-extract; this thin wrapper keeps this tool's call-shape
+    // (follow_vocab_default && vocab-default && !no_bos) and its error contract
+    // (empty vector, never throws).
     const bool add_bos = follow_vocab_default && llama_vocab_get_add_bos(vocab) && !no_bos;
-    int n = -llama_tokenize(vocab, text.c_str(), text.size(), nullptr, 0, add_bos, true);
-    if (n <= 0) return {};
-    std::vector<llama_token> toks(n);
-    int n_tokens = llama_tokenize(vocab, text.c_str(), text.size(), toks.data(), (int)toks.size(), add_bos, true);
-    if (n_tokens > 0) {
-        toks.resize(n_tokens);
-    } else {
-        toks.clear();
-        return toks;
-    }
-
-    // Validate token bounds (prevent crashes from invalid token IDs)
-    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-    for (llama_token tok : toks) {
-        if (tok < 0 || tok >= n_vocab) {
-            fprintf(stderr, "Error: tokenizer returned out-of-bounds token %d (vocab size: %d)\n", tok, n_vocab);
-            return {};
-        }
-    }
-    return toks;
+    return hs_tokenize_bounded(vocab, text.c_str(), text.size(), add_bos);
 }
 
 // -- Batch Mode Helpers -------------------------------------------------
@@ -1569,7 +1556,7 @@ static int run_batch(const Args& args) {
             return 1;
         }
         FILE* records_fp = records_closer.fp;
-        int32_t record_magic = 0x53545231;  // per-record sidecar format
+        int32_t record_magic = RECORDS_MAGIC;  // "STR1" per-record sidecar format (named constant, W5)
         if (fwrite(&record_magic, sizeof(int32_t), 1, records_fp) != 1 ||
             fwrite(&n_embd, sizeof(int32_t), 1, records_fp) != 1) {
             fprintf(stderr, "Error: per-record header write failed\n");
