@@ -330,6 +330,28 @@ jobs:
             exit 1
           fi
           echo "PASS: short text skip_mean returns 400"
+          echo "--- Test: empty element in input array (400, HS-1 regression pin) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":["hi",""],"layers":[0],"normalize":false,"pool":"last"}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for empty string element in input array, got $HTTP_CODE"
+            exit 1
+          fi
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":["hi",[]],"layers":[0],"normalize":false,"pool":"last"}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for empty token-array element in input array, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: empty input-array elements return 400"
+          echo "--- Test: server still alive after invalid requests (HS-1: no abort) ---"
+          if ! curl -sf http://127.0.0.1:8097/health > /dev/null 2>&1; then
+            echo "FAIL: server did not survive the invalid-request battery"
+            exit 1
+          fi
+          echo "PASS: server alive after invalid requests"
           echo "--- All endpoint tests passed ---"
           echo "::endgroup::"
 

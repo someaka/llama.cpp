@@ -1492,6 +1492,11 @@ json server_task_result_hidden_states::to_json() {
     // /hidden-states endpoint writes to_json_text() instead -- nlohmann's
     // double writer re-expands ~0.3% of %.9g values past 9 digits, so the
     // wire form is built as text there.
+    // Memory note (HS-4): each layer vector is deep-copied and widened to a
+    // nlohmann double array — roughly 2-6x the raw payload (plus node
+    // overhead) on top of the captured floats. At the 25M-float pool=none
+    // cap that is a transient ~200-400 MB spike; prefer to_json_text() on
+    // any path that handles cap-sized payloads.
     json layers = json::object();
     for (const auto & kv : hidden_states) {
         layers[std::to_string(kv.first)] = kv.second;

@@ -2477,10 +2477,28 @@ private:
             return;
         }
 
+        // HS-2 belt-and-braces: the capture resets per llama_decode(), so a
+        // batch that was somehow split across decode calls would leave only
+        // the tail chunk in the buffer while n_tokens still claims the full
+        // prompt — silent data corruption. Refuse rather than return partial
+        // data (the launch-time n_batch guard makes this unreachable today;
+        // this check keeps it that way if the retry path ever changes).
+        if (n_hs_tokens != slot.task->n_tokens()) {
+            auto err = std::make_unique<server_task_result_error>();
+            err->id    = slot.task->id;
+            err->index = slot.task->index;
+            err->err_type = ERROR_TYPE_SERVER;
+            err->err_msg = string_format(
+                "hidden-states capture incomplete (%d of %d tokens) — refusing to return partial data",
+                n_hs_tokens, slot.task->n_tokens());
+            queue_results.send(std::move(err));
+            return;
+        }
+
         // Response size guard for pool=none: returns n_tokens * n_embd * n_layers
         // floats as JSON. Without a cap, a single request with long input + all
         // layers can exhaust server memory (DoS vector).
-        // 100 MB float data limit (~1.5 GB JSON after serialization).
+        // ~30 MB raw float data (~0.3 GB JSON after %.9g serialization)
         if (slot.task->params.hidden_pool == "none") {
             const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
             size_t total_all_layers = (size_t)n_hs_tokens * (size_t)n_embd * (size_t)layers.size();
@@ -3409,6 +3427,16 @@ private:
 
                         // empty prompt passed -> release the slot and send empty response
                         if (input_tokens.empty()) {
+                            // HS-1: for hidden-states tasks an empty prompt must
+                            // surface as a typed error — send_final_response()
+                            // would emit a cmpl_final result and the endpoint's
+                            // result-type handling would abort the server.
+                            if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                                send_error(slot, "empty prompt — cannot extract hidden states",
+                                           ERROR_TYPE_INVALID_REQUEST);
+                                slot.release();
+                                return;
+                            }
                             SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
 
                             slot.print_timings();
@@ -3986,6 +4014,23 @@ private:
             }
 
             // retry with half the batch size to try to find a free slot in the KV cache
+            // HS-2: hidden-states batches must NEVER be split across decode
+            // calls — the capture resets per decode, so a second call would
+            // leave only the tail chunk in the buffer (silent corruption).
+            // Fail the task instead of retrying with a smaller batch.
+            if (batch.slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                const std::string hs_err =
+                    "hidden-states decode failed to fit the KV cache; reduce concurrent load and retry";
+                SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", hs_err.c_str(), off, n_batch, ret);
+                for (auto & slot : slots) {
+                    if (slot.is_processing() && slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                        send_error(slot, hs_err);
+                        slot.release();
+                        slot.prompt_clear();
+                    }
+                }
+                throw std::runtime_error(hs_err);
+            }
             if (!try_clear_idle_slots()) {
                 n_batch /= 2;
             }
@@ -5546,11 +5591,32 @@ void server_routes::init_routes() {
             return res;
         }
 
-        // Tokenize the input using the same pattern as embeddings
-        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+        // Tokenize the input using the same pattern as embeddings. A malformed
+        // input (bare `[]`, non-string junk) throws inside tokenize_input_prompts;
+        // surface that as 400 rather than an unhandled 500.
+        std::vector<server_tokens> tokenized_prompts;
+        try {
+            tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+        } catch (const std::exception & e) {
+            res->error(format_error_response(std::string("Failed to tokenize input: ") + e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         if (tokenized_prompts.empty() || tokenized_prompts[0].empty()) {
             res->error(format_error_response("Failed to tokenize input", ERROR_TYPE_INVALID_REQUEST));
             return res;
+        }
+        // HS-1 (P0): an empty ANY-element (empty string on a no-BOS arch, or a
+        // raw `[]` token array — json_is_array_of_numbers accepts it vacuously)
+        // would create a 0-token HIDDEN_STATES task; update_slots answers such
+        // a task with a cmpl_final result and the endpoint's result-type assert
+        // below GGML_ABORTs the whole server. Reject up front, naming the index.
+        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+            if (tokenized_prompts[i].empty()) {
+                res->error(format_error_response(
+                    "input[" + std::to_string(i) + "] tokenizes to zero tokens — cannot extract hidden states",
+                    ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
         }
 
         // Create and queue the task
@@ -5590,8 +5656,16 @@ void server_routes::init_routes() {
             return res;
         } else {
             for (auto & result : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(result.get()) != nullptr);
                 auto * hs_result = dynamic_cast<server_task_result_hidden_states*>(result.get());
+                // HS-1 hardening: a foreign result type here is a bug, not a
+                // fatal condition — answer 500 and keep the server alive
+                // instead of tripping the (always-active) GGML_ABORT.
+                if (hs_result == nullptr) {
+                    res->error(format_error_response(
+                        "internal error: unexpected result type for hidden-states task",
+                        ERROR_TYPE_SERVER));
+                    return res;
+                }
                 // %.9g text form: nlohmann's double writer re-expands ~0.3% of
                 // values past 9 significant digits, so the wire numbers are
                 // emitted raw instead of through the json serializer.

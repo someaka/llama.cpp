@@ -164,6 +164,128 @@ int main(int argc, char ** argv) {
         printf("Boundary check: layer n_layer+1 rejected (single: NULL, batch: -1, no partial write)\n");
     }
 
+    // HS-6b: failed-decode invalidation. The capture resets at decode entry
+    // (before any early exit), so a FAILED decode must leave the getters
+    // empty — never the previous batch's states. Fill the KV cache past
+    // n_ctx (512) with 3 x 200-token batches on one sequence: the third
+    // decode cannot fit and must fail.
+    {
+        // Start the filler sequence from a clean slate (the prompt decode
+        // already used positions 0..n_tokens-1 on seq 0; positions must be
+        // consecutive per sequence, so restart the sequence at 0).
+        llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
+        LlamaBatch fbatch_wrapper;
+        fbatch_wrapper.init(200, 0, 1);
+        llama_batch & fbatch = fbatch_wrapper.batch;
+        for (int b = 0; b < 3; b++) {
+            for (int i = 0; i < 200; i++) {
+                fbatch.token[i]    = tokens[i % n_tokens];
+                fbatch.pos[i]      = b * 200 + i;
+                fbatch.n_seq_id[i] = 1;
+                fbatch.seq_id[i][0] = 0;
+                fbatch.logits[i]   = (i == 199) ? 1 : 0;  // upstream requires >=1 output per decode
+            }
+            fbatch.n_tokens = 200;
+            int fret = llama_decode(ctx, fbatch);
+            if (b < 2) {
+                if (fret != 0) {
+                    fprintf(stderr, "FAIL: filler decode %d unexpectedly failed with %d\n", b + 1, fret);
+                    return 1;
+                }
+                llama_synchronize(ctx);
+            } else {
+                if (fret == 0) {
+                    fprintf(stderr, "FAIL: over-capacity decode unexpectedly succeeded (test premise broken)\n");
+                    return 1;
+                }
+                // The failed decode must have invalidated the capture.
+                if (llama_get_hidden_state_n_tokens(ctx) != 0) {
+                    fprintf(stderr, "FAIL: after a failed decode, capture still reports %d tokens (stale data exposure)\n",
+                            llama_get_hidden_state_n_tokens(ctx));
+                    return 1;
+                }
+                if (llama_get_hidden_state(ctx, 0) != NULL) {
+                    fprintf(stderr, "FAIL: after a failed decode, layer-0 capture is readable (stale data exposure)\n");
+                    return 1;
+                }
+                printf("Failed-decode invalidation: getters empty after failed decode (no stale exposure)\n");
+
+                // Recovery: a subsequent good decode re-populates the capture.
+                llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);  // fresh positions (fillers used 0..599)
+                batch.n_tokens = n_tokens;
+                for (int i = 0; i < n_tokens; i++) {
+                    batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
+                }
+                if (llama_decode(ctx, batch) != 0) {
+                    fprintf(stderr, "FAIL: recovery decode failed\n");
+                    return 1;
+                }
+                llama_synchronize(ctx);
+                if (llama_get_hidden_state_n_tokens(ctx) != n_tokens || llama_get_hidden_state(ctx, 0) == NULL) {
+                    fprintf(stderr, "FAIL: capture did not recover after a good decode\n");
+                    return 1;
+                }
+                printf("Recovery: capture live again after good decode (%d tokens)\n", n_tokens);
+                break;
+            }
+        }
+    }
+
+    // HS-6a: multi-ubatch accumulation. Same prompt decoded with
+    // n_ubatch < n_tokens must produce byte-identical captures to the
+    // single-ubatch context above (the per-ubatch accumulation path with
+    // n_tokens_prev offsets).
+    {
+        llama_context_params cparams2 = llama_context_default_params();
+        cparams2.n_ctx = 512;
+        cparams2.n_batch = 512;
+        cparams2.n_ubatch = 8;  // forces ceil(n_tokens/8) ubatches for any prompt
+        cparams2.extract_hidden_states = true;
+        LlamaContext ctx2(llama_init_from_model(model, cparams2));
+        if (!ctx2) {
+            fprintf(stderr, "Failed to create multi-ubatch context\n");
+            return 1;
+        }
+        LlamaBatch batch2_wrapper;
+        batch2_wrapper.init(n_tokens, 0, 1);
+        llama_batch & batch2 = batch2_wrapper.batch;
+        for (int i = 0; i < n_tokens; i++) {
+            batch2.token[i]    = tokens[i];
+            batch2.pos[i]      = i;
+            batch2.n_seq_id[i] = 1;
+            batch2.seq_id[i][0] = 0;
+            batch2.logits[i]   = (i == n_tokens - 1) ? 1 : 0;
+        }
+        batch2.n_tokens = n_tokens;
+        if (llama_decode(ctx2, batch2) != 0) {
+            fprintf(stderr, "FAIL: multi-ubatch decode failed\n");
+            return 1;
+        }
+        llama_synchronize(ctx2);
+        if (llama_get_hidden_state_n_tokens(ctx2) != n_tokens) {
+            fprintf(stderr, "FAIL: multi-ubatch capture reports %d tokens, expected %d\n",
+                    llama_get_hidden_state_n_tokens(ctx2), n_tokens);
+            return 1;
+        }
+        const float * ref0 = llama_get_hidden_state(ctx, 0);
+        const float * ub0  = llama_get_hidden_state(ctx2, 0);
+        if (!ref0 || !ub0) {
+            fprintf(stderr, "FAIL: multi-ubatch comparison getter returned NULL\n");
+            return 1;
+        }
+        if (memcmp(ref0, ub0, (size_t)n_tokens * n_embd * sizeof(float)) != 0) {
+            fprintf(stderr, "FAIL: multi-ubatch layer-0 capture differs from single-ubatch reference\n");
+            return 1;
+        }
+        const float * refN = llama_get_hidden_state(ctx, n_layer);
+        const float * ubN  = llama_get_hidden_state(ctx2, n_layer);
+        if (!refN || !ubN || memcmp(refN, ubN, (size_t)n_tokens * n_embd * sizeof(float)) != 0) {
+            fprintf(stderr, "FAIL: multi-ubatch top-layer capture differs from single-ubatch reference\n");
+            return 1;
+        }
+        printf("Multi-ubatch accumulation: layer 0 and top slot byte-identical across ubatch configs\n");
+    }
+
     // API coverage: llama_model_supports_hidden_states + llama_model_arch_name
     // (the server pre-checks via these; no test called them directly until now).
     // This model carries a registry arch (extraction context was created above),
