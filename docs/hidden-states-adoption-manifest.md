@@ -94,7 +94,7 @@ reassignment that follows the final residual add listed below.
 | 6 | llama_model_bailingmoe | bailingmoe.cpp | 155 |
 | 7 | llama_model_bailingmoe2 | bailingmoe2.cpp | 188 |
 | 8 | bailingmoe3 | bailingmoe3.cpp | 389 |
-| 9 | bert | bert.cpp | 218 |
+| 9 | bert | bert.cpp | 206 |
 | 10 | bitnet | bitnet.cpp | 143 |
 | 11 | bloom | bloom.cpp | 128 |
 | 12 | chameleon | chameleon.cpp | 164 |
@@ -104,7 +104,7 @@ reassignment that follows the final residual add listed below.
 | 16 | dbrx | dbrx.cpp | 128 |
 | 17 | deci | deci.cpp | 168 |
 | 18 | deepseek | deepseek.cpp | 172 |
-| 19 | deepseek2 | deepseek2.cpp | 693 |
+| 19 | deepseek2 | deepseek2.cpp | 684 |
 | 20 | deepseek32 | deepseek32.cpp | 456 |
 | 21 | dots1 | dots1.cpp | 171 |
 | 22 | dream | dream.cpp | 116 |
@@ -117,14 +117,14 @@ reassignment that follows the final residual add listed below.
 | 29 | gemma | gemma.cpp | 116 |
 | 30 | gemma2 | gemma2.cpp | 148 |
 | 31 | gemma3 | gemma3.cpp | 192 |
-| 32 | gemma4 | gemma4.cpp | 362 |
+| 32 | gemma4 | gemma4.cpp | 389 |
 | 33 | gemma4_assistant | gemma4-assistant.cpp | 178 |
 | 34 | gemma_embedding | gemma-embedding.cpp | 161 |
 | 35 | glm4 | glm4.cpp | 165 |
 | 36 | glm4_moe | glm4-moe.cpp | 416 |
 | 37 | glm_dsa | glm-dsa.cpp | 500 |
 | 38 | gpt2 | gpt2.cpp | 125 |
-| 39 | granite | granite.cpp | 149 |
+| 39 | granite | granite.cpp | 158 |
 | 40 | grok | grok.cpp | 190 |
 | 41 | grovemoe | grovemoe.cpp | 170 |
 | 42 | hunyuan_moe | hunyuan-moe.cpp | 164 |
@@ -132,10 +132,10 @@ reassignment that follows the final residual add listed below.
 | 44 | hy_v3 | hy-v3.cpp | 204 |
 | 45 | internlm2 | internlm2.cpp | 115 |
 | 46 | jais | jais.cpp | 110 |
-| 47 | jais2 | jais2.cpp | 140 |
+| 47 | jais2 | jais2.cpp | 134 |
 | 48 | jamba | jamba.cpp | 177 |
 | 49 | laguna | laguna.cpp | 316 |
-| 50 | llada | llada.cpp | 136 |
+| 50 | llada | llada.cpp | 131 |
 | 51 | llada_moe | llada-moe.cpp | 139 |
 | 52 | llama | llama.cpp | 221 |
 | 53 | llama4 | llama4.cpp | 245 |
@@ -143,8 +143,8 @@ reassignment that follows the final residual add listed below.
 | 55 | mellum | mellum.cpp | 197 |
 | 56 | mimo2 | mimo2.cpp | 222 |
 | 57 | minicpm3 | minicpm3.cpp | 223 |
-| 58 | minimax_01 | minimax-01.cpp | 457 |
-| 59 | minimax_m2 | minimax-m2.cpp | 144 |
+| 58 | minimax_01 | minimax-01.cpp | 458 |
+| 59 | minimax_m2 | minimax-m2.cpp | 143 |
 | 60 | minimax_m3 | minimax-m3.cpp | 582 |
 | 61 | mistral3 | mistral3.cpp | 210 |
 | 62 | modern_bert | modern-bert.cpp | 159 |
@@ -154,8 +154,8 @@ reassignment that follows the final residual add listed below.
 | 66 | nemotron | nemotron.cpp | 125 |
 | 67 | neo_bert | neo-bert.cpp | 119 |
 | 68 | olmo | olmo.cpp | 117 |
-| 69 | olmo2 | olmo2.cpp | 182 |
-| 70 | olmoe | olmoe.cpp | 150 |
+| 69 | olmo2 | olmo2.cpp | 181 |
+| 70 | olmoe | olmoe.cpp | 149 |
 | 71 | openai_moe | openai-moe.cpp | 147 |
 | 72 | openelm | openelm.cpp | 148 |
 | 73 | orion | orion.cpp | 117 |
@@ -174,7 +174,7 @@ reassignment that follows the final residual add listed below.
 | 86 | qwen3 | qwen3.cpp | 135 |
 | 87 | qwen35 | qwen35.cpp | 196 |
 | 88 | qwen3moe | qwen3moe.cpp | 155 |
-| 89 | qwen3vl | qwen3vl.cpp | 154 |
+| 89 | qwen3vl | qwen3vl.cpp | 155 |
 | 90 | qwen3vlmoe | qwen3vlmoe.cpp | 166 |
 | 91 | refact | refact.cpp | 136 |
 | 92 | rnd1 | rnd1.cpp | 153 |
@@ -184,7 +184,7 @@ reassignment that follows the final residual add listed below.
 | 96 | stablelm | stablelm.cpp | 147 |
 | 97 | starcoder | starcoder.cpp | 123 |
 | 98 | starcoder2 | starcoder2.cpp | 134 |
-| 99 | step35 | step35.cpp | 336 |
+| 99 | step35 | step35.cpp | 338 |
 | 100 | talkie | talkie.cpp | 126 |
 | 101 | xverse | xverse.cpp | 114 |
 
