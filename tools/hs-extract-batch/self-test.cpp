@@ -479,14 +479,14 @@ int run_self_test() {
             const std::string out_path = std::string(test_ckpt) + ".out";
             bool ok22 = write_batch_output(out_acc, out_path.c_str(), 4);
             if (ok22) {
-                FILE* rf = fopen(out_path.c_str(), "rb");
-                ok22 = (rf != nullptr);
+                FilePtr rf(fopen(out_path.c_str(), "rb"));
+                ok22 = (rf.fp != nullptr);
                 if (ok22) {
                     int32_t magic = 0, n_groups = 0, n_layers = 0, n_embd = 0;
-                    ok22 = fread(&magic, sizeof(int32_t), 1, rf) == 1 && magic == OUTPUT_MAGIC
-                        && fread(&n_groups, sizeof(int32_t), 1, rf) == 1 && n_groups == 2
-                        && fread(&n_layers, sizeof(int32_t), 1, rf) == 1 && n_layers == 4   // max_layer(3)+1
-                        && fread(&n_embd, sizeof(int32_t), 1, rf) == 1 && n_embd == 4;
+                    ok22 = fread(&magic, sizeof(int32_t), 1, rf.fp) == 1 && magic == OUTPUT_MAGIC
+                        && fread(&n_groups, sizeof(int32_t), 1, rf.fp) == 1 && n_groups == 2
+                        && fread(&n_layers, sizeof(int32_t), 1, rf.fp) == 1 && n_layers == 4   // max_layer(3)+1
+                        && fread(&n_embd, sizeof(int32_t), 1, rf.fp) == 1 && n_embd == 4;
                     // Sorted flat-key order: (0,0,0) then (2,1,3)
                     const int32_t expect_gid[2]  = {0, 2};
                     const int32_t expect_mid[2]  = {0, 1};
@@ -495,13 +495,13 @@ int run_self_test() {
                     for (int g = 0; g < 2 && ok22; g++) {
                         int32_t gid = 0, n_masks = 0, mid = 0, n_ld = 0, lid = 0, cnt = 0;
                         float mean[4] = {0, 0, 0, 0};
-                        ok22 = fread(&gid, sizeof(int32_t), 1, rf) == 1 && gid == expect_gid[g]
-                            && fread(&n_masks, sizeof(int32_t), 1, rf) == 1 && n_masks == 1
-                            && fread(&mid, sizeof(int32_t), 1, rf) == 1 && mid == expect_mid[g]
-                            && fread(&n_ld, sizeof(int32_t), 1, rf) == 1 && n_ld == 1
-                            && fread(&lid, sizeof(int32_t), 1, rf) == 1 && lid == expect_lid[g]
-                            && fread(&cnt, sizeof(int32_t), 1, rf) == 1 && cnt == expect_cnt[g]
-                            && fread(mean, sizeof(float), 4, rf) == 4;
+                        ok22 = fread(&gid, sizeof(int32_t), 1, rf.fp) == 1 && gid == expect_gid[g]
+                            && fread(&n_masks, sizeof(int32_t), 1, rf.fp) == 1 && n_masks == 1
+                            && fread(&mid, sizeof(int32_t), 1, rf.fp) == 1 && mid == expect_mid[g]
+                            && fread(&n_ld, sizeof(int32_t), 1, rf.fp) == 1 && n_ld == 1
+                            && fread(&lid, sizeof(int32_t), 1, rf.fp) == 1 && lid == expect_lid[g]
+                            && fread(&cnt, sizeof(int32_t), 1, rf.fp) == 1 && cnt == expect_cnt[g]
+                            && fread(mean, sizeof(float), 4, rf.fp) == 4;
                         if (ok22) {
                             // the divided mean, not the raw sum
                             for (int d = 0; d < 4; d++) {
@@ -511,9 +511,8 @@ int run_self_test() {
                     }
                     if (ok22) {  // exact EOF: no trailing bytes
                         int32_t probe = 0;
-                        ok22 = fread(&probe, 1, 1, rf) == 0 && feof(rf) != 0;
+                        ok22 = fread(&probe, 1, 1, rf.fp) == 0 && feof(rf.fp) != 0;
                     }
-                    fclose(rf);
                 }
             }
             remove(out_path.c_str());
@@ -529,57 +528,56 @@ int run_self_test() {
             const std::string assign_path = std::string(test_ckpt) + ".assign";
             bool ok23 = true;
             {
-                FILE* wf = fopen(assign_path.c_str(), "wb");
-                ok23 = (wf != nullptr);
+                FilePtr wf(fopen(assign_path.c_str(), "wb"));
+                ok23 = (wf.fp != nullptr);
                 if (ok23) {
                     const int32_t magic = ASSIGNMENTS_MAGIC;
                     const int32_t n_prompts = 2, n_embd_hdr = 4, n_groups = 1;
                     const int32_t name_len = 5;
-                    fwrite(&magic, sizeof(int32_t), 1, wf);
-                    fwrite(&n_prompts, sizeof(int32_t), 1, wf);
-                    fwrite(&n_embd_hdr, sizeof(int32_t), 1, wf);
-                    fwrite(&n_groups, sizeof(int32_t), 1, wf);
-                    fwrite(&name_len, sizeof(int32_t), 1, wf);
-                    fwrite("alpha", 1, 5, wf);
+                    fwrite(&magic, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_prompts, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_embd_hdr, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_groups, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&name_len, sizeof(int32_t), 1, wf.fp);
+                    fwrite("alpha", 1, 5, wf.fp);
                     // prompt 0: one simple_skip assignment (mask_type 0)
                     int32_t n_assign = 1, gid = 0, mid = 0, mtype0 = 0, skip = 3;
-                    fwrite(&n_assign, sizeof(int32_t), 1, wf);
-                    fwrite(&gid, sizeof(int32_t), 1, wf);
-                    fwrite(&mid, sizeof(int32_t), 1, wf);
-                    fwrite(&mtype0, sizeof(int32_t), 1, wf);
-                    fwrite(&skip, sizeof(int32_t), 1, wf);
+                    fwrite(&n_assign, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&gid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mtype0, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&skip, sizeof(int32_t), 1, wf.fp);
                     // prompt 1: one explicit_ranges assignment (mask_type 1)
                     int32_t mtype1 = 1, n_ranges = 2, s0 = 0, e0 = 2, s1 = 5, e1 = 7;
-                    fwrite(&n_assign, sizeof(int32_t), 1, wf);
-                    fwrite(&gid, sizeof(int32_t), 1, wf);
-                    fwrite(&mid, sizeof(int32_t), 1, wf);
-                    fwrite(&mtype1, sizeof(int32_t), 1, wf);
-                    fwrite(&n_ranges, sizeof(int32_t), 1, wf);
-                    fwrite(&s0, sizeof(int32_t), 1, wf);
-                    fwrite(&e0, sizeof(int32_t), 1, wf);
-                    fwrite(&s1, sizeof(int32_t), 1, wf);
-                    fwrite(&e1, sizeof(int32_t), 1, wf);
-                    fclose(wf);
+                    fwrite(&n_assign, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&gid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mtype1, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_ranges, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&s0, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&e0, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&s1, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&e1, sizeof(int32_t), 1, wf.fp);
                 }
             }
             if (ok23) {
-                FILE* rf = fopen(assign_path.c_str(), "rb");
-                ok23 = (rf != nullptr);
+                FilePtr rf(fopen(assign_path.c_str(), "rb"));
+                ok23 = (rf.fp != nullptr);
                 if (ok23) {
                     int32_t n_prompts_hdr = 0, n_embd_hdr = 0;
                     GroupTable gt;
-                    ok23 = read_assignments_header(rf, n_prompts_hdr, n_embd_hdr, gt)
+                    ok23 = read_assignments_header(rf.fp, n_prompts_hdr, n_embd_hdr, gt)
                         && n_prompts_hdr == 2 && n_embd_hdr == 4
                         && gt.n_groups == 1 && gt.names.size() == 1 && gt.names[0] == "alpha";
                     if (ok23) {
-                        auto r0 = read_prompt_assignments(rf);
+                        auto r0 = read_prompt_assignments(rf.fp);
                         ok23 = r0.status == AssignmentReadStatus::ok
                             && r0.assignments.size() == 1
                             && r0.assignments[0].mask_type == 0
                             && r0.assignments[0].skip == 3;
                     }
                     if (ok23) {
-                        auto r1 = read_prompt_assignments(rf);
+                        auto r1 = read_prompt_assignments(rf.fp);
                         ok23 = r1.status == AssignmentReadStatus::ok
                             && r1.assignments.size() == 1
                             && r1.assignments[0].mask_type == 1
@@ -588,13 +586,12 @@ int run_self_test() {
                             && r1.assignments[0].ranges[1] == std::make_pair(5, 7);
                     }
                     if (ok23) {
-                        ok23 = read_assignments_exact_eof(rf);
+                        ok23 = read_assignments_exact_eof(rf.fp);
                     }
                     if (ok23) {
-                        auto r2 = read_prompt_assignments(rf);
+                        auto r2 = read_prompt_assignments(rf.fp);
                         ok23 = r2.status == AssignmentReadStatus::eof;
                     }
-                    fclose(rf);
                 }
             }
             HS_CHECK(ok23, "Test 23 (CRD1 reader: status contract, ranges, exact EOF)");
@@ -603,32 +600,34 @@ int run_self_test() {
             // site, not surface later as a compute_masked_mean failure.
             const std::string bad_path = assign_path + ".badskip";
             {
-                FILE* wf = fopen(bad_path.c_str(), "wb");
-                if (wf) {
+                // Writer scoped: FilePtr closes (and flushes) at the end of
+                // this block, BEFORE the reader opens the file below.
+                {
+                    FilePtr wf(fopen(bad_path.c_str(), "wb"));
+                    if (wf.fp) {
                     const int32_t magic = ASSIGNMENTS_MAGIC;
                     const int32_t n_prompts = 1, n_embd_hdr = 4, n_groups = 0;
                     const int32_t n_assign = 1, gid = 0, mid = 0, mtype = 0, skip = -3;
-                    fwrite(&magic, sizeof(int32_t), 1, wf);
-                    fwrite(&n_prompts, sizeof(int32_t), 1, wf);
-                    fwrite(&n_embd_hdr, sizeof(int32_t), 1, wf);
-                    fwrite(&n_groups, sizeof(int32_t), 1, wf);
-                    fwrite(&n_assign, sizeof(int32_t), 1, wf);
-                    fwrite(&gid, sizeof(int32_t), 1, wf);
-                    fwrite(&mid, sizeof(int32_t), 1, wf);
-                    fwrite(&mtype, sizeof(int32_t), 1, wf);
-                    fwrite(&skip, sizeof(int32_t), 1, wf);
-                    fclose(wf);
+                    fwrite(&magic, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_prompts, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_embd_hdr, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_groups, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&n_assign, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&gid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mid, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&mtype, sizeof(int32_t), 1, wf.fp);
+                    fwrite(&skip, sizeof(int32_t), 1, wf.fp);
+                    }
                 }
                 bool ok23b = false;
-                FILE* rf = fopen(bad_path.c_str(), "rb");
-                if (rf) {
+                FilePtr rf(fopen(bad_path.c_str(), "rb"));
+                if (rf.fp) {
                     int32_t hp = 0, he = 0;
                     GroupTable g2;
-                    if (read_assignments_header(rf, hp, he, g2)) {
-                        auto res = read_prompt_assignments(rf);
+                    if (read_assignments_header(rf.fp, hp, he, g2)) {
+                        auto res = read_prompt_assignments(rf.fp);
                         ok23b = res.status == AssignmentReadStatus::error;
                     }
-                    fclose(rf);
                 }
                 remove(bad_path.c_str());
                 HS_CHECK(ok23b, "Test 23b (negative skip rejected at parse site)");
@@ -646,33 +645,36 @@ int run_self_test() {
             const std::string v1_base = std::string(test_ckpt) + ".v1run";
             const std::string v1_path = v1_base + ".checkpoint";
             bool ok24 = false;
-            FILE* wf = fopen(v1_path.c_str(), "wb");
-            if (wf) {
+            const uint64_t key = make_accum_key(1, 0, 2);  // (group_id=1, mask_id=0, layer_idx=2) - used by writer and reader
+            // Writer scoped: closed (flushed) before read_checkpoint opens it.
+            {
+            FilePtr wf(fopen(v1_path.c_str(), "wb"));
+            if (wf.fp) {
                 const int32_t version = 1;
                 const int32_t n_iter_v1 = 5;
                 const int32_t magic = OUTPUT_MAGIC;
                 const int32_t n_groups = 1, n_layers_hdr = 1, n_embd_v1 = 4;
                 const int32_t group_id = 1, n_masks = 1, mask_id = 0, n_layers_data = 1;
                 const int32_t layer_idx = 2;
-                const uint64_t key = make_accum_key(group_id, mask_id, layer_idx);
                 const int32_t count = 2;
                 const float mean[4] = {1.0f, 2.0f, 3.0f, 4.0f};
-                fwrite(&version, sizeof(int32_t), 1, wf);
-                fwrite(&n_iter_v1, sizeof(int32_t), 1, wf);
-                fwrite(&magic, sizeof(int32_t), 1, wf);
-                fwrite(&n_groups, sizeof(int32_t), 1, wf);
-                fwrite(&n_layers_hdr, sizeof(int32_t), 1, wf);
-                fwrite(&n_embd_v1, sizeof(int32_t), 1, wf);
-                fwrite(&group_id, sizeof(int32_t), 1, wf);
-                fwrite(&n_masks, sizeof(int32_t), 1, wf);
-                fwrite(&mask_id, sizeof(int32_t), 1, wf);
-                fwrite(&n_layers_data, sizeof(int32_t), 1, wf);
+                fwrite(&version, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_iter_v1, sizeof(int32_t), 1, wf.fp);
+                fwrite(&magic, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_groups, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_layers_hdr, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_embd_v1, sizeof(int32_t), 1, wf.fp);
+                fwrite(&group_id, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_masks, sizeof(int32_t), 1, wf.fp);
+                fwrite(&mask_id, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_layers_data, sizeof(int32_t), 1, wf.fp);
                 // NOTE: no key on disk - the reader reconstructs the flat key
                 // from (group_id, mask_id, layer_idx).
-                fwrite(&layer_idx, sizeof(int32_t), 1, wf);
-                fwrite(&count, sizeof(int32_t), 1, wf);
-                fwrite(mean, sizeof(float), 4, wf);
-                fclose(wf);
+                fwrite(&layer_idx, sizeof(int32_t), 1, wf.fp);
+                fwrite(&count, sizeof(int32_t), 1, wf.fp);
+                fwrite(mean, sizeof(float), 4, wf.fp);
+                }
+            }  // unnamed writer block ends: FilePtr closes + flushes BEFORE the reader
 
                 AccumulatorMap v1_acc;
                 int32_t v1_iter = 0;
@@ -692,7 +694,6 @@ int run_self_test() {
                 }
                 remove(v1_path.c_str());
                 remove(v1_base.c_str());
-            }
             HS_CHECK(ok24, "Test 24 (legacy v1 checkpoint restore, mean*count)");
         }
 
