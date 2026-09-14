@@ -71,6 +71,9 @@ curl -X POST http://localhost:8080/hidden-states \
 ```
 
 Pooling modes: `last` (last token), `skip_mean` (masked mean), `none` (per-token).
+`input` may be a single string or an array of strings (batched; the response is
+a JSON array echoing each item's `index`). `normalize: true` L2-normalizes each
+pooled output vector (no effect with `pool: "none"`).
 
 Per-request limit: the input must fit in one decode call — more than `n_batch`
 tokens (the server's `-b` value; upstream default 2048) is refused with 400 (`raise -b or shorten the
@@ -157,3 +160,21 @@ machine).
 - `tools/hs-extract/README.md`  -  single-prompt tool
 - `tools/server/README.md`  -  `/hidden-states` endpoint ("POST /hidden-states" section)
 - `docs/history/`  -  historical audit reports
+
+### 8. Golden byte-identity gate
+
+- `tools/hs-extract-batch/gate/`  -  the fork's regression gate: `gate_batch.py`
+  (baseline|check; requires `HS_GATE_MODEL=<gguf>`, runs the production path,
+  no fallbacks), committed anchor `digests_baseline.json` (the promoted
+  2026-09-13 Ampere lineage), `audit_integrity.sh` (19 structural checks),
+  `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures),
+  `regen_manifest_lines.py` (adoption-manifest drift check; CI runs it with
+  `--check`). See `gate/README.md` for the model contract and workflow.
+
+### 9. Shared headers (`tools/hs-extract-common/`)
+
+- `layer-parse.h`  -  the one layer-list parser used by both CLIs ('all',
+  comma-separated hidden_states indices, negatives from the end, duplicates
+  rejected).
+- `tokenize.h`  -  the bounded tokenizer shared by both CLIs (per-token
+  validation; replaced hand-copied per-tool variants).
