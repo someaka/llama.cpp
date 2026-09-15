@@ -5591,6 +5591,23 @@ void server_routes::init_routes() {
             return res;
         }
 
+        // HS-1 (P0) pin: an empty-string element in an input array is invalid
+        // input regardless of vocabulary — on BOS-add vocabs it would silently
+        // become a bare-[BOS] 1-token prompt (a request the caller almost
+        // certainly did not mean), and on no-BOS vocabs it tokenizes to zero
+        // tokens, which used to abort the server. Reject by content, not by
+        // token count, so the contract does not depend on the model.
+        if (prompt.is_array()) {
+            for (size_t i = 0; i < prompt.size(); i++) {
+                if (prompt[i].is_string() && prompt[i].get<std::string>().empty()) {
+                    res->error(format_error_response(
+                        "input[" + std::to_string(i) + "] is an empty string — cannot extract hidden states",
+                        ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+            }
+        }
+
         // Tokenize the input using the same pattern as embeddings. A malformed
         // input (bare `[]`, non-string junk) throws inside tokenize_input_prompts;
         // surface that as 400 rather than an unhandled 500.
