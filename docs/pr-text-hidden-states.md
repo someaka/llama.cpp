@@ -61,15 +61,21 @@ Zero redundancy.
 ## Testing
 
 - `test-hidden-states` (CPU): API contract — enable at creation, single +
-  batch getters, boundary rejection, ladder top slot.
-- `hs-extract-batch --self-test`: passes end-to-end, including the
-  accumulator checkpoint/resume roundtrip.
-- The stack restores upstream test coverage that intermediate branch
-  surgery had silently dropped: the chunked-scan tests in
-  `tests/test-backend-ops.cpp` and the
-  `test-recurrent-state-rollback-nemotron-h` registration in
-  `tests/CMakeLists.txt`. Both files are zero-diff (resp. add-only)
-  against upstream after the restores.
+  batch getters, boundary rejection, ladder top slot, failed-decode
+  invalidation (getters empty after a failed decode, no stale exposure,
+  recovery on the next good decode), and multi-ubatch accumulation
+  (n_ubatch < n_tokens capture byte-identical to the single-ubatch
+  reference on layer 0 and the top slot).
+- `hs-extract-batch --self-test`: 28 checks — kernels, FNV vectors,
+  checkpoint roundtrip incl. legacy v1 restore, CRD2 output format
+  round-trip, CRD1 reader status contract + exact-EOF, negative-field
+  parse-site rejection.
+- `llama-hs-probe`: logits-equivalence probe (argmax + top-8 logit values
+  with extraction on vs off, creation-time and runtime-toggle paths) —
+  the regression gate for the output-projection interaction.
+- The PR branch re-cut carries zero diff on `tests/test-backend-ops.cpp`;
+  `tests/CMakeLists.txt` diff is add-only (the two new test targets plus
+  a PCH tweak on an existing target).
 - No performance side-changes are included; sustained extraction workloads
   (200K+ prompts) showed rb-tree allocator churn in llama-kv-cells — if it
   reproduces on master we'll file it separately.
