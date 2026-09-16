@@ -74,8 +74,9 @@ Zero redundancy.
   with extraction on vs off, creation-time and runtime-toggle paths) —
   the regression gate for the output-projection interaction.
 - The PR branch re-cut carries zero diff on `tests/test-backend-ops.cpp`;
-  `tests/CMakeLists.txt` diff is add-only (the two new test targets plus
-  a PCH tweak on an existing target).
+  `tests/CMakeLists.txt` diff is add-only (the two new test targets only;
+  upstream removed precompiled headers from the tree in f3a184b15, so no
+  PCH remains to tweak).
 - No performance side-changes are included; sustained extraction workloads
   (200K+ prompts) showed rb-tree allocator churn in llama-kv-cells — if it
   reproduces on master we'll file it separately.
