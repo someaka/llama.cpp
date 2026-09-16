@@ -165,8 +165,12 @@ machine).
 
 - `tools/hs-extract-batch/gate/`  -  the fork's regression gate: `gate_batch.py`
   (baseline|check; requires `HS_GATE_MODEL=<gguf>`, runs the production path,
-  no fallbacks), committed anchor `digests_baseline.json` (the promoted
-  2026-09-13 Ampere lineage), `audit_integrity.sh` (19 structural checks),
+  no fallbacks), committed anchor `digests_baseline.json` (restored
+  2026-09-16 to the verified 2026-08-18 closure lineage: the 09-13
+  "re-baseline" had promoted stale-cache bytes — see CrimsonRed
+  `audit_2026-09-16/gate_red_taint_rootcause.md`; fresh builds on any
+  window-3/4 tree reproduce this anchor exactly, AOT or PTX-JIT),
+  `audit_integrity.sh` (19 structural checks),
   `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures),
   `regen_manifest_lines.py` (adoption-manifest drift check; CI runs it with
   `--check`). See `gate/README.md` for the model contract and workflow.

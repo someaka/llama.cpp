@@ -224,7 +224,8 @@ v4 with the count check only (warning); v1/v2/v3 predate content checking
 (v3 still enforces the run fingerprint).
 Checkpoints written before the `version` field existed (June 2026 era: the
 file starts with `n_iterated`, then a CRD2 accumulator region) are refused
-as `unsupported checkpoint version <n_iterated>` and are not resumable —
+as `checkpoint version mismatch (got <n_iterated>, expected 6)` and are not
+resumable —
 e.g. CrimsonRed's `qwen_output.bin.checkpoint` (2026-06-19); the completed
 output written by that run is unaffected.
 

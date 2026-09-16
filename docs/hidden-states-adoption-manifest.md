@@ -213,29 +213,29 @@ calls are no-ops until the arch is added to the registry; per-adoption steps:
 |---|---|---|---|
 | llama_model_arwkv7 | src/models/arwkv7.cpp | HYBRID-OTHER | arwkv7.cpp:182 — RWKV7 attention + llama-style FFN; residual at 182 |
 | llama_model_cohere2 | src/models/cohere2.cpp | PARALLEL-RESIDUAL | cohere2.cpp:124-134 — FFN consumes ffn_inp=norm(inpL) (80,120); block out = inpL + ffn_out + attn_out (133-134) |
-| llama_model_cohere2moe | src/models/cohere2moe.cpp | PARALLEL-RESIDUAL | cohere2moe.cpp:265-266 — same three-way sum: cur=cur+inpL then cur=cur+attn_out |
+| llama_model_cohere2moe | src/models/cohere2moe.cpp | PARALLEL-RESIDUAL | cohere2moe.cpp:262-263 — same three-way sum: cur=cur+inpL then cur=cur+attn_out |
 | llama_model_command_r | src/models/command-r.cpp | PARALLEL-RESIDUAL | command-r.cpp:118-119 — same three-way sum: cur=cur+inpL then cur=cur+attn_out |
-| llama_model_deepseek4 | src/models/deepseek4.cpp | HYBRID-OTHER | deepseek4.cpp:1368 — inpL = build_hc_post(cur, residual, post, comb, il): hyper-connection mixing; next-layer input is an hc-transformed com |
-| llama_model_dflash | src/models/dflash.cpp | HYBRID-OTHER | dflash.cpp — MTP draft arch: graph<false> main loop 427-481 classic (add 477), graph_dsv4 loop 597-655 hc-post (653); draft/target coupling  |
-| llama_model_eagle3 | src/models/eagle3.cpp | HYBRID-OTHER | eagle3.cpp:137-158,164+ — MTP encoder/decoder pair, n_layer==1 asserted (168); not a plain stack |
+| llama_model_deepseek4 | src/models/deepseek4.cpp | HYBRID-OTHER | deepseek4.cpp:1262 — inpL = build_hc_post(cur, residual, post, comb, il): hyper-connection mixing; next-layer input is an hc-transformed composite input |
+| llama_model_dflash | src/models/dflash.cpp | HYBRID-OTHER | dflash.cpp — MTP draft arch: graph<false> main loop 427-481 classic (add 477), graph_dsv4 loop 597-655 hc-post (653); draft/target coupling is structural (two interleaved graphs), not a per-layer residual shape |
+| llama_model_eagle3 | src/models/eagle3.cpp | HYBRID-OTHER | eagle3.cpp:137-158,164+ — MTP encoder/decoder pair, n_layer==1 asserted (156); not a plain stack |
 | llama_model_falcon | src/models/falcon.cpp | PARALLEL-RESIDUAL | falcon.cpp:121-135 — FFN consumes attn_norm (block input norm), not the post-attention residual; block out = inpL + attn_out + ffn_out via t |
 | llama_model_falcon_h1 | src/models/falcon-h1.cpp | HYBRID-OTHER | falcon-h1.cpp:165 — attn_out + ssm_out summed mid-block; single residual thread at bottom (187) but mamba2 hybrid |
-| llama_model_gemma3n | src/models/gemma3n.cpp | HYBRID-OTHER | gemma3n.cpp:253-256 — alt-up: block output is a 3D concat [n_embd, n_tokens, n_altup] of corrected slices, not [n_embd, n_tokens] |
+| llama_model_gemma3n | src/models/gemma3n.cpp | HYBRID-OTHER | gemma3n.cpp:256-261 — alt-up: block output is a 3D concat [n_embd, n_tokens, n_altup] of corrected slices, not [n_embd, n_tokens] |
 | llama_model_gptneox | src/models/gptneox.cpp | PARALLEL-RESIDUAL | gptneox.cpp:143-172 — hparams.use_par_res runtime gate; parallel branch x = x + attn(ln1(x)) + ffn(ln2(x)) (163-166); sequential else-branch |
-| llama_model_granite_hybrid | src/models/granite-hybrid.cpp | HYBRID-OTHER | granite-hybrid.cpp:175 — mamba2/attn/ffn per-layer dispatch via llm_build_mamba_base; residual add inside build_layer_ffn helper (granite-hy |
-| llama_model_granite_switch | src/models/granite-switch.cpp | HYBRID-OTHER | granite-switch.cpp:310 — adapter-routed ffn; residual inside helper (granite-switch.cpp:420) |
-| llama_model_kimi_k3 | src/models/kimi-k3.cpp | HYBRID-OTHER | kimi-k3.cpp:323 — prefix_sum = ggml_add(prefix_sum, cur) accumulated ACROSS layers (running sum), not a per-block residual |
+| llama_model_granite_hybrid | src/models/granite-hybrid.cpp | HYBRID-OTHER | granite-hybrid.cpp:175 — mamba2/attn/ffn per-layer dispatch via llm_build_mamba_base; residual add inside build_layer_ffn helper (granite-hybrid.cpp:421) |
+| llama_model_granite_switch | src/models/granite-switch.cpp | HYBRID-OTHER | granite-switch.cpp:311 — adapter-routed ffn; residual inside helper (granite-switch.cpp:421) |
+| llama_model_kimi_k3 | src/models/kimi-k3.cpp | HYBRID-OTHER | kimi-k3.cpp:325 — prefix_sum = ggml_add(prefix_sum, cur) accumulated ACROSS layers (running sum), not a per-block residual |
 | llama_model_kimi_linear | src/models/kimi-linear.cpp | HYBRID-OTHER | kimi-linear.cpp:528 — single-thread residual at loop bottom, but blocks dispatch on is_recr(il) between linear-attention and full-attention  |
-| llama_model_lfm2 | src/models/lfm2.cpp | HYBRID-OTHER | lfm2.cpp:259,268 — hybrid shortconv/attn (is_recr), single residual thread |
+| llama_model_lfm2 | src/models/lfm2.cpp | HYBRID-OTHER | lfm2.cpp:260,268 — hybrid shortconv/attn (is_recr), single residual thread |
 | llama_model_mamba | src/models/mamba.cpp | HYBRID-OTHER | mamba.cpp:115 — pure SSM; residual at 115 but all blocks are mamba/mamba2 recurrent |
-| llama_model_nemotron_h | src/models/nemotron-h.cpp | HYBRID-OTHER | nemotron-h.cpp:191-207 — per-layer is_recr/n_ff dispatch (mamba2/attn/ffn); residual at 207; res->t_layer_inp[il] = inpL at 183 records bloc |
+| llama_model_nemotron_h | src/models/nemotron-h.cpp | HYBRID-OTHER | nemotron-h.cpp:209-225 — per-layer is_recr/n_ff dispatch (mamba2/attn/ffn), residual add at 225; res->t_layer_inp[il] = inpL at 201 records block input |
 | llama_model_plamo2 | src/models/plamo2.cpp | HYBRID-OTHER | plamo2.cpp:176 — classic residual thread; build_plamo2_mamba_layer / build_plamo2_attn_layer per-layer dispatch (loop 125-181) |
-| llama_model_qwen35moe | src/models/qwen35moe.cpp | HYBRID-OTHER | qwen35moe.cpp:222 — classic residual thread; is_recr delta/attn dispatch (161); sibling of adopted qwen35 |
-| llama_model_qwen3next | src/models/qwen3next.cpp | HYBRID-OTHER | qwen3next.cpp:196 — classic residual thread (ffn_residual); per-layer is_recr dispatch between gated-delta-net and full attn; same shape as  |
-| llama_model_rwkv6 | src/models/rwkv6.cpp | HYBRID-OTHER | rwkv6.cpp:162 — RWKV time/channel mix with token_shift state (116-148); per-layer output well-defined but recurrence semantics require decis |
+| llama_model_qwen35moe | src/models/qwen35moe.cpp | HYBRID-OTHER | qwen35moe.cpp:203 — classic residual thread (cur=cur+ffn_residual); is_recr delta/attn dispatch (189); sibling of adopted qwen35 |
+| llama_model_qwen3next | src/models/qwen3next.cpp | HYBRID-OTHER | qwen3next.cpp:192 — classic residual thread (ffn_residual); per-layer is_recr dispatch (163/192) between gated-delta-net and full attn; same shape as qwen35moe |
+| llama_model_rwkv6 | src/models/rwkv6.cpp | HYBRID-OTHER | rwkv6.cpp:162 — RWKV time/channel mix with token_shift state (116-148); per-layer output well-defined but recurrence semantics require a decision |
 | llama_model_rwkv6qwen2 | src/models/rwkv6qwen2.cpp | HYBRID-OTHER | rwkv6qwen2.cpp — RWKV6 backbone + qwen2 head; hybrid |
 | llama_model_rwkv7 | src/models/rwkv7.cpp | HYBRID-OTHER | rwkv7.cpp:191 — same as rwkv6 |
-| llama_model_t5 | src/models/t5.cpp | HYBRID-OTHER | t5.cpp:145-255 — encoder-decoder: separate enc/dec loops; classic per-layer thread BUT cross-attn consumes external embd_enc; dec loop uses  |
+| llama_model_t5 | src/models/t5.cpp | HYBRID-OTHER | t5.cpp:133-281 — encoder-decoder: separate enc/dec loops (dec 133+, enc 281+); classic per-layer thread BUT cross-attn consumes external embd_enc |
 | llama_model_wavtokenizer_dec | src/models/wavtokenizer-dec.cpp | HYBRID-OTHER | wavtokenizer-dec.cpp — posnet/convnext loops (130,218), n_embd_out != n_embd (llama-model.cpp:1124) |
 
 ## Adoption order
@@ -274,5 +274,8 @@ real omissions of this manifest, listed at the bottom.
   no dormant tap sewn yet.
 - `granite-swa.cpp` (319 lines): same — classic tail at :312, adoptable,
   no dormant tap sewn yet.
-- `qwen4exp.cpp` (1279 lines): registered standalone arch, hc-stream hybrid
+- `qwen4exp.cpp` (1297 lines): registered standalone arch, hc-stream hybrid
   residual — needs a refusal-or-adopt decision before a tap can be honest.
+- (Upstream drift since this section was written added `hy-v4.cpp`,
+  `maple.cpp`, `spark2-5.cpp` — 154 model files on disk now; none tapped,
+  none classified yet.)
