@@ -5597,6 +5597,15 @@ void server_routes::init_routes() {
         // certainly did not mean), and on no-BOS vocabs it tokenizes to zero
         // tokens, which used to abort the server. Reject by content, not by
         // token count, so the contract does not depend on the model.
+        // The scalar form is the same hazard: a scalar empty string reaches
+        // tokenize_input_prompts identically and slips through on BOS-add
+        // vocabs (tour dry-run finding P5, 2026-09-17), so reject it here too.
+        if (prompt.is_string() && prompt.get<std::string>().empty()) {
+            res->error(format_error_response(
+                "input is an empty string — cannot extract hidden states",
+                ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         if (prompt.is_array()) {
             for (size_t i = 0; i < prompt.size(); i++) {
                 if (prompt[i].is_string() && prompt[i].get<std::string>().empty()) {
