@@ -2111,7 +2111,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // Extract per-layer hidden states for this ubatch (accumulate across all ubatches)
         if (cparams.extract_hidden_states) {
-            auto * hres = gf_res_prev.get();
+            // MTP dual-slot rework (2f3fd0252): the graph result for THIS ubatch is
+            // the `res` returned by process_ubatch above (it is stored into the
+            // active gf_res_prev slot); the old gf_res_prev.get() has no
+            // single-value form anymore.
+            const auto * hres = res;
             const uint32_t n_embd_out = hparams.n_embd_out();
             const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
 
