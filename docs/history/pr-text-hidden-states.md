@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-09-18** — the upstream-PR path was explicitly dropped by the
+> owner ("no PR, not now, not later"). Kept in docs/history/ for its API-surface
+> prose only; nothing here is a plan of record. The fork's living docs are
+> FORK_CHANGES.md, docs/hidden-states-architecture.md and
+> docs/hidden-states-adoption-manifest.md.
+
 # PR text — hidden-states extraction (branch `hidden-states-extraction`)
 
 Title: `llama: hidden-state extraction API + tools + server endpoint`

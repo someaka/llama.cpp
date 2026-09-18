@@ -155,7 +155,9 @@ machine).
   index convention
 - `docs/hidden-states-adoption-manifest.md`  -  per-builder adoption
   classification (ADOPT / REFUSE lists) and the adoption recipe
-- `docs/pr-text-hidden-states.md`  -  draft PR text for upstreaming
+- `docs/pr-text-hidden-states.md` — archived 2026-09-18 to
+  `docs/history/pr-text-hidden-states.md` (the upstream-PR path was explicitly
+  dropped; the draft is kept for its API-surface prose only).
 - `tools/hs-extract-batch/README.md`  -  batch extraction tool
 - `tools/hs-extract/README.md`  -  single-prompt tool
 - `tools/server/README.md`  -  `/hidden-states` endpoint ("POST /hidden-states" section)
