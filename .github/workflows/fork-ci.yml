@@ -435,6 +435,40 @@ jobs:
           fi
           echo "PASS: decode-split prompt refused with 400"
 
+      - name: Test --no-hidden-states kill-switch (501)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          echo "Starting server with --no-hidden-states..."
+          LD_LIBRARY_PATH=build/bin build/bin/llama-server \
+            -m models/test-model.gguf \
+            -ngl 0 -c 512 -b 512 -ub 512 -np 1 --port 8099 --no-hidden-states \
+            --cache-ram 0 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8099/health > /dev/null 2>&1; then
+              echo "Server is ready"
+              break
+            fi
+            sleep 1
+          done
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8099/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"normalize":false,"pool":"last"}')
+          if [ "$HTTP_CODE" != "501" ]; then
+            echo "FAIL: expected 501 with --no-hidden-states, got $HTTP_CODE"
+            exit 1
+          fi
+          BODY=$(curl -s -X POST http://127.0.0.1:8099/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"normalize":false,"pool":"last"}')
+          if ! echo "$BODY" | grep -q "disabled by --no-hidden-states"; then
+            echo "FAIL: 501 body does not name the flag; got: $BODY"
+            exit 1
+          fi
+          echo "PASS: --no-hidden-states answers 501 naming the flag"
+
       - name: PR-surface whitespace check
         timeout-minutes: 5
         run: |
