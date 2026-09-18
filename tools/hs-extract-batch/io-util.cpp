@@ -174,7 +174,7 @@ bool write_batch_output(
     std::string temp_path = std::string(output_path) + ".tmp";
     FilePtr out(fopen(temp_path.c_str(), "wb"));
     if (!out) {
-        fprintf(stderr, "Error: cannot open output file %s\n", temp_path.c_str());
+        fprintf(stderr, "Error: cannot open output file %s: %s\n", temp_path.c_str(), strerror(errno));
         return false;
     }
     bool ok = _write_accumulator_to_file(accumulators, out, n_embd);
@@ -191,7 +191,7 @@ bool write_batch_output(
     }
     out.reset();  // close file before rename
     if (rename(temp_path.c_str(), output_path) != 0) {
-        fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), output_path);
+        fprintf(stderr, "Error: cannot rename %s to %s: %s\n", temp_path.c_str(), output_path, strerror(errno));
         std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
         return false;
     }
@@ -258,7 +258,7 @@ bool write_checkpoint(
     // Write to temporary file first
     FilePtr f(fopen(temp_path.c_str(), "wb"));
     if (!f) {
-        fprintf(stderr, "Error: cannot write checkpoint to %s\n", temp_path.c_str());
+        fprintf(stderr, "Error: cannot write checkpoint to %s: %s\n", temp_path.c_str(), strerror(errno));
         return false;
     }
     if (!checked_write(&CHECKPOINT_VERSION, sizeof(int32_t), 1, f)) {
@@ -322,7 +322,7 @@ bool write_checkpoint(
     f.reset();  // close file before rename
     // Atomic rename: temp -> final
     if (rename(temp_path.c_str(), ckpt_path.c_str()) != 0) {
-        fprintf(stderr, "Error: cannot rename %s to %s\n", temp_path.c_str(), ckpt_path.c_str());
+        fprintf(stderr, "Error: cannot rename %s to %s: %s\n", temp_path.c_str(), ckpt_path.c_str(), strerror(errno));
         std::remove(temp_path.c_str());  // no orphaned .tmp on rename failure
         return false;
     }

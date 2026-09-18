@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstring>  // strerror for the fsync diagnostics below
 #ifndef _WIN32
 #include <unistd.h>  // fsync for durability before rename (POSIX)
 #include <fcntl.h>   // open/O_DIRECTORY for parent-dir fsync after rename
@@ -77,12 +78,12 @@ static inline bool fsync_parent_dir(const char* path) {
         : p.substr(0, slash == 0 ? 1 : slash);
     int dfd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
     if (dfd < 0) {
-        fprintf(stderr, "Error: could not open dir %s for fsync (errno=%d)\n", dir.c_str(), errno);
+        fprintf(stderr, "Error: could not open dir %s for fsync: %s\n", dir.c_str(), strerror(errno));
         return false;
     }
     bool ok = fsync(dfd) == 0;
     if (!ok) {
-        fprintf(stderr, "Error: fsync of dir %s failed (errno=%d)\n", dir.c_str(), errno);
+        fprintf(stderr, "Error: fsync of dir %s failed: %s\n", dir.c_str(), strerror(errno));
     }
     close(dfd);
     return ok;

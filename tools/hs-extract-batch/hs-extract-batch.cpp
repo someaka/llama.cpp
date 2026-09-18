@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <cctype>
 #include <climits>
 #include <string>
 #include <vector>
@@ -322,6 +323,14 @@ static Args parse_args(int argc, char** argv) {
         } else {
             positional.push_back(argv[i]);
         }
+    }
+
+    // --self-test is a mode of its own: main() dispatches exactly one mode,
+    // so a --batch/--raw on the same command line would be silently discarded
+    // by the early return below. Reject the combination.
+    if (args.self_test && (args.batch_mode || args.raw_mode)) {
+        fprintf(stderr, "Error: --self-test cannot be combined with --batch or --raw\n");
+        exit(1);
     }
 
     // --self-test needs no model or prompts -- skip positional validation
@@ -848,7 +857,7 @@ static int run_raw(const Args& args) {
     std::string tmp_path = std::string(args.output_path) + ".tmp";
     FilePtr out(fopen(tmp_path.c_str(), "wb"));
     if (!out) {
-        fprintf(stderr, "Error: cannot open output file %s\n", tmp_path.c_str());
+        fprintf(stderr, "Error: cannot open output file %s: %s\n", tmp_path.c_str(), strerror(errno));
         return 1;
     }
     // Shared error cleanup: close the temp file and remove it so a failed
@@ -959,7 +968,7 @@ static int run_raw(const Args& args) {
     }
     out.reset();  // fclose before rename
     if (rename(tmp_path.c_str(), args.output_path) != 0) {
-        fprintf(stderr, "Error: cannot rename %s to %s\n", tmp_path.c_str(), args.output_path);
+        fprintf(stderr, "Error: cannot rename %s to %s: %s\n", tmp_path.c_str(), args.output_path, strerror(errno));
         std::remove(tmp_path.c_str());
         return 1;
     }
@@ -1398,7 +1407,7 @@ static int run_batch(const Args& args) {
 
     FilePtr assign_fin(fopen(args.assignments_file, "rb"));
     if (!assign_fin) {
-        fprintf(stderr, "Error: cannot open assignments file %s\n", args.assignments_file);
+        fprintf(stderr, "Error: cannot open assignments file %s: %s\n", args.assignments_file, strerror(errno));
         return 1;
     }
 
@@ -2024,8 +2033,8 @@ static int run_batch(const Args& args) {
         }
         records_closer.reset();  // close before rename
         if (rename(records_temp_path.c_str(), records_path.c_str()) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n",
-                    records_temp_path.c_str(), records_path.c_str());
+            fprintf(stderr, "Error: cannot rename %s to %s: %s\n",
+                    records_temp_path.c_str(), records_path.c_str(), strerror(errno));
             // rename failed: remove the orphaned temp file.
             std::remove(records_temp_path.c_str());
             return 1;
