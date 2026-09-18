@@ -77,15 +77,16 @@ JSON output structure:
 {
   "n_tokens": 4,
   "n_embd": 2048,
-  "n_layers": 36,
+  "n_layers": 35,
   "layers": [
     {"layer": 0, "values": [0.123, -0.456, ...]},
     {"layer": 5, "values": [0.234, -0.567, ...]}
   ]
 }
 ```
-(`n_layers` is the model's hidden-state slot count, n_layer + 1 — not the
-number of layers requested.)
+(`n_layers` is the model's block count, `llama_model_n_layer` — the number
+of transformer blocks, 35 on the gate model — not the hidden-state slot
+count (36) and not the number of layers requested.)
 
 Each layer entry contains a flat array of `n_tokens * n_embd` float values
 (row-major: token 0 dims 0..n_embd-1, then token 1, etc.).
