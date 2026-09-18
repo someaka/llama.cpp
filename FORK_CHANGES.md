@@ -73,7 +73,7 @@ curl -X POST http://localhost:8080/hidden-states \
 Pooling modes: `last` (last token), `skip_mean` (masked mean), `none` (per-token).
 `input` may be a single string or an array of strings (batched; the response is
 a JSON array echoing each item's `index`). `normalize: true` L2-normalizes each
-pooled output vector (no effect with `pool: "none"`).
+pooled output vector (rejected with 400 when combined with `pool: "none"`).
 
 Per-request limit: the input must fit in one decode call — more than `n_batch`
 tokens (the server's `-b` value; upstream default 2048) is refused with 400 (`raise -b or shorten the
