@@ -277,5 +277,5 @@ real omissions of this manifest, listed at the bottom.
 - `qwen4exp.cpp` (1297 lines): registered standalone arch, hc-stream hybrid
   residual — needs a refusal-or-adopt decision before a tap can be honest.
 - (Upstream drift since this section was written added `hy-v4.cpp`,
-  `maple.cpp`, `spark2-5.cpp` — 154 model files on disk now; none tapped,
+  `maple.cpp`, `spark2-5.cpp`, `hrm-text.cpp` — 155 model files on disk now; none tapped,
   none classified yet.)
