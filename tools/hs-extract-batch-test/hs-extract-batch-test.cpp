@@ -50,7 +50,7 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
 
     llama_context * ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
-        fprintf(stderr, "Failed to init context (%s)\n", server_style ? "server" : "cli");
+        fprintf(stderr, "Error: failed to init context (%s style)\n", server_style ? "server" : "cli");
         exit(1);
     }
 
@@ -67,7 +67,7 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
         if (!warmup_tokens.empty()) {
             llama_batch wb = llama_batch_get_one(warmup_tokens.data(), warmup_tokens.size());
             if (llama_decode(ctx, wb) != 0) {
-                fprintf(stderr, "Warmup decode failed\n");
+                fprintf(stderr, "Error: warmup decode failed\n");
                 exit(1);
             }
             llama_synchronize(ctx);
@@ -81,7 +81,7 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
 
     llama_batch batch = llama_batch_get_one(const_cast<llama_token *>(tokens.data()), tokens.size());
     if (llama_decode(ctx, batch) != 0) {
-        fprintf(stderr, "Decode failed (%s)\n", server_style ? "server" : "cli");
+        fprintf(stderr, "Error: decode failed (%s style)\n", server_style ? "server" : "cli");
         exit(1);
     }
     llama_synchronize(ctx);
@@ -89,7 +89,7 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     const int layer = 10;
     float * hs = llama_get_hidden_state(ctx, layer);
     if (!hs) {
-        fprintf(stderr, "No hidden states available (%s); n_hidden_tokens = %d\n",
+        fprintf(stderr, "Error: no hidden states available (%s style); n_hidden_tokens = %d\n",
                 server_style ? "server" : "cli", llama_get_hidden_state_n_tokens(ctx));
         exit(1);
     }
@@ -126,7 +126,7 @@ int main(int argc, char ** argv) {
         const long parsed = strtol(argv[3], &mode_end, 10);
         if (mode_end == argv[3] || *mode_end != '\0' || parsed < 0 || parsed > 2) {
             fprintf(stderr, "Error: invalid mode '%s' (expected 0, 1, or 2)\n", argv[3]);
-            fprintf(stderr, "Usage: %s <model.gguf> [prompt] [mode 0|1|2]\n", argv[0]);
+            fprintf(stderr, "Usage: %s <model.gguf> <prompt> [mode 0|1|2]\n", argv[0]);
             return 1;
         }
         mode = (int) parsed;
@@ -138,7 +138,7 @@ int main(int argc, char ** argv) {
     mparams.n_gpu_layers = 100;
     llama_model * model = llama_model_load_from_file(model_path, mparams);
     if (!model) {
-        fprintf(stderr, "Failed to load model\n");
+        fprintf(stderr, "Error: failed to load model '%s'\n", model_path);
         return 1;
     }
 
@@ -146,8 +146,15 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> tokens;
     tokens.resize(strlen(prompt) + 16);
     int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), tokens.size(), true, true);
-    if (n_tokens <= 0) {
-        fprintf(stderr, "Tokenization failed\n");
+    if (n_tokens < 0) {
+        // negative = required buffer size: the fixed strlen+16 estimate was too
+        // small for this prompt (byte-fallback tokenization).
+        fprintf(stderr, "Error: prompt needs %d token slots, more than the allocated %zu\n",
+                -n_tokens, tokens.size());
+        return 1;
+    }
+    if (n_tokens == 0) {
+        fprintf(stderr, "Error: prompt tokenized to zero tokens\n");
         return 1;
     }
     tokens.resize(n_tokens);
