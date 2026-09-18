@@ -123,7 +123,7 @@ int main(int argc, char ** argv) {
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "Error: --ctx-size value must be a number\n"); return 1; }
+            if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --ctx-size value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --ctx-size value out of range\n"); return 1; }
             if (val < 1) { fprintf(stderr, "Error: --ctx-size must be >= 1\n"); return 1; }
             ctx_size = (int) val;
@@ -132,7 +132,7 @@ int main(int argc, char ** argv) {
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "Error: --threads value must be a number\n"); return 1; }
+            if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --threads value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --threads value out of range\n"); return 1; }
             if (val < 1) { fprintf(stderr, "Error: --threads must be >= 1\n"); return 1; }
             n_threads = (int) val;
@@ -141,7 +141,7 @@ int main(int argc, char ** argv) {
             char *endptr;
             errno = 0;
             long val = strtol(argv[i], &endptr, 10);
-            if (*endptr != '\0') { fprintf(stderr, "Error: --n-gpu-layers value must be a number\n"); return 1; }
+            if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --n-gpu-layers value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --n-gpu-layers value out of range\n"); return 1; }
             if (val < 0) { fprintf(stderr, "Error: --n-gpu-layers must be >= 0\n"); return 1; }
             n_gpu_layers = (int) val;
@@ -176,7 +176,7 @@ int main(int argc, char ** argv) {
     if (prompt_file) {
         std::ifstream in(prompt_file, std::ios::binary);
         if (!in) {
-            fprintf(stderr, "Error: could not open file '%s'\n", prompt_file);
+            fprintf(stderr, "Error: could not open file '%s': %s\n", prompt_file, strerror(errno));
             return 1;
         }
         std::stringstream buf;
@@ -219,10 +219,11 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     if (raw_mode) {
+        // A parse failure returns empty; parse_raw_tokens printed the specific
+        // cause for garbage input. Fall through to the shared empty-tokens
+        // error below so an empty --raw string is also diagnosed, not a
+        // silent exit 1.
         tokens = parse_raw_tokens(prompt_text, vocab);
-        if (tokens.empty()) {
-            return 1;
-        }
         fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
     } else {
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
@@ -318,14 +319,16 @@ int main(int argc, char ** argv) {
     // GB-scale text in RAM before the first write. When --output is given the
     // stream targets a .tmp file renamed into place only after a verified
     // flush, so a disk-full/EIO mid-write never leaves a truncated JSON at
-    // the final path (same durability contract as hs-extract-batch's writers).
+    // the final path (process-crash atomicity via rename; unlike
+    // hs-extract-batch's writers there is no fsync here -- a power cut after
+    // rename may still lose the data, acceptable for a single-prompt CLI).
     std::ofstream file_out;
     std::string tmp_path;
     if (output_file) {
         tmp_path = std::string(output_file) + ".tmp";
         file_out.open(tmp_path);
         if (!file_out) {
-            fprintf(stderr, "Error: could not open output file '%s'\n", tmp_path.c_str());
+            fprintf(stderr, "Error: could not open output file '%s': %s\n", tmp_path.c_str(), strerror(errno));
             return 1;
         }
     }
@@ -385,7 +388,7 @@ int main(int argc, char ** argv) {
         // Atomic finalize: the final path appears only when the write is
         // complete, so a crash mid-write can never leave a truncated JSON.
         if (std::rename(tmp_path.c_str(), output_file) != 0) {
-            fprintf(stderr, "Error: cannot rename %s to %s\n", tmp_path.c_str(), output_file);
+            fprintf(stderr, "Error: cannot rename %s to %s: %s\n", tmp_path.c_str(), output_file, strerror(errno));
             std::remove(tmp_path.c_str());
             return 1;
         }
