@@ -35,13 +35,16 @@ PY
 
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
 strip_comments tools/hs-extract-batch/hs-accum.h | grep -q "inline uint64_t make_accum_key" && echo "PASS" || { echo "FAIL: uint64_t make_accum_key missing in code"; exit 1; }
+
 echo "=== Check 2: output_all defined ==="
 strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparams\.embeddings;" && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
 strip_comments src/llama-context.cpp | grep -q "if (output_all) {" && echo "PASS" || { echo "FAIL: output_all primary use missing or inverted"; exit 1; }
+
 echo "=== Check 3: RAII LlamaBackend ==="
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
   strip_comments "$f" | grep -qE "LlamaBackend +[A-Za-z_][A-Za-z_0-9]*;" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend declaration in $f"; exit 1; }
 done
+
 echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
 for f in src/llama-context.cpp; do
   grep -q "llama_context::get_hidden_state\b" "$f" || { echo "FAIL: get_hidden_state impl missing"; exit 1; }
@@ -67,6 +70,7 @@ if _stmt:
 print("PASS: getters sync (position-pinned)")
 CHK
 done
+
 echo "=== Check 5: All fclose calls are inside FilePtr RAII wrapper ==="
 python3 - <<'PY'
 import re
@@ -110,6 +114,7 @@ if outside:
     raise SystemExit(1)
 print('PASS: all fclose calls inside FilePtr RAII wrapper')
 PY
+
 echo "=== Check 6: every checked_write() call site tests its bool return ==="
 python3 - <<'PY'
 from pathlib import Path
@@ -175,8 +180,10 @@ if bad:
     raise SystemExit(1)
 print(f'PASS ({total_calls} checked_write call statements ({sum_raw} call sites), all tested)')
 PY
+
 echo "=== Check 7: assignment reader uses explicit status ==="
 strip_comments tools/hs-extract-batch/assignments-io.h | grep -q "AssignmentReadStatus::error" && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
+
 echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 # auto_size_ctx was removed in the single-pass pre-scan
 # refactor; its successor must uphold the same contract: pure
@@ -193,6 +200,7 @@ if ! grep -q "struct PromptsScan" tools/hs-extract-batch/hs-extract-batch.cpp; t
 echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this check)"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 9: No off-by-one ==="
 # Alias-tolerant: collect every identifier bound to a layer-count expression
 # (e.g. 'const size_t nl = layers.size();'), then reject '<=' against the
@@ -233,6 +241,7 @@ if failed:
     raise SystemExit(1)
 print("PASS: no <= against layer-count limits or their aliases")
 PY
+
 echo "=== Check 10: checkpoint n_masks/n_layers_data bounds validation ==="
 # Pin ENFORCEMENT, not text: the guarded block must contain 'return false;'
 # (a guard whose body was emptied must fail). -A3 reaches the body on
@@ -244,11 +253,13 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -F "if (n_laye
   echo "FAIL: checkpoint n_layers_data bounds check not enforced"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 11: output writer uses pre-built index (not O(K^2) rescan) ==="
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[[A-Za-z_][A-Za-z_0-9]*\]'; then
   echo "FAIL: output writer pre-built index (gm_pairs) missing at use site"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 12: checkpoint count/layer_idx validation ==="
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -E "if \(count < 0\)" | grep -q "return false;"; then
   echo "FAIL: checkpoint count validation not enforced"; exit 1
@@ -257,6 +268,7 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -A3 -E "layer_idx 
   echo "FAIL: checkpoint layer_idx validation not enforced"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 13: producer-consumer pipeline error notification ==="
 # The batch tool uses a producer-consumer pipeline where a prefetch
 # thread (producer) reads prompts + assignments while the main thread
@@ -288,6 +300,7 @@ if not (has_done and has_notify and ordered):
 print("PASS: bad-stream handler notifies consumer")
 PY
 echo "PASS"
+
 echo "=== Check 14: shared RAII header used by all fork tools ==="
 # RAII wrappers (LlamaBackend, LlamaModel, LlamaContext, LlamaBatch)
 # are extracted to common/llama-raii.h. All fork tools must include it
@@ -306,6 +319,7 @@ for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch
   fi
 done
 echo "PASS"
+
 echo "=== Check 15: async pipeline backpressure (bounded queue) ==="
 # The producer-consumer queue must have backpressure to prevent
 # unbounded memory growth on 200K-prompt runs.
@@ -321,6 +335,7 @@ if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_
   echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to
 # prevent DoS via enormous JSON responses. Pin the guard predicate at
@@ -329,6 +344,7 @@ if ! strip_comments tools/server/server-context.cpp | grep -A6 -F "if (total_all
   echo "FAIL: pool=none response size limit not enforced"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 6"; then
   echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
@@ -342,6 +358,7 @@ if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE "if \(write_su
   echo "FAIL: write_sum positive-use branch missing (polarity inverted?)"; exit 1
 fi
 echo "PASS"
+
 echo "=== Check 18: checkpoint durability order (fsync before rename) ==="
 # The durability guarantee: the tmp file is flushed+fsynced and closed before
 # the rename publishes it. Pin the ordered sequence inside write_checkpoint's
@@ -379,6 +396,7 @@ if ok_ckpt and ok_out:
     raise SystemExit(0)
 raise SystemExit(1)
 PY
+
 echo "=== Check 19: /hidden-states capture toggle cleared on all return paths ==="
 # The capture disable must be structural (a scope guard declared at function
 # entry), not a manual call at the end of the success path: manual disables

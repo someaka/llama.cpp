@@ -147,7 +147,7 @@ refused it; decode only sees such a context if the gates were bypassed).
    the adoption manifest — some have no single well-defined residual.)
 2. Add `capture_layer_output(il, cur);` right after the reassignment.
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
-4. Rebuild, self-test 28/28, `test-hidden-states <gguf>` on a real GGUF of
+4. Rebuild, self-test 29/29, `test-hidden-states <gguf>` on a real GGUF of
    that arch.
 
 Refusal needs no code: an unlisted arch is refused by name at context

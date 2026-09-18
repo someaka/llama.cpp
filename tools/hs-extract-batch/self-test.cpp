@@ -19,6 +19,7 @@
 #endif
 
 #include "hs-accum.h"
+#include "layer-parse.h"  // Test 25: pin the shared parser's semantics
 #include "hs-kernels.h"
 #include "io-util.h"  // FilePtr RAII wrapper (raw fclose is confined to this wrapper)
 #include "assignments-io.h"  // T3: CRD1 reader + W4 exact-EOF probe
@@ -695,6 +696,37 @@ int run_self_test() {
                 remove(v1_path.c_str());
                 remove(v1_base.c_str());
             HS_CHECK(ok24, "Test 24 (legacy v1 checkpoint restore, mean*count)");
+        }
+
+        // Test 25: the shared layer-list parser (tools/hs-extract-common/
+        // layer-parse.h) is the one implementation behind both CLIs' --layers
+        // (and the server's array contract mirrors its semantics), so its
+        // acceptance/rejection table is pinned here directly, not only via
+        // the tools' behavior: 'all', plain lists, Python-style negatives,
+        // junk-after-number, out-of-range (both ends), duplicates after
+        // resolution (incl. a negative alias colliding with a plain index),
+        // and the empty-string input.
+        {
+            size_t failures = 0;
+            // n_slots = 4 (e.g. n_layer = 3): valid slots 0..3, negatives -4..-1.
+            auto expect = [&](const char* in, int n_slots, std::vector<int> want) {
+                auto got = hs_parse_layer_list(in, n_slots);
+                if (got != want) { failures++; fprintf(stderr, "  parser '%s' (n=%d): got %s\n", in, n_slots, [&]{ std::string s = "["; for (size_t i = 0; i < got.size(); i++) s += (i ? "," : "") + std::to_string(got[i]); return s + "]"; }().c_str()); }
+            };
+            expect("all", 4, {0, 1, 2, 3});
+            expect("0,17", 36, {0, 17});
+            expect("-1", 4, {3});            // -1 = last slot
+            expect("-4", 4, {0});            // first slot, Python-style
+            // Negative alias collides with a plain index: 1 and -3 both
+            // resolve to 1 -> duplicate after resolution -> rejected (empty).
+            expect("1,-3", 4, {});
+            expect("0,0", 4, {});            // plain duplicate
+            expect("0,,2", 4, {});           // empty token
+            expect("17x", 36, {});           // junk after number
+            expect("4", 4, {});              // == n_slots: out of range (high)
+            expect("-5", 4, {});             // < -n_slots: out of range (low)
+            expect("", 4, {});               // empty string: no valid layers
+            HS_CHECK(failures == 0, "Test 25 (shared layer-list parser semantics)");
         }
 
         // Cleanup
