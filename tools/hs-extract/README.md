@@ -77,13 +77,15 @@ JSON output structure:
 {
   "n_tokens": 4,
   "n_embd": 2048,
-  "n_layers": 2,
+  "n_layers": 36,
   "layers": [
     {"layer": 0, "values": [0.123, -0.456, ...]},
     {"layer": 5, "values": [0.234, -0.567, ...]}
   ]
 }
 ```
+(`n_layers` is the model's hidden-state slot count, n_layer + 1 — not the
+number of layers requested.)
 
 Each layer entry contains a flat array of `n_tokens * n_embd` float values
 (row-major: token 0 dims 0..n_embd-1, then token 1, etc.).
