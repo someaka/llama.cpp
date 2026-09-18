@@ -355,6 +355,24 @@ jobs:
             exit 1
           fi
           echo "PASS: scalar empty-string input returns 400"
+          echo "--- Test: normalize with pool=none is rejected 400 (V5-N2: was silently ignored) ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hi","layers":[0],"normalize":true,"pool":"none"}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: expected 400 for normalize+pool=none, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: normalize+pool=none returns 400"
+          echo "--- Test: normalize with pooled output still 200 ---"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hi","layers":[0],"normalize":true,"pool":"last"}')
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "FAIL: expected 200 for normalize+pool=last, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "PASS: normalize+pool=last returns 200"
           echo "--- Test: server still alive after invalid requests (HS-1: no abort) ---"
           if ! curl -sf http://127.0.0.1:8097/health > /dev/null 2>&1; then
             echo "FAIL: server did not survive the invalid-request battery"

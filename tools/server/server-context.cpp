@@ -5564,6 +5564,19 @@ void server_routes::init_routes() {
             }
         }
 
+        // normalize is only defined for pooled vectors: pool=none returns
+        // per-token rows, and a scalar norm over the flattened block would
+        // scale every row by one wrong factor. Every other invalid parameter
+        // combination on this endpoint fails loud; a silently-ignored flag is
+        // the same trap the empty-input pins exist to prevent.
+        if (normalize && pool == "none") {
+            res->error(format_error_response(
+                "normalize is only supported for pooled output (pool 'last' or 'skip_mean'); "
+                "it is undefined for pool 'none' — drop the flag or change the pool",
+                ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
         // Parse skip_offset parameter (default: 0 = pool over all tokens, used with pool="skip_mean")
         int32_t skip_offset = 0;
         if (body.contains("skip_offset")) {
