@@ -47,14 +47,22 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     batch.n_tokens = n;
     fprintf(stderr, "probe: decode begin (n=%d)\n", n);
     if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "decode failed (n=%d)\n", n);
+        fprintf(stderr, "Error: decode failed (n=%d)\n", n);
         llama_batch_free(batch);
         return {};
     }
     fprintf(stderr, "probe: decode ok, reading logits\n");
 
-    // get_logits_ith takes the BATCH TOKEN index, not the output row
+    // get_logits_ith takes the BATCH TOKEN index, not the output row.
+    // Release builds return nullptr (instead of throwing) when no logits row
+    // exists; without this check the argmax loop below dereferences null and
+    // crashes the probe instead of reporting a probe-failure MISMATCH (exit 2).
     const float * logits = llama_get_logits_ith(ctx, n - 1);
+    if (!logits) {
+        fprintf(stderr, "Error: no logits returned for batch token %d\n", n - 1);
+        llama_batch_free(batch);
+        return {};
+    }
     const int n_vocab = llama_vocab_n_tokens(vocab);
     ProbeResult r;
     int best = 0;
@@ -106,6 +114,14 @@ bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & ex
 }  // namespace
 
 int main(int argc, char ** argv) {
+    // -h/--help prints usage and exits 0, matching the hs-extract tool family
+    // (every other fork CLI treats an explicit help request as success).
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("Usage: %s <model.gguf> <prompt> [--runtime-toggle]\n", argv[0]);
+            return 0;
+        }
+    }
     if (argc < 3) {
         fprintf(stderr, "Usage: %s <model.gguf> <prompt> [--runtime-toggle]\n", argv[0]);
         return 1;
@@ -128,13 +144,15 @@ int main(int argc, char ** argv) {
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = 0;
     llama_model * model = llama_model_load_from_file(model_path, mparams);
-    if (!model) { fprintf(stderr, "load failed\n"); return 1; }
+    if (!model) { fprintf(stderr, "Error: failed to load model '%s'\n", model_path); return 1; }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     std::vector<llama_token> toks(64);
     int n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false);
     if (n < 0) { toks.resize(-n); n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false); }
+    if (n < 0) { fprintf(stderr, "Error: tokenization failed (needs %d token slots)\n", -n); return 1; }
+    if (n == 0) { fprintf(stderr, "Error: prompt tokenized to zero tokens\n"); return 1; }
     toks.resize(n);
     if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (probe limit 120, sized for headroom under the probe's 128-slot context)\n", n); return 1; }
 
@@ -146,7 +164,7 @@ int main(int argc, char ** argv) {
     cparams0.n_batch = 128;
     cparams0.n_ubatch = 128;
     llama_context * ctx0 = llama_init_from_model(model, cparams0);
-    if (!ctx0) { fprintf(stderr, "ctx failed (plain)\n"); return 1; }
+    if (!ctx0) { fprintf(stderr, "Error: ctx failed (plain)\n"); return 1; }
     printf("mode=plain  prompt_tokens=%d\n", n);
     const ProbeResult plain = probe_once(ctx0, vocab, toks);
     llama_free(ctx0);
@@ -155,7 +173,7 @@ int main(int argc, char ** argv) {
     llama_context_params cparams1 = cparams0;
     cparams1.extract_hidden_states = true;
     llama_context * ctx1 = llama_init_from_model(model, cparams1);
-    if (!ctx1) { fprintf(stderr, "ctx failed (creation-time extract)\n"); return 1; }
+    if (!ctx1) { fprintf(stderr, "Error: ctx failed (creation-time extract)\n"); return 1; }
     printf("mode=EXTRACT (creation-time)\n");
     const ProbeResult created = probe_once(ctx1, vocab, toks);
     llama_free(ctx1);
@@ -167,7 +185,7 @@ int main(int argc, char ** argv) {
     // (position continuity would otherwise reject it, ret = -1).
     if (runtime_toggle) {
         llama_context * ctx2 = llama_init_from_model(model, cparams0);
-        if (!ctx2) { fprintf(stderr, "ctx failed (runtime toggle)\n"); return 1; }
+        if (!ctx2) { fprintf(stderr, "Error: ctx failed (runtime toggle)\n"); return 1; }
         const ProbeResult warmup = probe_once(ctx2, vocab, toks);
         all_ok = compare("WARMUP", plain, warmup) && all_ok;
         llama_memory_clear(llama_get_memory(ctx2), /*data=*/true);
