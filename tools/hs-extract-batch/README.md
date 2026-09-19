@@ -235,16 +235,14 @@ Throughput figures below are from large-run measurements (>=10K-prompt
 datasets, 2026-08); small runs are startup/latency-dominated — measure yours
 with `--profile`.
 
-Tested on RTX 3090 (CUDA):
+Throughput (measured 2026-07 on the RTX 2060 of that date; re-measure on
+current hardware before quoting — the RTX 3090 now in service is faster):
 
 | Dataset Size | GPU Layers | Time | Throughput |
 |--------------|------------|------|------------|
 | 10K prompts  | 0 (CPU)    | 52min | 3.2/s |
 | 10K prompts  | 99 (GPU)   | 28s   | 357/s |
 | 200K prompts | 99 (GPU)   | 9min  | 370/s |
-
-(Measured 2026-07 on the RTX 2060 build of that date; throughput scales with
-hardware — re-measure before quoting.)
 
 ## Notes
 

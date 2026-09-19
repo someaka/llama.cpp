@@ -3121,8 +3121,25 @@ private:
             llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
 
             // enable/disable hidden state extraction before decode so the
-            // compute graph populates t_hidden_layers tensors
-            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
+            // compute graph populates t_hidden_layers tensors. A refusal
+            // (unsupported arch / MTP / separate output projection) must
+            // fail this batch's task now, with the reason already logged.
+            const bool hs_refused =
+                slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES &&
+                llama_set_extract_hidden_states(ctx_tgt, true) != 0;
+            if (hs_refused) {
+                // Refusal (unsupported arch / MTP / separate output
+                // projection): fail the batched task the same way decode
+                // failures do, restore the toggle, and drop the batch.
+                send_error(*slot_batched->task,
+                           "hidden-state extraction refused for this model/architecture (see server log)",
+                           ERROR_TYPE_SERVER);
+                llama_set_extract_hidden_states(ctx_tgt, false);
+                return;
+            }
+            if (slot_batched->task->type != SERVER_TASK_TYPE_HIDDEN_STATES) {
+                llama_set_extract_hidden_states(ctx_tgt, false);
+            }
         }
 
         llama_batch batch_view;
@@ -5505,10 +5522,12 @@ void server_routes::init_routes() {
                         res->error(format_error_response("layers array must contain integers", ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
-                    // get<int64_t> first: get<int> narrows before the range
-                    // check, so an int64 value like 2^33+5 truncates to 5 and
-                    // would be accepted instead of 400'd.
-                    // Valid range is [0, n_layer] inclusive (n_hs_slots-1).
+                    // Parse as int64 (common_json has no unsigned predicate).
+                    // uint64 values >= 2^63 narrow negative under two's
+                    // complement and are rejected by the < 0 check below;
+                    // no uint64 in [2^63, 2^64) can narrow into the valid
+                    // range [0, n_layer], so the narrowing is never a false
+                    // accept. Valid range is [0, n_layer] inclusive.
                     const int64_t layer_req = layer.get<int64_t>();
                     if (layer_req < 0 || layer_req > (int64_t) n_layer) {
                         res->error(format_error_response(
@@ -5580,8 +5599,11 @@ void server_routes::init_routes() {
                 res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
-            // Parse as int64 first: get<int32_t> narrows before the range
-            // check, so 2^32+7 would truncate to 7.
+            // Parse as int64 (common_json has no unsigned predicate).
+            // uint64 values >= 2^63 narrow negative under two's complement
+            // and are rejected by the < 0 check below; no uint64 in
+            // [2^63, 2^64) can narrow into [0, INT32_MAX], so the narrowing
+            // is never a false accept.
             const int64_t skip_req = body["skip_offset"].get<int64_t>();
             if (skip_req < 0 || skip_req > 2147483647LL) {
                 res->error(format_error_response("skip_offset " + std::to_string(skip_req) +
@@ -5594,8 +5616,9 @@ void server_routes::init_routes() {
         // other mode would silently ignore a caller-specified flag — the same
         // trap the empty-input and normalize+pool=none pins prevent (80a9fe37e).
         // Both CLIs reject --token-skip in non-consuming modes; hold the server
-        // to the same bar.
-        if (skip_offset != 0 && pool != "skip_mean") {
+        // to the same bar. An explicit skip_offset:0 is rejected too: echoing
+        // the default is still echoing a flag the endpoint would ignore.
+        if (body.contains("skip_offset") && pool != "skip_mean") {
             res->error(format_error_response(
                 "skip_offset " + std::to_string(skip_offset) +
                 " is only valid with pool=skip_mean (requested pool=" + pool + ")",

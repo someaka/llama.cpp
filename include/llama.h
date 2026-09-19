@@ -1024,8 +1024,11 @@ extern "C" {
     // TODO: rename to avoid confusion with llama_get_embeddings()
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 
-    // Set whether the context extracts per-layer hidden states
-    LLAMA_API void llama_set_extract_hidden_states(struct llama_context * ctx, bool extract_hidden_states);
+    // Set whether the context extracts per-layer hidden states.
+    // Returns 0 on success, -1 if refused (unsupported architecture, MTP
+    // draft context, or a separate output projection) — the context is left
+    // unchanged on refusal.
+    LLAMA_API int32_t llama_set_extract_hidden_states(struct llama_context * ctx, bool extract_hidden_states);
 
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
@@ -1099,12 +1102,13 @@ extern "C" {
     // llm_arch_supports_hidden_states() (src/llama-arch.cpp) -- extend that
     // registry to add architectures; this comment intentionally does not
     // enumerate them;
-    // requires n_embd == n_embd_out (decode fails loud otherwise).
+    // requires n_embd == n_embd_out (refused at context creation AND at the
+    // runtime toggle; decode keeps a final belt check that fails loud).
     // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
     // or NULL if extract_hidden_states was not set in context params.
     // The stride per token equals n_embd (which equals n_embd_out on all
-    // supported architectures; decode rejects models with a separate
-    // output projection).
+    // supported architectures; models with a separate output projection are
+    // rejected before any decode).
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.

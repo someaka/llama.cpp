@@ -1026,12 +1026,9 @@ float * llama_context::get_hidden_state(int32_t layer) {
     }
 
     const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
-    try {
-        if (offset >= hidden_state_buf.size()) {
-            throw std::out_of_range("hidden state offset exceeds buffer");
-        }
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: invalid layer %d, reason: %s\n", __func__, layer, err.what());
+    if (offset >= hidden_state_buf.size()) {
+        LLAMA_LOG_ERROR("%s: invalid layer %d - hidden state offset %zu exceeds buffer size %zu\n",
+                        __func__, layer, offset, hidden_state_buf.size());
         return nullptr;
     }
     return hidden_state_buf.data() + offset;
@@ -1253,6 +1250,17 @@ void llama_context::set_extract_hidden_states(bool value) {
     if (value && !llm_arch_supports_hidden_states(model.arch)) {
         throw std::runtime_error(std::string("hidden-state extraction not implemented for architecture '")
                                  + llm_arch_name(model.arch) + "'");
+    }
+
+    // Same refusal as context creation: the captured tensors are residual-
+    // stream tensors of width n_embd while the buffer strides with
+    // n_embd_out. The server enables extraction through this toggle (its
+    // context is created with the flag off), so the check must live here too.
+    if (value && model.hparams.n_embd_out() != model.hparams.n_embd) {
+        throw std::runtime_error("hidden-state extraction requires n_embd_out == n_embd, "
+                                 "but the model has a separate output projection (n_embd_out = "
+                                 + std::to_string(model.hparams.n_embd_out()) + ", n_embd = "
+                                 + std::to_string(model.hparams.n_embd) + ")");
     }
 
     // Same refusal as context creation (see llama_init_from_model): the MTP
@@ -1912,8 +1920,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // one ubatch at a time. n_hidden_tokens stays 0 until the copy loop
     // completes for all ubatches, so no read can observe partial data.
     if (cparams.extract_hidden_states) {
-        // n_embd_out == n_embd is enforced at context creation; both are
-        // equal here, so the capture stride and the tensor width agree.
+        // n_embd_out == n_embd is enforced at context creation AND at the
+        // runtime toggle (the server path); this belt makes any bypass of
+        // both fail loud at decode instead of mis-striding the capture.
+        if (hparams.n_embd_out() != hparams.n_embd) {
+            LLAMA_LOG_ERROR("%s: hidden-state extraction requires n_embd_out == n_embd "
+                            "(n_embd_out = %u, n_embd = %u) - refusing to capture\n",
+                            __func__, hparams.n_embd_out(), hparams.n_embd);
+            n_hidden_tokens = 0;
+            return -1;
+        }
         const uint32_t n_embd_out = hparams.n_embd_out();
         // hidden_states ladder: index 0 (embeddings) through index n_layer
         // (final block output) -- one slot more than the block count.
@@ -4114,16 +4130,22 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
 }
 
-void llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden_states) {
-    // The member fn validates the arch and throws on unsupported ones. This is
-    // the documented refusal path for the C++ API, but a C++ exception must
-    // never cross the extern "C" seam (UB for C callers; the repo ships
-    // tests/test-hidden-states.c). Mirror llama_init_from_model's handling:
-    // catch, log, and leave the context unchanged.
+int32_t llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden_states) {
+    // The member fn validates the arch / MTP / n_embd_out and throws on
+    // unsupported configurations. A C++ exception must never cross the
+    // extern "C" seam (UB for C callers; the repo ships
+    // tests/test-hidden-states.c). Mirror llama_init_from_model's handling
+    // (catch, log, leave the context unchanged) and REPORT the refusal:
+    // returns 0 on success, -1 when the toggle was refused — a caller (the
+    // server) must be able to distinguish "enabled" from "refused";
+    // a silently-failed enable would surface later as a generic 500 with
+    // the real reason only in the log.
     try {
         ctx->set_extract_hidden_states(extract_hidden_states);
+        return 0;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to set hidden-state extraction: %s\n", __func__, err.what());
+        return -1;
     }
 }
 

@@ -192,7 +192,11 @@ int main(int argc, char ** argv) {
         const ProbeResult warmup = probe_once(ctx2, vocab, toks);
         all_ok = compare("WARMUP", plain, warmup) && all_ok;
         llama_memory_clear(llama_get_memory(ctx2), /*data=*/true);
-        llama_set_extract_hidden_states(ctx2, true);
+        if (llama_set_extract_hidden_states(ctx2, true) != 0) {
+            fprintf(stderr, "Error: runtime toggle refused (arch/MTP/n_embd_out)\n");
+            llama_free(ctx2);
+            return 1;
+        }
         printf("mode=EXTRACT (runtime toggle)\n");
         const ProbeResult toggled = probe_once(ctx2, vocab, toks);
         fprintf(stderr, "probe: toggle probe returned argmax=%d top8=%zu\n", toggled.argmax, toggled.top8.size());

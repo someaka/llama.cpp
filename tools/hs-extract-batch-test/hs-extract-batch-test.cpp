@@ -74,7 +74,10 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
             }
             llama_synchronize(ctx);
         }
-        llama_set_extract_hidden_states(ctx, true);
+        if (llama_set_extract_hidden_states(ctx, true) != 0) {
+            fprintf(stderr, "Error: server-style enable refused (arch/MTP/n_embd_out)\n");
+            exit(1);
+        }
         llama_memory_clear(llama_get_memory(ctx), true);
         // Server reset: perf counters (common_init_from_params warmup) and
         // memory (per-request prompt_clear), so the decode starts at pos 0.
@@ -88,8 +91,10 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     }
     llama_synchronize(ctx);
 
-    // Sample a mid-ladder layer, clamped to the model's actual depth: a fixed
-    // index would die on shallow models (< 11 layers) with a generic error.
+    // Sample layer 10 (mid-ladder on modern models), clamped to the model's
+    // top slot: a fixed index would die on shallow models (< 11 layers) with
+    // a generic error. On such models the clamp lands on the final block
+    // output — still a valid, comparable slot.
     const int n_layer = llama_model_n_layer(model);
     const int layer = std::min(10, n_layer);
     float * hs = llama_get_hidden_state(ctx, layer);

@@ -49,6 +49,8 @@ int main(int argc, char ** argv) {
         llama_backend_free();
         return 1;
     }
+    // Every failure exit below frees backend state too (completeness for a
+    // smoke test; the OS would reclaim regardless).
 
     // Build batch
     struct llama_batch batch = llama_batch_init(n_tokens, 0, 1);
@@ -67,6 +69,7 @@ int main(int argc, char ** argv) {
         llama_batch_free(batch);
         llama_free(ctx);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
@@ -79,6 +82,7 @@ int main(int argc, char ** argv) {
         llama_batch_free(batch);
         llama_free(ctx);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 
