@@ -179,14 +179,19 @@ machine).
   (baseline|check; requires `HS_GATE_MODEL=<gguf>`, runs the production path,
   no fallbacks), committed anchor `digests_baseline.json` (restored
   2026-09-16 to the verified 2026-08-18 closure lineage: the 09-13
-  "re-baseline" had promoted stale-cache bytes — root-caused at the
-  time and documented in the project's audit trail; fresh builds on any
-  window-3/4 tree reproduce this anchor exactly, AOT or PTX-JIT),
+  "re-baseline" had promoted stale-cache bytes from an incremental build
+  directory; the root-cause analysis is preserved in this repository's
+  `docs/history/` and summarized in `gate/README.md`; fresh builds from
+  clean trees reproduce this anchor exactly, AOT or PTX-JIT),
   `audit_integrity.sh` (all structural checks; the count derives from the
   script's check headers),
   `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures),
   `regen_manifest_lines.py` (adoption-manifest drift check; CI runs it with
   `--check`). See `gate/README.md` for the model contract and workflow.
+  After each upstream sync window (a `git merge origin/master` into `main`,
+  resolved and re-verified as one unit — the git recipe above shows the
+  current delta), re-run the gate: fresh-build digests must match the
+  committed anchor, or the anchor moves with a written cause.
 
 ### 9. Shared headers (`tools/hs-extract-common/`)
 
