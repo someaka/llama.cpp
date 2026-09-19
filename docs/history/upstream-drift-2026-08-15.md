@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Upstream API Drift Audit + CPU Probe Build — Wave M3 (2026-08-15)
 
 **Fork HEAD:** `f810014e2` (docs: FORK_CHANGES.md post-rebase state)

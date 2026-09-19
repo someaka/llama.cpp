@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Upstream Overlap Map — 2026-08-15
 
 Fork `f810014e2` vs `origin/master` (`77918caf3`); old upstream base `178ade436^2`; 213 upstream commits audited.

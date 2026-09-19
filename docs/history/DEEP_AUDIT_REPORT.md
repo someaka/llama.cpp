@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Deep Audit Report: CrimsonRed llama.cpp Fork
 
 **Date:** 2026-06-30

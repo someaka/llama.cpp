@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 > **ARCHIVED 2026-09-18** — the upstream-PR path was explicitly dropped by the
 > owner ("no PR, not now, not later"). Kept in docs/history/ for its API-surface
 > prose only; nothing here is a plan of record. The fork's living docs are

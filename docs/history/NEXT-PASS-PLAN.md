@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # NEXT-PASS-PLAN: llama.cpp Fork
 
 **Date:** 2026-06-30 (last updated 2026-07-18)  

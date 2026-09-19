@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Handoff: D → A — 2026-07-19 (Session 4 — Vulkan Hidden States Fix)
 
 ## Status: Demo LIVE on D (Vulkan), 5/5 emotion accuracy, critical bug fixed

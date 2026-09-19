@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Adversarial C++ Re-Audit — CrimsonRed llama.cpp Fork (Machine D, Retry)
 
 **Date:** 2026-07-30 · **Host:** Machine D (AMD Vulkan, no CUDA, no model)

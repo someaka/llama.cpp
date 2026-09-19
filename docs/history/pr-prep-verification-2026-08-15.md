@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # PR-Prep Verification — handoff G §2 vs fork docs vs disk (2026-08-15)
 
 Source: delegate D3 verification pass, 2026-08-14 16:13–16:22 (read-only).

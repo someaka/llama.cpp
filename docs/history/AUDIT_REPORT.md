@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # llama.cpp Fork - Full Architectural Audit
 
 **Date:** 2026-06-30  

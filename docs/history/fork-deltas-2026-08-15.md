@@ -1,3 +1,5 @@
+> **ARCHIVED** — historical record, kept as-is (no-deletion rule). Paths reference machines and workspaces that no longer exist; commands here are not maintained.
+
 # Fork Deltas vs Upstream — 2026-08-15
 
 Fork `f810014e2` vs `origin/master` (`77918caf3`). Lead-generated (M2 delegate died on HTTP 429 after partial work; findings below are disk-verified, and the delegate's salvage — the `embeddings_layer_inp` discovery — is incorporated and verified).
