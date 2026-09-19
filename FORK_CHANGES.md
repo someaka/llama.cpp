@@ -1,7 +1,10 @@
-# CrimsonRed llama.cpp Fork
+# llama.cpp Fork — Hidden-State Extraction
 
 This fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) adds
-hidden-state extraction capabilities for the CrimsonRed emotion probe pipeline.
+capture-grade hidden-state extraction to core decode, the HTTP server, and
+dedicated extraction tools, with a byte-identity regression gate. Built for,
+and validated by, the CrimsonRed emotion-probe pipeline; the extraction layer
+itself is domain-neutral.
 
 ## Fork State
 
@@ -176,8 +179,8 @@ machine).
   (baseline|check; requires `HS_GATE_MODEL=<gguf>`, runs the production path,
   no fallbacks), committed anchor `digests_baseline.json` (restored
   2026-09-16 to the verified 2026-08-18 closure lineage: the 09-13
-  "re-baseline" had promoted stale-cache bytes — see CrimsonRed
-  `audit_2026-09-16/gate_red_taint_rootcause.md`; fresh builds on any
+  "re-baseline" had promoted stale-cache bytes — root-caused at the
+  time and documented in the project's audit trail; fresh builds on any
   window-3/4 tree reproduce this anchor exactly, AOT or PTX-JIT),
   `audit_integrity.sh` (all structural checks; the count derives from the
   script's check headers),

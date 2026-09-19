@@ -188,7 +188,7 @@ llama-hs-extract-batch model.gguf prompts.txt all output.bin \
 If interrupted, re-run with `--resume` to continue from the last checkpoint.
 Note: `--resume` is refused when `--save-per-record` is set, so a run killed
 mid-write leaves a `.records` sidecar with a trailing partial record; readers
-must trim to the record boundary (a 2026-07-22 kill left CrimsonRed's e2b
+must trim to the record boundary (a 2026-07-22 killed run left an e2b
 stories sidecar one record short — trimmed to the boundary 2026-09-14, the
 207,024 complete records are internally consistent).
 
@@ -226,7 +226,7 @@ Checkpoints written before the `version` field existed (June 2026 era: the
 file starts with `n_iterated`, then a CRD2 accumulator region) are refused
 as `checkpoint version mismatch (got <n_iterated>, expected 6)` and are not
 resumable —
-e.g. CrimsonRed's `qwen_output.bin.checkpoint` (2026-06-19); the completed
+e.g. a `qwen_output.bin.checkpoint` from a 2026-06-19 run; the completed
 output written by that run is unaffected.
 
 ## Performance
