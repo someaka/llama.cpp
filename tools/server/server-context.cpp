@@ -3129,12 +3129,19 @@ private:
                 llama_set_extract_hidden_states(ctx_tgt, true) != 0;
             if (hs_refused) {
                 // Refusal (unsupported arch / MTP / separate output
-                // projection): fail the batched task the same way decode
-                // failures do, restore the toggle, and drop the batch.
+                // projection): fail the task, restore the toggle, release
+                // every slot riding this batch (an unreleased slot keeps
+                // re-erroring its task on later update_slots passes), and
+                // drop the batch.
                 send_error(*slot_batched->task,
                            "hidden-state extraction refused for this model (unsupported architecture, MTP context, or separate output projection; see server log)",
                            ERROR_TYPE_SERVER);
                 llama_set_extract_hidden_states(ctx_tgt, false);
+                for (auto & slot : slots) {
+                    if (slot.is_processing() && slot.task->id == slot_batched->task->id) {
+                        slot.release();
+                    }
+                }
                 return;
             }
             if (slot_batched->task->type != SERVER_TASK_TYPE_HIDDEN_STATES) {
