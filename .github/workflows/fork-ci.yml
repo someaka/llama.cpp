@@ -521,7 +521,7 @@ jobs:
             -m models/test-model.gguf \
             -ngl 0 -c 512 -b 512 -ub 512 -np 1 --port 8097 --cache-ram 0 &
           SRV=$!
-          trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null' EXIT
+          trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true' EXIT
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:8097/health > /dev/null 2>&1 && break
             sleep 1
