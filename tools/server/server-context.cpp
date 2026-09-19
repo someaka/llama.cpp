@@ -2444,6 +2444,10 @@ private:
         // would make the server capture every decode for every request.
         struct hs_toggle_reset {
             llama_context * c;
+            // Disable-only: the setter can only refuse an *enable*
+            // (its refusal guards all sit behind `value &&`), so this
+            // destructor legitimately ignores the return — there is no
+            // refusal path to a false call.
             ~hs_toggle_reset() { llama_set_extract_hidden_states(c, false); }
         } hs_reset{slot.ctx_tgt};
 

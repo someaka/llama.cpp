@@ -546,11 +546,17 @@ jobs:
             exit 1
           fi
           # skip_offset >= n_tokens is rejected pre-decode, naming the count
-          SHORT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8097/hidden-states \
+          SHORT_RESP=$(curl -s -w "\n%{http_code}" -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
             -d '{"input":"hi","layers":[0],"pool":"skip_mean","skip_offset":50}')
+          SHORT_CODE=$(echo "$SHORT_RESP" | tail -1)
           if [ "$SHORT_CODE" != "400" ]; then
             echo "FAIL: skip_mean+skip_offset=50>=n_tokens expected 400, got $SHORT_CODE"
+            exit 1
+          fi
+          # the rejection must name the count, not just the code
+          if ! echo "$SHORT_RESP" | grep -q "skip_offset (50)"; then
+            echo "FAIL: pre-decode rejection does not name the offending offset; got: $(echo "$SHORT_RESP" | head -1)"
             exit 1
           fi
           # consuming pool with a valid offset still works
