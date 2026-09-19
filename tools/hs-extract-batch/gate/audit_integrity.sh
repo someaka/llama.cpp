@@ -340,7 +340,7 @@ echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to
 # prevent DoS via enormous JSON responses. Pin the guard predicate at
 # its use site (the error message mentioning the constant is not proof).
-if ! strip_comments tools/server/server-context.cpp | grep -A6 -F "if (total_all_layers > HS_MAX_POOL_NONE_FLOATS)" | grep -qE "server_task_result_error|send_error"; then
+if ! strip_comments tools/server/server-hidden-states.h | grep -A6 -F "if (total_all_layers > HS_MAX_POOL_NONE_FLOATS)" | grep -qE "server_task_result_error|send_error"; then
   echo "FAIL: pool=none response size limit not enforced"; exit 1
 fi
 echo "PASS"
@@ -403,7 +403,7 @@ echo "=== Check 19: /hidden-states capture toggle cleared on all return paths ==
 # leave the toggle enabled on early-error returns.
 python3 - <<'PY'
 import re
-src = open("tools/server/server-context.cpp").read()
+src = open("tools/server/server-hidden-states.h").read()
 src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
 ok_struct = re.search(r"struct hs_toggle_reset \{[^}]*llama_set_extract_hidden_states\(c, false\);", src)

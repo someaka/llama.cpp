@@ -484,7 +484,7 @@ jobs:
           # builds the JSON text with escaped quotes (\"index\":).
           python3 - <<'PYEOF'
           import re, sys
-          src = open('tools/server/server-task.cpp').read()
+          src = open('tools/server/server-hidden-states.cpp').read()
           # isolate the two functions
           m1 = re.search(r'server_task_result_hidden_states::to_json\(\)\s*\{(.*?)\n\}', src, re.S)
           m2 = re.search(r'server_task_result_hidden_states::to_json_text\(\)\s*const\s*\{(.*?)(?:\n\}|//\n//\s*server_task_result_rerank)', src, re.S)

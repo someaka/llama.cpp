@@ -182,6 +182,11 @@ private:
     server_response & queue_results;
     std::unique_ptr<server_res_generator> create_response(bool bypass_sleep = false);
 
+    // fork: /hidden-states handler template (tools/server/server-hidden-states.h)
+    // was this class's post_hidden_states lambda body — it reads the same
+    // private members the lambda captured via `this`.
+    template <typename Self> friend auto handle_hidden_states(Self & self, const server_http_req & req);
+
     // cached responses, to be used during sleep
     std::mutex     mutex_cache;
     json           cached_models  = nullptr;
