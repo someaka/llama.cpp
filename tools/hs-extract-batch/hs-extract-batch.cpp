@@ -64,7 +64,6 @@
 #include "llama-raii.h"
 
 #include "hs-accum.h"
-#include "hs-kernels.h"
 #include "io-util.h"
 #include "self-test.h"
 #include "assignments-io.h"
@@ -486,26 +485,9 @@ static Args parse_args(int argc, char** argv) {
 
 
 
-// -- Masked Mean Computation --------------------------------------------
-
 // Repeat-penalty window for generation mode's sampler chain.
 static constexpr int REPEAT_PENALTY_LAST_N = 64;
 
-/**
- * Compute mean of hidden state data over specified token ranges.
- *
- * Generalizes the single-contiguous-range mean (token_skip -> n_tokens) to
- * arbitrary collections of [start, end) token index pairs. Used by both the
- * refactored one-shot/persistent mean mode (single range) and the future
- * batch-accumulate mode (arbitrary token ranges).
- *
- * @param data      Pointer to hidden state data, shape (n_tokens, n_embd).
- * @param n_tokens  Number of tokens in the sequence.
- * @param n_embd    Hidden dimension size.
- * @param ranges    Vector of (start, end) token index pairs.
- * @param out       Output buffer, size n_embd. Must be zeroed by caller.
- * @return          Number of tokens included in the mean (0 = empty mask).
- */
 // -- Prompt Processing --------------------------------------------------
 
 /**
