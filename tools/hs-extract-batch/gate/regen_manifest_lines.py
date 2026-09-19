@@ -74,7 +74,18 @@ def main():
             for arch, old_ln, new_ln in mismatched:
                 print(f"  {arch}: manifest says {old_ln}, HEAD says {new_ln}")
             return 1
-        print(f"PASS: all {total_adopt} ADOPT rows match HEAD")
+        # Prose-count pin: the narrative's 101/26/4/97 must equal the
+        # table-derived truth (stale prose is exactly what a tap-sweep
+        # sync would produce otherwise).
+        text = open(MANIFEST).read()
+        ROWM = re.compile(ROW.pattern, re.M)
+        adopt_rows = len(ROWM.findall(text))
+        n_refuse = len(re.findall(r"^\| llama_model_\S+ \| src/models/\S+\.cpp \| [A-Z-]+ \|", text, re.M))
+        expected = f"Of the 127 builders reviewed, {adopt_rows} are ADOPT and {n_refuse} are REFUSE"
+        if expected not in text:
+            print(f"FAIL: manifest prose counts stale — expected '{expected}' (from {adopt_rows} table rows / {n_refuse} REFUSE rows)")
+            return 1
+        print(f"PASS: all {total_adopt} ADOPT rows match HEAD; prose counts {adopt_rows}/{n_refuse} pinned")
         return 0
 
     open(MANIFEST, "w").write("\n".join(out) + "\n")

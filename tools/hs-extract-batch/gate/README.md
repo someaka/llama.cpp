@@ -24,7 +24,7 @@ greedy generation, and sampled generation (seed=0 dist sampler). In detail:
 | s8_e2b_gen_sampled  | e2b   | 0,35      | `--generate 8 --token-skip 2 --temperature 0.8 --top-k 40 --repeat-penalty 1.1` |
 | s9_e2b_gen_resume   | e2b   | 0,35      | same flags as s8; kill at 2nd checkpoint, then `--resume` |
 
-Methodology: a CUDA-ON binary (`libggml-cuda.so*` next to the binary is
+Run mechanics: a CUDA-ON binary (`libggml-cuda.so*` next to the binary is
 REQUIRED; a CPU-only build is refused), `-ngl 99`, original tokenization
 flags (no `--no-bos`). Every produced artifact (`output.bin`, the
 `.records.bin` sidecar, resume full-run vs resumed output) is sha256-compared

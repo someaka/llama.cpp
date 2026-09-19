@@ -243,6 +243,9 @@ Tested on RTX 3090 (CUDA):
 | 10K prompts  | 99 (GPU)   | 28s   | 357/s |
 | 200K prompts | 99 (GPU)   | 9min  | 370/s |
 
+(Measured 2026-07 on the RTX 2060 build of that date; throughput scales with
+hardware — re-measure before quoting.)
+
 ## Notes
 
 - The hidden-state getters synchronize the context before returning data; no explicit `llama_synchronize()` is needed

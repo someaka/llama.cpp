@@ -141,7 +141,9 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
 The fork CI (`.github/workflows/fork-ci.yml`) runs on CPU-only runners:
 - Builds with `GGML_NATIVE=OFF` (portable binaries for the CI matrix; no
   host-specific ISA assumptions)
-- Runs self-test (29/29; a checkpoint-fixture write failure fails the run rc=1
+- Runs self-test (full suite; the count is computed from the binary's own
+  "N/N tests passed" line, never hardcoded here — a checkpoint-fixture write
+  failure fails the run rc=1
   rather than skipping)
 - Runs multi-ubatch pool=none integration test (hard row-count vs n_embd) and a decode-split refusal check (prompt > n_batch must 400)
 - 19 structural integrity checks (RAII wrappers, shared header, backpressure, pool=none size limit, checkpoint v2+ sum records with v5 rolling content hash + v6 accumulator checksum, no raw fclose, checkpoint bounds, producer-consumer pipeline, checkpoint durability order)

@@ -1,7 +1,8 @@
 # Hidden-States Architecture — unified capture mechanism
 
-Branch `hs-arch-core` (2026-08-16). Answers: how per-layer hidden-state
-capture works post-refactor, who may join, and how refusals surface.
+Written 2026-08-16 during the arch-core refactor (since landed on main;
+no separate branch survives). Answers: how per-layer hidden-state capture
+works post-refactor, who may join, and how refusals surface.
 
 # Layer Index Convention (canonical)
 

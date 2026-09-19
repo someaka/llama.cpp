@@ -28,12 +28,14 @@ build/bin/llama-hidden-states path/to/model.gguf
 
 ```
 Prompt: "Hello, world!"
-Tokens: 4
-Hidden states extracted from 32 layers (4096-dim)
-Layer 0: [0.123, -0.456, 0.789, ...]
+Tokens: 5
+Hidden states: 5 tokens, 35 layers (n_embd=1536)
+Layer 0: [-0.515617013, -1.833305, 0.286453903, ...]
 Layer 1: [0.234, -0.567, 0.890, ...]
 ...
 ```
+(Output above captured live from `llama-hs-extract` on the Gemma-4 E2B gate
+model; layer 1's row is illustrative.)
 
 ## Code Structure
 
