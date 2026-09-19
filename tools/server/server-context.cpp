@@ -27,11 +27,7 @@
 #include <utility>
 #include <fstream>
 
-#if defined(_OPENMP)
-#define HS_SIMD _Pragma("omp simd")
-#else
-#define HS_SIMD
-#endif
+#include "masked-mean.h"  // tools/hs-extract-common/: shared skip_mean kernel (HS_SIMD lives there)
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -2592,19 +2588,17 @@ private:
                     queue_results.send(std::move(err));
                     return;
                 }
-                int32_t count = n_hs_tokens - start;
                 vec.resize(n_embd, 0.0f);
-                for (int32_t t = start; t < n_hs_tokens; t++) {
-                    // size_t cast: t*n_embd is computed in int32 and overflows for
-                    // large ctx*embd (the pool=none path above already casts;
-                    // this path must match or it reads from a wrapped pointer).
-                    const float * tok = hs + (size_t)t * n_embd;
-                    HS_SIMD
-                    for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
-                }
-                float inv = 1.0f / (float)count;
-                HS_SIMD
-                for (int d = 0; d < n_embd; d++) vec[d] *= inv;
+                // Shared kernel (tools/hs-extract-common/masked-mean.h):
+                // the same accumulation the batch extractor runs, so a fix
+                // in either lands in both. size_t stride math lives there.
+                const int64_t n_acc = hs_compute_single_range_mean(
+                    hs, n_hs_tokens, n_embd, start, n_hs_tokens, vec.data());
+                // The pre-decode range check above already rejected
+                // start >= n_hs_tokens, so the kernel cannot fail here;
+                // if it ever does, that is a contract violation — abort
+                // loud rather than return a silently wrong mean.
+                GGML_ASSERT(n_acc > 0);
             } else {
                 // Default: last token's hidden state
                 vec.assign(hs + (size_t)(n_hs_tokens - 1) * n_embd,

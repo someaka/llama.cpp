@@ -31,6 +31,8 @@ endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
+# hidden-states: shared masked-mean kernel header (header-only, no new TU)
+target_include_directories(${TARGET} PRIVATE ../hs-extract-common)
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
 # llama-server-impl: server logic, reusable by app

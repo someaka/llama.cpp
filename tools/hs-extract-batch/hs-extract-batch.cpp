@@ -53,14 +53,9 @@
 #include <queue>
 #include <atomic>
 
-// HS_SIMD: vectorization hint for the hot mean-accumulation loops. Under
-// OpenMP it is an omp simd pragma; without OpenMP it expands to nothing
-// (correct, just not auto-vectorized by pragma).
-#if defined(_OPENMP)
-#define HS_SIMD _Pragma("omp simd")
-#else
-#define HS_SIMD
-#endif
+// Masked-mean kernel + HS_SIMD live in the shared header (via hs-kernels.h)
+// so the server's skip_mean pooling and this tool accumulate identically.
+#include "hs-kernels.h"
 
 // -- Checked Write Macro ------------------------------------------------
 
@@ -511,64 +506,6 @@ static constexpr int REPEAT_PENALTY_LAST_N = 64;
  * @param out       Output buffer, size n_embd. Must be zeroed by caller.
  * @return          Number of tokens included in the mean (0 = empty mask).
  */
-int64_t compute_masked_mean(
-    const float* data,
-    int n_tokens,
-    int n_embd,
-    const std::vector<std::pair<int,int>>& ranges,
-    float* out
-) {
-    int64_t count = 0;
-    for (auto [start, end] : ranges) {
-        // All range violations are hard errors. The Python side must produce
-        // correct ranges  -  no silent clamping, no graceful degradation.
-        if (start < 0 || end < 0 || start >= end) {
-            fprintf(stderr, "Error: invalid masked-mean range [%d, %d)  -  negative or empty range\n", start, end);
-            return -1;
-        }
-        if (end > n_tokens || start > n_tokens) {
-            fprintf(stderr, "Error: masked-mean range [%d, %d) exceeds n_tokens=%d  -  "
-                            "the assignment's token range does not fit this prompt's tokenization "
-                            "(ranges are raw token indices, post-tokenization, BOS included per the "
-                            "tokenizer; see tools/hs-extract-batch/README.md, Input Format)\n",
-                    start, end, n_tokens);
-            return -1;
-        }
-
-        for (int t = start; t < end; t++) {
-            const float* row = data + (size_t)t * (size_t)n_embd;
-            HS_SIMD
-            for (int d = 0; d < n_embd; d++) {
-                out[d] += row[d];
-            }
-        }
-        count += (end - start);
-    }
-
-    if (count > 0) {
-        float inv = 1.0f / (float)count;
-        HS_SIMD
-        for (int d = 0; d < n_embd; d++) {
-            out[d] *= inv;
-        }
-    }
-    return count;
-}
-
-int compute_single_range_mean(
-    const float* data,
-    int n_tokens,
-    int n_embd,
-    int start,
-    int end,
-    float* out
-) {
-    // Single contiguous [start, end) span: a specialization of
-    // compute_masked_mean with one range. Delegates for identical
-    // validation and accumulation semantics.
-    return (int)compute_masked_mean(data, n_tokens, n_embd, {{start, end}}, out);
-}
-
 // -- Prompt Processing --------------------------------------------------
 
 /**

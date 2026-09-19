@@ -37,6 +37,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          # full history: the whitespace pin diffs from the live merge-base
+          # with upstream, which moves every sync window
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -577,7 +581,8 @@ jobs:
           set -euo pipefail
           # PR-facing files must be whitespace-clean: no trailing whitespace,
           # no blank line at EOF (docs/history Markdown hard-breaks exempt).
-          BAD=$(git diff 8887a48f0..HEAD --check -- \
+          BASE=$(git merge-base HEAD origin/master)
+          BAD=$(git diff "$BASE"..HEAD --check -- \
             tools/server tools/hs-extract tools/hs-extract-batch \
             tools/hs-extract-common tools/hs-extract-batch-test \
             common/llama-raii.h include/llama.h \
