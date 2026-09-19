@@ -14,6 +14,23 @@ itself is domain-neutral.
   (commits) or `git diff --stat $(git merge-base main origin/master)..main`
   (files). This file describes what the fork contains, not repo statistics.
 
+## Placement doctrine
+
+Rule: if upstream could plausibly merge it, it lives at an upstream-shaped
+seam; if it exists only because this is our fork, it lives in a fork-owned
+path. Upstream-shaped: public API in `include/llama.h`, endpoint logic in
+its own `server-*.cpp` split file, tests in `tests/`, sample data beside
+its tool. Fork-owned paths: `tools/hs-extract-*/gate/`, `docs/history/`,
+`.github/workflows/fork-ci.yml`. Fork code edits upstream files only at
+minimal, documented seams; bulk logic goes in fork-owned TUs so future
+merges touch anchors, not blocks. Never place in upstream files:
+machine-lineage baselines, cross-repo paths, private artifact names. Live
+docs cite dates + lessons, never paths. Examples: (1) a tool's test lives
+in `tests/` (upstream shape), not `gate/` (fork-private); (2)
+`digests_baseline.json` lives in `gate/` — machine-lineage bytes upstream
+can't reproduce; (3) an incident report lives in `docs/history/`; the live
+README keeps the date and the lesson, never the path.
+
 ## Features
 
 ### 1. Hidden-State Extraction API (Core Library)
