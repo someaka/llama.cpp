@@ -171,6 +171,8 @@ bool write_batch_output(
     // the final write can never leave a truncated output.bin in place (the
     // checkpoint code below uses the same pattern). A truncated final output
     // would be silently misread by the Python parser on the next run.
+    // Single-writer assumption: no O_EXCL/lockfile — atomicity holds for one
+    // tool instance per output path (documented at the reader too).
     std::string temp_path = std::string(output_path) + ".tmp";
     FilePtr out(fopen(temp_path.c_str(), "wb"));
     if (!out) {
@@ -305,6 +307,8 @@ bool write_checkpoint(
         std::remove(temp_path.c_str());  // no orphaned .tmp on write failure
         return false;
     }
+    // CHECKPOINT_VERSION >= 6 is a compile-time constant (always true); the
+    // guard documents which formats carry the trailer rather than gating runtime.
     if (CHECKPOINT_VERSION >= 6) {
         uint64_t acc_digest = acc_fnv.h;
         if (!checked_write(&acc_digest, sizeof(uint64_t), 1, f)) {
@@ -469,24 +473,30 @@ bool read_checkpoint(
                                 "content identity cannot be revalidated; only the prompt count is checked. "
                                 "Re-run without --resume for a full v6 content guarantee.\n");
             } else {
-            uint64_t current_fnv = 0;
-            if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
-                return false;
-            }
-            if (current_fnv != stored_fnv) {
-                fprintf(stderr, "Error: prompts file content mismatch at resume - the first %d prompt line(s) hash "
-                                "to 0x%016llx but the checkpoint recorded 0x%016llx. The prompts file changed "
-                                "since the checkpoint; the accumulator holds results for different content. "
-                                "Discard the checkpoint (remove %s) or restore the original prompts file.\n",
-                        n_iterated, (unsigned long long)current_fnv,
-                        (unsigned long long)stored_fnv, ckpt_path.c_str());
-                return false;
-            }
+                // v6 (CHECKPOINT_VERSION >= 6 is always true at compile time;
+                // the branch is kept so older formats stay self-documenting).
+                uint64_t current_fnv = 0;
+                if (!hash_prompts_prefix(prompts_file, n_iterated, current_fnv)) {
+                    return false;
+                }
+                if (current_fnv != stored_fnv) {
+                    fprintf(stderr, "Error: prompts file content mismatch at resume - the first %d prompt line(s) hash "
+                                    "to 0x%016llx but the checkpoint recorded 0x%016llx. The prompts file changed "
+                                    "since the checkpoint; the accumulator holds results for different content. "
+                                    "Discard the checkpoint (remove %s) or restore the original prompts file.\n",
+                            n_iterated, (unsigned long long)current_fnv,
+                            (unsigned long long)stored_fnv, ckpt_path.c_str());
+                    return false;
+                }
             }
         }
     }
 
     // Read accumulator state (binary accumulator format)
+    // NOTE single-writer design: checkpoint and output writers create their
+    // .tmp with plain fopen("wb") — no O_EXCL/lockfile. Two tool instances
+    // sharing one output directory would interleave into the same .tmp before
+    // either rename; atomicity guarantees hold for exactly one writer.
     const long acc_region_start = ftell(f);  // for the v6 checksum pass
     int32_t magic = 0;
     if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != OUTPUT_MAGIC) {

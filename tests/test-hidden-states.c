@@ -35,7 +35,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Tokenize "Hello world"
+    // Tokenize "Hello world".
+    // Fixed 16-slot buffer: a buffer-too-small return (negative) is treated
+    // the same as failure — acceptable for a smoke test with this constant.
     const char * prompt = "Hello world";
     const struct llama_vocab * vocab = llama_model_get_vocab(model);
     llama_token tokens[16];
@@ -44,6 +46,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Failed to tokenize\n");
         llama_free(ctx);
         llama_model_free(model);
+        llama_backend_free();
         return 1;
     }
 

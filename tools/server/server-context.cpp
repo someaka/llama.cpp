@@ -44,6 +44,10 @@
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
+// /hidden-states pool=none response cap: max total floats (all layers)
+// returned by a single request. 25M floats = 100 MB raw, ~0.3 GB as %.9g JSON.
+constexpr size_t HS_MAX_POOL_NONE_FLOATS = 25'000'000;
+
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
@@ -2497,12 +2501,11 @@ private:
 
         // Response size guard for pool=none: returns n_tokens * n_embd * n_layers
         // floats as JSON. Without a cap, a single request with long input + all
-        // layers can exhaust server memory (DoS vector).
-        // ~30 MB raw float data (~0.3 GB JSON after %.9g serialization)
+        // layers can exhaust server memory (DoS vector). Cap: HS_MAX_POOL_NONE_FLOATS
+        // (file scope, above).
         if (slot.task->params.hidden_pool == "none") {
-            const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
             size_t total_all_layers = (size_t)n_hs_tokens * (size_t)n_embd * (size_t)layers.size();
-            if (total_all_layers > MAX_POOL_NONE_FLOATS) {
+            if (total_all_layers > HS_MAX_POOL_NONE_FLOATS) {
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
@@ -2510,7 +2513,7 @@ private:
                 err->err_msg = "pool=none response too large: " +
                                std::to_string(total_all_layers) + " floats across " +
                                std::to_string(layers.size()) + " layers (limit: " +
-                               std::to_string(MAX_POOL_NONE_FLOATS) +
+                               std::to_string(HS_MAX_POOL_NONE_FLOATS) +
                                "). Reduce input length or number of layers.";
                 queue_results.send(std::move(err));
                 return;
@@ -2522,7 +2525,7 @@ private:
         // output. Valid range is [0, n_layer] inclusive.
         const int32_t n_hs_slots = n_layer + 1;
         for (int layer : layers) {
-            if (layer < 0 || layer >= n_hs_slots) {
+            if (layer < 0 || layer > n_layer) {
                 auto err = std::make_unique<server_task_result_error>();
                 err->id   = slot.task->id;
                 err->index = slot.task->index;
@@ -2536,6 +2539,8 @@ private:
 
         // Fetch all layer pointers in one call (single synchronize + single
         // validation pass) instead of one llama_get_hidden_state() per layer.
+        // layer_ids is the validated copy of `layers` (int32_t, the API width)
+        // and is used for all indexing below; `layers` is not read again.
         std::vector<int32_t> layer_ids(layers.begin(), layers.end());
         std::vector<float *> layer_ptrs(layer_ids.size(), nullptr);
         if (llama_get_hidden_states_batch(slot.ctx_tgt, layer_ids.data(), (int32_t) layer_ids.size(), layer_ptrs.data()) != 0) {
@@ -2569,10 +2574,10 @@ private:
                 size_t total = (size_t)n_hs_tokens * (size_t)n_embd;
                 vec.assign(hs, hs + total);
             } else if (slot.task->params.hidden_pool == "skip_mean") {
-                // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
-                // skip_offset was range-validated at request parse (>= 0).
+                // Masked-mean pooling: mean over [skip_offset, n_hs_tokens).
+                // start >= 0 is guaranteed by request-parse range validation
+                // (no assert here: this endpoint answers 400s, never aborts).
                 const int32_t start = slot.task->params.hidden_skip_offset;
-                GGML_ASSERT(start >= 0);
                 if (start >= n_hs_tokens) {
                     auto err = std::make_unique<server_task_result_error>();
                     err->id   = slot.task->id;
@@ -5486,7 +5491,6 @@ void server_routes::init_routes() {
         // Layers follow the hidden_states convention: 0 = embeddings,
         // i = state entering block i, n_layer = final block output.
         // Valid range is [0, n_layer] inclusive (n_layer + 1 slots).
-        const int32_t n_hs_slots = n_layer + 1;
         if (body.contains("layers")) {
             const json & layers_json = body["layers"];
             if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
@@ -5504,17 +5508,15 @@ void server_routes::init_routes() {
                     // get<int64_t> first: get<int> narrows before the range
                     // check, so an int64 value like 2^33+5 truncates to 5 and
                     // would be accepted instead of 400'd.
+                    // Valid range is [0, n_layer] inclusive (n_hs_slots-1).
                     const int64_t layer_req = layer.get<int64_t>();
-                    int layer_num = -1;
-                    if (layer_req >= 0 && layer_req <= (int64_t) n_hs_slots) {
-                        layer_num = (int) layer_req;
-                    }
-                    if (layer_num < 0 || layer_num >= n_hs_slots) {
+                    if (layer_req < 0 || layer_req > (int64_t) n_layer) {
                         res->error(format_error_response(
                             "layer " + std::to_string(layer_req) + " out of range [0, " + std::to_string(n_layer) + "]",
                             ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
+                    const int layer_num = (int) layer_req;
                     // Duplicate ids would silently collapse in the object-
                     // keyed response; reject like the CLI tools do.
                     if (std::find(layers.begin(), layers.end(), layer_num) != layers.end()) {
@@ -5588,6 +5590,18 @@ void server_routes::init_routes() {
             }
             skip_offset = (int32_t)skip_req;
         }
+        // skip_offset is consumed only by pool="skip_mean"; accepting it in any
+        // other mode would silently ignore a caller-specified flag — the same
+        // trap the empty-input and normalize+pool=none pins prevent (80a9fe37e).
+        // Both CLIs reject --token-skip in non-consuming modes; hold the server
+        // to the same bar.
+        if (skip_offset != 0 && pool != "skip_mean") {
+            res->error(format_error_response(
+                "skip_offset " + std::to_string(skip_offset) +
+                " is only valid with pool=skip_mean (requested pool=" + pool + ")",
+                ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
 
         // Get input text
         json prompt;
@@ -5652,6 +5666,21 @@ void server_routes::init_routes() {
             }
         }
 
+        // skip_offset >= token count is knowable now; reject before spending
+        // the decode (the pool=skip_mean path would reject it post-decode).
+        if (pool == "skip_mean" && skip_offset > 0) {
+            for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+                if ((size_t) skip_offset >= (size_t) tokenized_prompts[i].size()) {
+                    res->error(format_error_response(
+                        "skip_offset (" + std::to_string(skip_offset) + ") >= n_tokens (" +
+                        std::to_string(tokenized_prompts[i].size()) + ") for input[" + std::to_string(i) +
+                        "]: prompt too short",
+                        ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+            }
+        }
+
         // Create and queue the task
         std::vector<std::string> res_texts;
         auto & rd = res->rd;
@@ -5694,6 +5723,8 @@ void server_routes::init_routes() {
                 // fatal condition — answer 500 and keep the server alive
                 // instead of tripping the (always-active) GGML_ABORT.
                 if (hs_result == nullptr) {
+                    // HS-1 hardening: a foreign result type used to abort the
+                    // server; answer 500 and stay alive instead.
                     res->error(format_error_response(
                         "internal error: unexpected result type for hidden-states task",
                         ERROR_TYPE_SERVER));
@@ -5712,7 +5743,9 @@ void server_routes::init_routes() {
             if (i > 0) {
                 root_text += ",";
             }
-            root_text += res_texts[i];
+            // move: each res_texts[i] can approach the response cap; copying
+            // would hold the full payload twice at peak
+            root_text += std::move(res_texts[i]);
         }
         root_text += "]";
         res->status = 200;

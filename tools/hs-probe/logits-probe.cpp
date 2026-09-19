@@ -69,16 +69,19 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     for (int i = 1; i < n_vocab; ++i) if (logits[i] > logits[best]) best = i;
     r.argmax = best;
 
-    // capture the top-8 logit values (sorted) for a value-level check
+    // capture the top-8 logit values (sorted) for a value-level check.
+    // A degenerate vocabulary (< 8 tokens) would make partial_sort's middle
+    // iterator run past the end; clamp the selection width first.
+    const size_t top_k = std::min<size_t>(8, (size_t) n_vocab);
     std::vector<float> lg(logits, logits + n_vocab);
     std::vector<size_t> idx(n_vocab);
     for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
-    // simple selection of top 8
-    std::partial_sort(idx.begin(), idx.begin()+8, idx.end(), [&](size_t a, size_t b){ return lg[a] > lg[b]; });
-    for (int k = 0; k < 8; ++k) r.top8.push_back(lg[idx[k]]);
+    // simple selection of top K
+    std::partial_sort(idx.begin(), idx.begin()+top_k, idx.end(), [&](size_t a, size_t b){ return lg[a] > lg[b]; });
+    for (size_t k = 0; k < top_k; ++k) r.top8.push_back(lg[idx[k]]);
     printf("argmax=%d\n", best);
     fflush(stdout);
-    for (int k = 0; k < 8; ++k) fprintf(stderr, "  top%d: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
+    for (size_t k = 0; k < top_k; ++k) fprintf(stderr, "  top%zu: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
 
     llama_batch_free(batch);
     return r;

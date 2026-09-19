@@ -1538,9 +1538,10 @@ static int run_batch(const Args& args) {
     // prefix on --resume — so its state always equals the fresh-run state
     // for the same prefix; no main-thread pre-roll (that would double-count
     // the skipped lines and poison every checkpoint a resumed run writes).
-    // Initialized to the FNV offset basis (not 0): a zero state would make
-    // the first line's roll differ from hash_prompts_prefix's re-derivation.
-    uint64_t content_fnv = 0;
+    uint64_t content_fnv = 0;  // consumer total: producer basis + rolled lines
+    // producer_content_fnv starts at the FNV offset basis (14695981039346656037,
+    // not 0): a zero state would make the first line's roll differ from
+    // hash_prompts_prefix's re-derivation at --resume verification time.
     std::atomic<uint64_t> producer_content_fnv{14695981039346656037ull};
     auto start_time = std::chrono::steady_clock::now();
 
@@ -1811,6 +1812,8 @@ static int run_batch(const Args& args) {
             return 1;
         }
 
+        // Explicit synchronize to bracket the decode profile window; the
+        // getters below also sync, but an idle schedule drains in microseconds.
         llama_synchronize(ctx);
         auto t_decode_end = std::chrono::steady_clock::now();
 

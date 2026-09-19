@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -126,6 +127,7 @@ int main(int argc, char ** argv) {
             if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --ctx-size value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --ctx-size value out of range\n"); return 1; }
             if (val < 1) { fprintf(stderr, "Error: --ctx-size must be >= 1\n"); return 1; }
+            if (val > INT_MAX) { fprintf(stderr, "Error: --ctx-size value too large (max %d)\n", INT_MAX); return 1; }
             ctx_size = (int) val;
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) { fprintf(stderr, "Error: --threads requires an argument\n"); return 1; }
@@ -135,6 +137,7 @@ int main(int argc, char ** argv) {
             if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --threads value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --threads value out of range\n"); return 1; }
             if (val < 1) { fprintf(stderr, "Error: --threads must be >= 1\n"); return 1; }
+            if (val > INT_MAX) { fprintf(stderr, "Error: --threads value too large (max %d)\n", INT_MAX); return 1; }
             n_threads = (int) val;
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) { fprintf(stderr, "Error: --n-gpu-layers requires an argument\n"); return 1; }
@@ -144,6 +147,7 @@ int main(int argc, char ** argv) {
             if (endptr == argv[i] || *endptr != '\0') { fprintf(stderr, "Error: --n-gpu-layers value must be a number\n"); return 1; }
             if (errno == ERANGE) { fprintf(stderr, "Error: --n-gpu-layers value out of range\n"); return 1; }
             if (val < 0) { fprintf(stderr, "Error: --n-gpu-layers must be >= 0\n"); return 1; }
+            if (val > INT_MAX) { fprintf(stderr, "Error: --n-gpu-layers value too large (max %d)\n", INT_MAX); return 1; }
             n_gpu_layers = (int) val;
         } else if (arg == "--output") {
             if (++i >= argc) { fprintf(stderr, "Error: --output requires an argument\n"); return 1; }
@@ -211,7 +215,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    fprintf(stderr, "%s: model loaded, n_layers=%d, n_embd=%d\n", __func__, n_layers, n_embd);
+    fprintf(stderr, "hs-extract: model loaded, n_layers=%d, n_embd=%d\n", n_layers, n_embd);
 
     // Tokenize FIRST (needs only the vocab): the context is then sized to the
     // actual token count instead of a hardcoded 2048.
@@ -224,7 +228,7 @@ int main(int argc, char ** argv) {
         // error below so an empty --raw string is also diagnosed, not a
         // silent exit 1.
         tokens = parse_raw_tokens(prompt_text, vocab);
-        fprintf(stderr, "%s: parsed %zu raw tokens\n", __func__, tokens.size());
+        fprintf(stderr, "hs-extract: parsed %zu raw tokens\n", tokens.size());
     } else {
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
         std::string prompt(prompt_text);
@@ -232,7 +236,7 @@ int main(int argc, char ** argv) {
         // identical output to common_tokenize(vocab, prompt, add_bos, true)
         // on the happy path, plus per-token vocab-bound validation.
         tokens = hs_tokenize_bounded(vocab, prompt.c_str(), prompt.size(), add_bos);
-        fprintf(stderr, "%s: tokenized prompt into %zu tokens\n", __func__, tokens.size());
+        fprintf(stderr, "hs-extract: tokenized prompt into %zu tokens\n", tokens.size());
     }
 
     if (tokens.empty()) {
@@ -275,7 +279,7 @@ int main(int argc, char ** argv) {
         // Match hs-extract-batch: one ubatch per prompt keeps the full prompt
         // in a single pass (stable capture path, same code path as batch).
         ctx_params.n_ubatch = (uint32_t) ctx_n;
-        fprintf(stderr, "%s: using n_ctx=%d for %zu tokens\n", __func__, ctx_n, tokens.size());
+        fprintf(stderr, "hs-extract: using n_ctx=%d for %zu tokens\n", ctx_n, tokens.size());
     }
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
@@ -307,7 +311,7 @@ int main(int argc, char ** argv) {
     // The getters synchronize the context before returning data
     // (see llama_get_hidden_state); no explicit sync is needed here.
     const int32_t n_tokens_out = llama_get_hidden_state_n_tokens(ctx);
-    fprintf(stderr, "%s: decoded %d tokens, extracting hidden states\n", __func__, n_tokens_out);
+    fprintf(stderr, "hs-extract: decoded %d tokens, extracting hidden states\n", n_tokens_out);
 
     if (n_tokens_out <= 0) {
         fprintf(stderr, "Error: invalid hidden state token count (%d)\n", n_tokens_out);
@@ -392,7 +396,7 @@ int main(int argc, char ** argv) {
             std::remove(tmp_path.c_str());
             return 1;
         }
-        fprintf(stderr, "%s: wrote output to '%s'\n", __func__, output_file);
+        fprintf(stderr, "hs-extract: wrote output to '%s'\n", output_file);
     }
 
     return 0;

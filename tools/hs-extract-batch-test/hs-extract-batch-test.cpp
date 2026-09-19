@@ -17,11 +17,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <vector>
+#include <algorithm>
 
 namespace {
 
 // Run one decode of `tokens` under the requested init style and return the
-// full layer-10 hidden-state row (n_embd floats). Exits on any failure:
+// full hidden-state row of a mid-ladder layer (n_embd floats; layer index is
+// clamped to the model's depth, 10 on any modern model). Exits on any failure:
 // a test binary must never fall through a failed decode into a "pass".
 std::vector<float> run_and_capture(llama_model * model, const llama_vocab * vocab,
                                    const std::vector<llama_token> & tokens,
@@ -86,7 +88,10 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     }
     llama_synchronize(ctx);
 
-    const int layer = 10;
+    // Sample a mid-ladder layer, clamped to the model's actual depth: a fixed
+    // index would die on shallow models (< 11 layers) with a generic error.
+    const int n_layer = llama_model_n_layer(model);
+    const int layer = std::min(10, n_layer);
     float * hs = llama_get_hidden_state(ctx, layer);
     if (!hs) {
         fprintf(stderr, "Error: no hidden states available (%s style); n_hidden_tokens = %d\n",
@@ -135,7 +140,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
 
     llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 100;
+    mparams.n_gpu_layers = 99; // ALL_GPU_LAYERS convention, matches the other fork tools
     llama_model * model = llama_model_load_from_file(model_path, mparams);
     if (!model) {
         fprintf(stderr, "Error: failed to load model '%s'\n", model_path);
@@ -143,17 +148,15 @@ int main(int argc, char ** argv) {
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    std::vector<llama_token> tokens;
-    tokens.resize(strlen(prompt) + 16);
-    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), tokens.size(), true, true);
+    // Standard two-call tokenize (as in hs-probe): start from a sized
+    // estimate; a negative return gives the exact size, resize and retry.
+    std::vector<llama_token> tokens(strlen(prompt) + 16);
+    int n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), (int32_t) tokens.size(), true, true);
     if (n_tokens < 0) {
-        // negative = required buffer size: the fixed strlen+16 estimate was too
-        // small for this prompt (byte-fallback tokenization).
-        fprintf(stderr, "Error: prompt needs %d token slots, more than the allocated %zu\n",
-                -n_tokens, tokens.size());
-        return 1;
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, prompt, strlen(prompt), tokens.data(), (int32_t) tokens.size(), true, true);
     }
-    if (n_tokens == 0) {
+    if (n_tokens < 1) {
         fprintf(stderr, "Error: prompt tokenized to zero tokens\n");
         return 1;
     }

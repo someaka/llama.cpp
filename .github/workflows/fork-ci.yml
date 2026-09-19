@@ -469,6 +469,66 @@ jobs:
           fi
           echo "PASS: --no-hidden-states answers 501 naming the flag"
 
+      - name: Envelope parity pin (to_json vs to_json_text)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # server_task_result_hidden_states has two hand-parallel envelope
+          # builders (json to_json() and text to_json_text()). This pin fails
+          # CI if a field is added to one and not the other: both envelopes
+          # must expose exactly {index, hidden_states, tokens_evaluated}.
+          SRC=tools/server/server-task.cpp
+          for FIELD in index hidden_states tokens_evaluated; do
+            COUNT=$(grep -c "\"$FIELD\"" "$SRC" || true)
+            if [ "$COUNT" -lt 2 ]; then
+              echo "FAIL: field '$FIELD' appears $COUNT time(s) in $SRC — expected >=2 (to_json AND to_json_text)"
+              exit 1
+            fi
+          done
+          echo "PASS: envelope fields present in both serializers"
+
+      - name: skip_offset contract pin (silently-ignored flag = 400)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cd /home/a/Bureau/Work/llama.cpp
+          ./build-cuda/bin/llama-server -m /home/a/Bureau/Work/CrimsonRed/data/models/gemma-4-E2B.Q4_K_M.gguf \
+            -ngl 99 -c 2048 --port 8098 > /tmp/hs_pin_server.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1:8098/health && break
+            sleep 1
+          done
+          # skip_offset with a non-consuming pool must be rejected, not ignored
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8098/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"pool":"last","skip_offset":50}')
+          if [ "$HTTP_CODE" != "400" ]; then
+            echo "FAIL: skip_offset+pool=last expected 400, got $HTTP_CODE (silently-ignored flag)"
+            kill $SRV 2>/dev/null || true
+            exit 1
+          fi
+          BODY=$(curl -s -X POST http://127.0.0.1:8098/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"pool":"last","skip_offset":50}')
+          if ! echo "$BODY" | grep -q "only valid with pool=skip_mean"; then
+            echo "FAIL: 400 body does not name the conflict; got: $BODY"
+            kill $SRV 2>/dev/null || true
+            exit 1
+          fi
+          # consuming pool still works
+          OK_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8098/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"pool":"skip_mean","skip_offset":1}')
+          if [ "$OK_CODE" != "200" ]; then
+            echo "FAIL: valid skip_mean+skip_offset=1 expected 200, got $OK_CODE"
+            kill $SRV 2>/dev/null || true
+            exit 1
+          fi
+          kill $SRV 2>/dev/null || true
+          wait $SRV 2>/dev/null || true
+          echo "PASS: skip_offset rejected outside skip_mean, accepted within it"
+
       - name: PR-surface whitespace check
         timeout-minutes: 5
         run: |

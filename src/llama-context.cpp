@@ -122,6 +122,16 @@ llama_context::llama_context(
         throw std::runtime_error(std::string("hidden-state extraction not implemented for architecture '")
                                  + llm_arch_name(model.arch) + "'");
     }
+    if (cparams.extract_hidden_states && hparams.n_embd_out() != hparams.n_embd) {
+        // Refuse at creation (beside the arch check), not at first decode:
+        // the captured tensors are residual-stream tensors of width n_embd
+        // while the buffer strides with n_embd_out, so a separate output
+        // projection makes extraction unsupported for this configuration.
+        throw std::runtime_error("hidden-state extraction requires n_embd_out == n_embd, "
+                                 "but the model has a separate output projection (n_embd_out = "
+                                 + std::to_string(hparams.n_embd_out()) + ", n_embd = "
+                                 + std::to_string(hparams.n_embd) + ")");
+    }
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -1016,7 +1026,14 @@ float * llama_context::get_hidden_state(int32_t layer) {
     }
 
     const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
-    GGML_ASSERT(offset < hidden_state_buf.size() && "hidden state offset exceeds buffer");
+    try {
+        if (offset >= hidden_state_buf.size()) {
+            throw std::out_of_range("hidden state offset exceeds buffer");
+        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: invalid layer %d, reason: %s\n", __func__, layer, err.what());
+        return nullptr;
+    }
     return hidden_state_buf.data() + offset;
 }
 
@@ -1895,18 +1912,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // one ubatch at a time. n_hidden_tokens stays 0 until the copy loop
     // completes for all ubatches, so no read can observe partial data.
     if (cparams.extract_hidden_states) {
-        // The captured tensors are residual-stream tensors of width n_embd;
-        // the buffer strides them with n_embd_out. Extraction is only
-        // supported when the two are equal.
-        if (hparams.n_embd_out() != hparams.n_embd) {
-            LLAMA_LOG_ERROR("%s: hidden-state extraction requires n_embd_out == n_embd, "
-                            "but the model has a separate output projection "
-                            "(n_embd_out = %u, n_embd = %u) - extraction is unsupported for this configuration\n",
-                            __func__, hparams.n_embd_out(), hparams.n_embd);
-            n_hidden_tokens = 0;
-            return -1;
-        }
-
+        // n_embd_out == n_embd is enforced at context creation; both are
+        // equal here, so the capture stride and the tensor width agree.
         const uint32_t n_embd_out = hparams.n_embd_out();
         // hidden_states ladder: index 0 (embeddings) through index n_layer
         // (final block output) -- one slot more than the block count.
@@ -1924,7 +1931,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
             n_hidden_tokens = 0;
             return -1;
         }
-        n_hidden_tokens = 0;
+        // n_hidden_tokens stays 0 until every ubatch's copy loop completes;
+        // resize value-initializes new elements, no explicit clear needed.
     }
 
     int64_t n_outputs_prev = 0;
@@ -2195,14 +2203,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
                                "the graph builder does not call capture_layer_output\n",
                                __func__, llm_arch_name(model.arch));
                 }
-                // This model architecture does not populate t_hidden_layers;
-                // getters return NULL for this decode (n_hidden_tokens = 0).
+                // This model architecture does not populate t_hidden_layers.
                 // Context creation and the runtime setter refuse unsupported
-                // architectures, so reaching this branch means the context was
-                // created before the check existed or the check was bypassed.
+                // architectures, so this branch is unreachable in a correct
+                // build; treat reaching it as an error (fail loud) rather than
+                // a successful decode with empty capture.
                 LLAMA_LOG_ERROR("%s: extract_hidden_states is enabled but this model architecture "
                                 "does not support it (t_hidden_layers is empty)\n", __func__);
                 n_hidden_tokens = 0;
+                return -1;
             }
         }
 
@@ -4223,6 +4232,10 @@ int32_t llama_get_hidden_states_batch(
         const int32_t * layers,
         int32_t         n_layers,
         float        ** out_ptrs) {
+    // Single synchronize for the whole batch: callers that already hold a
+    // synchronized context (the server path pre-reads n_tokens via
+    // llama_get_hidden_state_n_tokens) reach this after their own sync, and
+    // llama_context::synchronize() drains an idle schedule at negligible cost.
     ctx->synchronize();
 
     if (n_layers <= 0 || !layers || !out_ptrs) {

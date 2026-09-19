@@ -308,6 +308,7 @@ int main(int argc, char ** argv) {
     // Show some values from layer 0
     printf("Layer 0 first 10 values: ");
     float * hs0 = llama_get_hidden_state(ctx, 0);
+    if (!hs0) { printf("(unavailable)\n"); return 1; }
     for (int i = 0; i < 10 && i < n_embd; i++) {
         printf("%.6f ", hs0[i]);
     }
