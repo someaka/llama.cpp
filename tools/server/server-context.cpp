@@ -3132,7 +3132,7 @@ private:
                 // projection): fail the batched task the same way decode
                 // failures do, restore the toggle, and drop the batch.
                 send_error(*slot_batched->task,
-                           "hidden-state extraction refused for this model/architecture (see server log)",
+                           "hidden-state extraction refused for this model (unsupported architecture, MTP context, or separate output projection; see server log)",
                            ERROR_TYPE_SERVER);
                 llama_set_extract_hidden_states(ctx_tgt, false);
                 return;

@@ -497,6 +497,13 @@ jobs:
               if missing:
                   print(f'FAIL: {name} missing envelope field(s): {sorted(missing)} (found {sorted(keys)})')
                   ok = False
+              extra = keys - expected
+              if extra:
+                  print(f'FAIL: {name} emits unexpected envelope field(s): {sorted(extra)} - mirror it in the other serializer and update the canonical set, or remove it')
+                  ok = False
+          if j_keys != t_keys:
+              print(f'FAIL: serializers diverge: to_json={sorted(j_keys)} vs to_json_text={sorted(t_keys)}')
+              ok = False
           if not ok:
               sys.exit(1)
           print(f'PASS: envelope fields identical in both serializers: {sorted(expected)}')
@@ -521,6 +528,14 @@ jobs:
             -d '{"input":"hello","layers":[0],"pool":"last","skip_offset":50}')
           if [ "$HTTP_CODE" != "400" ]; then
             echo "FAIL: skip_offset+pool=last expected 400, got $HTTP_CODE (silently-ignored flag)"
+            exit 1
+          fi
+          # an explicit skip_offset:0 under a non-consuming pool is the same trap
+          ZERO_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8097/hidden-states \
+            -H "Content-Type: application/json" \
+            -d '{"input":"hello","layers":[0],"pool":"last","skip_offset":0}')
+          if [ "$ZERO_CODE" != "400" ]; then
+            echo "FAIL: explicit skip_offset:0+pool=last expected 400, got $ZERO_CODE (echoed-then-ignored flag)"
             exit 1
           fi
           BODY=$(curl -s -X POST http://127.0.0.1:8097/hidden-states \

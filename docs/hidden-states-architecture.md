@@ -115,11 +115,14 @@ Three gates read it:
 - **Context creation** (`src/llama-context.cpp`, after the cparams copy):
   flag set + unsupported arch → `throw std::runtime_error("hidden-state
   extraction not implemented for architecture '<name>'")`. The context is
-  never created; no dead buffer allocation.
+  never created; no dead buffer allocation. Creation also refuses a separate
+  output projection (n_embd_out != n_embd: the capture buffer strides
+  n_embd_out while the residual tensors are n_embd wide) with the same throw.
 - **Runtime setter** (`llama_context::set_extract_hidden_states`): enabling
-  on an unsupported arch → same throw. The server enables per request
-  (server-context.cpp update_slots toggle); a throw here surfaces as a task
-  error rather than a silent NULL.
+  on an unsupported arch or a separate output projection → same throws (the
+  maint-review wave closed this gap: the setter is the server's actual path).
+  The C wrapper `llama_set_extract_hidden_states` returns 0/-1; the server
+  fails the task via send_error rather than decoding with a failed enable.
 - **Server `/hidden-states` route** (`tools/server/server-context.cpp`,
   post_hidden_states handler): unsupported arch → 400-class
   `ERROR_TYPE_INVALID_REQUEST` naming the arch, before any decode happens.
@@ -127,8 +130,10 @@ Three gates read it:
 Backstop inside decode: if the registry says supported but the graph builder
 delivered an empty `t_hidden_layers`, that is a contract violation and
 aborts loudly (`GGML_ABORT`) naming the arch and the missing helper call.
-The registry-not-listed path keeps its error log (context creation already
-refused it; decode only sees such a context if the gates were bypassed).
+The registry-not-listed path returns -1 (fail loud, no capture). Decode also
+keeps a belt check on n_embd_out == n_embd (both gates above already refused
+it; the belt makes any bypass fail loud at decode instead of mis-striding
+the capture).
 
 ### 3. Semantics — unchanged on the four reference archs
 
