@@ -123,3 +123,15 @@ produced bytes -- nothing more. Cross-backend (CUDA vs Vulkan vs CPU)
 comparisons are out of scope by design (numerics legitimately differ).
 Without the gate there is nothing for a refactor to prove byte-neutrality
 with, and numeric drift ships silently.
+
+## The 2026-09-13 anchor incident (why "fresh build" is load-bearing)
+
+A 2026-09-13 "re-baseline" promoted digests produced by an incremental
+build whose cache had gone stale after an upstream merge; the anchor then
+"verified" bytes that no clean build reproduces. Root-caused 2026-09-16:
+the committed anchor was restored to the 2026-08-18 closure-lineage
+digests, and every gate run since re-verifies that fresh builds from
+clean trees match it exactly (AOT or PTX-JIT). Rule: an anchor only moves
+with a written cause, and only from a fresh-build digest set — never from
+an incremental-build run. The full forensic history is preserved under
+`docs/history/` in the repository root.
