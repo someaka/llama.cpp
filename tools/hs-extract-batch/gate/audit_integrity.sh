@@ -217,9 +217,31 @@ n_sites=$(grep -cE 'scan_prompts_file\(' tools/hs-extract-batch/hs-extract-batch
 if [ "$n_callers" -ne 2 ] || [ "$n_sites" -ne 3 ]; then
 echo "FAIL: scan_prompts_file call sites unguarded (found $n_callers guarded of expected 2; $n_sites total occurrences of expected 3 = definition + 2 calls)"; exit 1
 fi
-if grep -E 'if[[:space:]]*\(![[:space:]]*scan_prompts_file\(' tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE '\b(exit|abort|quick_exit|terminate|_Exit)[[:space:]]*\('; then
-echo "FAIL: a scan_prompts_file caller exits instead of returning on failure"; exit 1
-fi
+# Failure-action scan runs over each guarded statement's BRACE WINDOW (from
+# the guarded line through its closing brace), not just the line — an exit
+# on a continuation line inside the if-block is the same failure class as
+# one on the guarded line itself. Single-line form has an empty window and
+# is covered by the same scan (the guarded line is included).
+python3 - tools/hs-extract-batch/hs-extract-batch.cpp <<'PY' || { echo "FAIL: a scan_prompts_file caller exits inside its guarded statement"; exit 1; }
+import sys, re
+src = open(sys.argv[1]).read().splitlines()
+pat = re.compile(r'if\s*\(\s*!\s*scan_prompts_file\(')
+exitf = re.compile(r'\b(exit|abort|quick_exit|terminate|_Exit)\s*\(')
+hits = [i for i, l in enumerate(src) if pat.search(l)]
+if len(hits) != 2:
+    print(f"FAIL: expected 2 guarded call sites, found {len(hits)}", file=sys.stderr); raise SystemExit(1)
+for h in hits:
+    # window: from the guarded line to its closing brace (or same line if no brace)
+    depth = src[h].count('{') - src[h].count('}')
+    end = h if depth <= 0 and '}' not in src[h] else h
+    j = h
+    while depth > 0 and j + 1 < len(src):
+        j += 1
+        depth += src[j].count('{') - src[j].count('}')
+    window = '\n'.join(src[h:j+1])
+    if exitf.search(window):
+        raise SystemExit(1)
+PY
 echo "PASS"
 
 echo "=== Check 9: No off-by-one ==="
