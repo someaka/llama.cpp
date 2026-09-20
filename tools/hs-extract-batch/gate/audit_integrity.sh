@@ -40,9 +40,17 @@ echo "=== Check 2: output_all defined ==="
 strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparams\.embeddings;" && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
 strip_comments src/llama-context.cpp | grep -q "if (output_all) {" && echo "PASS" || { echo "FAIL: output_all primary use missing or inverted"; exit 1; }
 
-echo "=== Check 3: RAII LlamaBackend ==="
+echo "=== Check 3: RAII LlamaBackend (constructed by wrapper, no raw init) ==="
+# Two directions: (a) each tool TU declares an LlamaBackend wrapper (use-site
+# pin, use only — a bare `LlamaBackend x;` is the correct live form: the
+# wrapper's default ctor calls llama_backend_init()); (b) the same TU must
+# NOT call llama_backend_init directly — bypassing the wrapper is exactly
+# what the RAII rule forbids (comment-stripped, so prose mentions don't count).
 for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
   strip_comments "$f" | grep -qE "LlamaBackend +[A-Za-z_][A-Za-z_0-9]*;" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend declaration in $f"; exit 1; }
+  if strip_comments "$f" | grep -qE '\bllama_backend_init[[:space:]]*\('; then
+    echo "FAIL: raw llama_backend_init call in $f — LlamaBackend wrapper owns backend init"; exit 1
+  fi
 done
 
 echo "=== Check 4: hidden-state getters synchronize (upstream getter idiom) ==="
@@ -199,6 +207,19 @@ fi
 if ! grep -q "struct PromptsScan" tools/hs-extract-batch/hs-extract-batch.cpp; then
 echo "FAIL: PromptsScan struct missing (pre-scan contract changed; update this check)"; exit 1
 fi
+# Call-site duty (the body scan above cannot see the callers): both call
+# sites must test the bool return (`if (!scan_prompts_file(...))` shape)
+# AND their failure action must be a return, not an exit — an exit in the
+# caller's frame skips the unwind the return-path exists to perform.
+n_callers=$(grep -cE 'if[[:space:]]*\(![[:space:]]*scan_prompts_file\(' tools/hs-extract-batch/hs-extract-batch.cpp)
+n_sites=$(grep -cE 'scan_prompts_file\(' tools/hs-extract-batch/hs-extract-batch.cpp)
+# n_sites counts the definition + the two call sites = 3; every call site must be guarded
+if [ "$n_callers" -ne 2 ] || [ "$n_sites" -ne 3 ]; then
+echo "FAIL: scan_prompts_file call sites unguarded (found $n_callers guarded of expected 2; $n_sites total occurrences of expected 3 = definition + 2 calls)"; exit 1
+fi
+if grep -E 'if[[:space:]]*\(![[:space:]]*scan_prompts_file\(' tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE '\b(exit|abort|quick_exit|terminate|_Exit)[[:space:]]*\('; then
+echo "FAIL: a scan_prompts_file caller exits instead of returning on failure"; exit 1
+fi
 echo "PASS"
 
 echo "=== Check 9: No off-by-one ==="
@@ -255,8 +276,24 @@ fi
 echo "PASS"
 
 echo "=== Check 11: output writer uses pre-built index (not O(K^2) rescan) ==="
+# Three pins on _write_accumulator_to_file's writer (io-util.cpp):
+# (a) use-site pin: the pre-built index is read via gm_pairs[...] subscripts;
+# (b) advance-loop pin: group membership advances via the O(1) equality walk
+#     (`gm_pairs[gm_idx].group_id == group_id`) — the pre-built-index way;
+# (c) anti-rescan pin: the TU may contain exactly ONE range-scan over
+#     gm_pairs (the n_groups counter). The flat_keys build destructures
+#     accumulators, not gm_pairs. A second full-range scan inside the
+#     writer is the O(K^2) re-derivation class (keeps a subscript,
+#     rescans per group).
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[[A-Za-z_][A-Za-z_0-9]*\]'; then
   echo "FAIL: output writer pre-built index (gm_pairs) missing at use site"; exit 1
+fi
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[gm_idx\]\.group_id[[:space:]]*==[[:space:]]*group_id'; then
+  echo "FAIL: writer group-advance equality walk missing (pre-built-index advance replaced; update this check if the algorithm changed)"; exit 1
+fi
+n_scans=$(strip_comments tools/hs-extract-batch/io-util.cpp | grep -cE 'for[[:space:]]*\([[:space:]]*(const auto&|auto)[[:space:]]+(gmp|gm)[[:space:]]*:[[:space:]]*gm_pairs\)')
+if [ "$n_scans" -ne 1 ]; then
+  echo "FAIL: $n_scans range-scans over gm_pairs (expected exactly 1: the n_groups counter) — O(K^2) rescan regression"; exit 1
 fi
 echo "PASS"
 
