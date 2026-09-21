@@ -292,10 +292,51 @@ for _i, _l in enumerate(src):
         if _cur[2] <= 0 and _i > _cur[1]:
             _cur = None
 for _h in sorted(set(_exit_helpers)):
-    for _i, _l in enumerate(src):
-        if pat.search(_l) and re.search(r'\b' + re.escape(_h) + r'\s*\(', _l[_l.index(')'):] if ')' in _l else _l):
+    _helperf = re.compile(r'\b' + re.escape(_h) + r'\s*\(')
+    _guard_hits = [i for i, l in enumerate(src) if pat.search(l)]
+    if len(_guard_hits) != 2:
+        print(f"FAIL: expected 2 guarded call sites, found {len(_guard_hits)}", file=sys.stderr); raise SystemExit(1)
+    for h in _guard_hits:
+        # Run the delegation scan over the DERIVED statement window (R7n-F-1):
+        # scanning only the guard's own line missed helpers called from
+        # continuation lines of the guarded statement. The window derivation
+        # below is the same machinery the action-scope pins use.
+        ob = src[h].count('{'); cb = src[h].count('}')
+        j = h
+        if ob > cb:
+            _d = ob - cb
+            while _d > 0 and j + 1 < len(src):
+                j += 1
+                _d += src[j].count('{') - src[j].count('}')
+        elif ob == cb and ob > 0:
+            j = h
+        else:
+            k = h
+            while k + 1 < len(src) and k - h < 3 and '{' not in src[k + 1]:
+                k += 1
+            if k + 1 < len(src) and k - h < 3 and '{' in src[k + 1]:
+                j = k + 1
+                _d = src[j].count('{') - src[j].count('}')
+                while _d > 0 and j + 1 < len(src):
+                    j += 1
+                    _d += src[j].count('{') - src[j].count('}')
+            else:
+                e = h
+                while e + 1 < len(src) and e - h < 5 and not src[e].rstrip().endswith(';'):
+                    e += 1
+                j = e
+        _win = '\n'.join(src[h:j+1])
+        if _helperf.search(_win):
             print(f"FAIL: guarded action delegates to exit-helper '{_h}' (delegation evasion class)", file=sys.stderr)
             raise SystemExit(1)
+# TU bindings of identifiers to success constants (R7n-N-1): an identifier
+# bound to 0/false/EXIT_SUCCESS and returned from a guarded action reports
+# success on the failure path — mirror Check 9's alias resolution. Binding
+# declarations only: a type or `constexpr`/`const` keyword, or `static`,
+# must precede the identifier (`int ret = 0;`, `constexpr int k = 0;`) —
+# this excludes ==/!= tests, for-loop counters, and plain assignments like
+# `errno = 0;` (which do not create a success constant).
+_succ_ids = set(re.findall(r'\b(?:const|constexpr|static)\s+[\w:<>]+\s+(\w+)\s*=\s*(?:0|false|EXIT_SUCCESS)\b', src_raw))
 # positive duty: the guarded statement must return (failure by return, not
 # by exit, not swallowed). Covers `return -1;`, `return 1;`, `return false;`.
 retn = re.compile(r'\breturn\b')
@@ -379,6 +420,12 @@ for h in hits:
         _rv = _rm.group(1)
         if re.search(r'\?|[-+*/%]|<<|>>|[<>=!]=|\b(?:true|false)\b\s*[-+*/^&|]', _rv):
             print("FAIL: a scan_prompts_file guarded return uses a composed expression (ternary/arithmetic/comparison) for its value (expression-composition evasion class)", file=sys.stderr)
+            raise SystemExit(1)
+        # identifier-mediated success (R7n-N-1): `return <id>;` where the TU
+        # binds <id> to 0/false/EXIT_SUCCESS
+        _im = re.match(r'\s*(\w+)\s*$', _rv)
+        if _im and _im.group(1) in _succ_ids:
+            print(f"FAIL: a scan_prompts_file guarded return returns success constant '{_im.group(1)}' (identifier-mediated success class)", file=sys.stderr)
             raise SystemExit(1)
 PY
 echo "PASS"
