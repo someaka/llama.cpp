@@ -244,7 +244,7 @@ exitf = re.compile(r'\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\s*
 # pointer = &exit, = exit, fp = exit;) makes guarded-path exits invisible
 # to any name+paren regex. The alias itself is banned TU-wide (pristine
 # TU has zero such bindings; MUT-F2a's `= &exit;` is the class).
-aliasf = re.compile(r'=\s*&?\s*\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b\s*[;,\)]')
+aliasf = re.compile(r'=\s*&?\s*(?:::\s*)?(?:std\s*::\s*)?\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b\s*[;,\)]')
 if aliasf.search(src_raw):
     print("FAIL: exit-family function bound to a callable alias in the TU (function-pointer exit evasion)", file=sys.stderr)
     raise SystemExit(1)
@@ -294,11 +294,20 @@ for h in hits:
     if exitf.search(window):
         print("FAIL: a scan_prompts_file caller exits inside its guarded statement", file=sys.stderr)
         raise SystemExit(1)
-    # positive duty: the guarded statement must RETURN on the failure path.
-    # A log-only or empty action swallows the pre-scan's signal — the
-    # silent-under-count failure this check exists to prevent.
+    # positive duty: the guarded statement must RETURN a failure signal on
+    # the failure path. A log-only or empty action swallows the pre-scan's
+    # signal (M-J1/M-J1b); `return 0;`/`return false;` reports success on
+    # failure (M-K2a); a return nested behind a conditional with an
+    # else-swallow path is M-K2b — the nested-`if` tell is rejected.
     if not retn.search(window):
         print("FAIL: a scan_prompts_file guarded statement does not return on failure", file=sys.stderr)
+        raise SystemExit(1)
+    if re.search(r'\breturn\s+(?:0|false)\b', window):
+        print("FAIL: a scan_prompts_file guarded statement returns success on the failure path", file=sys.stderr)
+        raise SystemExit(1)
+    after_guard = window[window.index('\n') + 1:] if '\n' in window else ''
+    if re.search(r'\bif\s*\(', after_guard):
+        print("FAIL: a scan_prompts_file guarded statement nests a conditional before its return (conditional-return-else-swallow class)", file=sys.stderr)
         raise SystemExit(1)
 PY
 echo "PASS"
