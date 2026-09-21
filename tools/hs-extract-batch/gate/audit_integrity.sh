@@ -231,13 +231,39 @@ hits = [i for i, l in enumerate(src) if pat.search(l)]
 if len(hits) != 2:
     print(f"FAIL: expected 2 guarded call sites, found {len(hits)}", file=sys.stderr); raise SystemExit(1)
 for h in hits:
-    # window: from the guarded line to its closing brace (or same line if no brace)
+    # Window derivation, placement-agnostic:
+    # - braced (K&R, brace on the guarded line): extend to the closing brace;
+    # - Allman (brace on a later line): seed depth from the first '{' after
+    #   the guarded line, then extend to its closing brace;
+    # - brace-less single statement (`if (cond)\n    exit(1);` or one-liner):
+    #   no '{' ahead before the next blank-line/top-level boundary — extend
+    #   to the first line ending in ';' (the statement terminator) so an
+    #   exit on ANY continuation line of the guarded statement is scanned.
     depth = src[h].count('{') - src[h].count('}')
-    end = h if depth <= 0 and '}' not in src[h] else h
     j = h
-    while depth > 0 and j + 1 < len(src):
-        j += 1
-        depth += src[j].count('{') - src[j].count('}')
+    if depth <= 0:
+        # find the next '{' within the following 3 lines (Allman) — else
+        # treat as brace-less and scan to the statement terminator ';'
+        k = h
+        while k + 1 < len(src) and k - h < 3 and '{' not in src[k + 1]:
+            k += 1
+        if k + 1 < len(src) and k - h < 3 and '{' in src[k + 1]:
+            j = k + 1
+            depth = src[j].count('{') - src[j].count('}')
+            while depth > 0 and j + 1 < len(src):
+                j += 1
+                depth += src[j].count('{') - src[j].count('}')
+        else:
+            # brace-less: scan to the first ';' at/after the guarded line
+            # (max 5 lines — a guarded statement is short), then include it
+            e = h
+            while e + 1 < len(src) and e - h < 5 and not src[e].rstrip().endswith(';'):
+                e += 1
+            j = e
+    else:
+        while depth > 0 and j + 1 < len(src):
+            j += 1
+            depth += src[j].count('{') - src[j].count('}')
     window = '\n'.join(src[h:j+1])
     if exitf.search(window):
         raise SystemExit(1)
