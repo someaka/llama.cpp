@@ -291,7 +291,44 @@ for _i, _l in enumerate(src):
             _exit_helpers.append(_cur[0])
         if _cur[2] <= 0 and _i > _cur[1]:
             _cur = None
-for _h in sorted(set(_exit_helpers)):
+# Exit-helper closure (R7o-N1a, transitive-delegation axis): a helper that
+# merely forwards to a detected exit-helper is itself an exit-helper.
+# Iterate the def-tracker to fixpoint: any function whose body calls a
+# known exit-helper (or exit-family directly) joins the set, until no new
+# members appear. At this TU's density this is a few passes over the same
+# lines. (Function bodies re-scanned via the same _cur state machine; the
+# def regex is re-run per pass — cheap and self-contained.)
+_defs = []  # (name, start_idx, end_idx) — rebuilt once for closure passes
+_cur = None
+for _i, _l in enumerate(src):
+    _dm = re.match(r'(?:(?:static|inline|constexpr)\s+)*[A-Za-z_][\w:<>,\s*&]*?\s(\w+)\s*\([^;{}]*\)\s*(.*)$', _l)
+    _rest = _dm.group(2) if _dm else ''
+    if _dm and _rest.strip() == '':
+        if _i + 1 < len(src) and src[_i + 1].strip() == '{':
+            _cur = (_dm.group(1), _i, 0)
+            continue
+    elif _dm and '{' in _rest:
+        _cur = (_dm.group(1), _i, _rest.count('{') - _rest.count('}'))
+        if _cur[2] <= 0:
+            _defs.append((_cur[0], _i, _i)); _cur = None
+        continue
+    if _cur:
+        _cur = (_cur[0], _cur[1], _cur[2] + _l.count('{') - _l.count('}'))
+        if _cur[2] <= 0 and _i > _cur[1]:
+            _defs.append((_cur[0], _cur[1], _i)); _cur = None
+_exit_set = set(_exit_helpers)
+for _ in range(8):
+    _grown = False
+    for _name, _s, _e in _defs:
+        if _name in _exit_set:
+            continue
+        _body = '\n'.join(src[_s:_e + 1])
+        if any(re.search(r'\b' + re.escape(_x) + r'\s*\(', _body) for _x in _exit_set):
+            _exit_set.add(_name); _grown = True
+    if not _grown:
+        break
+_exit_helpers = sorted(_exit_set)
+for _h in _exit_helpers:
     _helperf = re.compile(r'\b' + re.escape(_h) + r'\s*\(')
     _guard_hits = [i for i, l in enumerate(src) if pat.search(l)]
     if len(_guard_hits) != 2:
@@ -329,14 +366,24 @@ for _h in sorted(set(_exit_helpers)):
         if _helperf.search(_win):
             print(f"FAIL: guarded action delegates to exit-helper '{_h}' (delegation evasion class)", file=sys.stderr)
             raise SystemExit(1)
-# TU bindings of identifiers to success constants (R7n-N-1): an identifier
-# bound to 0/false/EXIT_SUCCESS and returned from a guarded action reports
-# success on the failure path — mirror Check 9's alias resolution. Binding
-# declarations only: a type or `constexpr`/`const` keyword, or `static`,
-# must precede the identifier (`int ret = 0;`, `constexpr int k = 0;`) —
-# this excludes ==/!= tests, for-loop counters, and plain assignments like
-# `errno = 0;` (which do not create a success constant).
-_succ_ids = set(re.findall(r'\b(?:const|constexpr|static)\s+[\w:<>]+\s+(\w+)\s*=\s*(?:0|false|EXIT_SUCCESS)\b', src_raw))
+# TU bindings of identifiers to success constants (R7n-N-1 + R7o-N1b):
+# an identifier bound to 0/false/EXIT_SUCCESS and returned from a guarded
+# action reports success on the failure path. Declaration-shaped captures:
+# - const/constexpr/static + type + id = literal (single declarator);
+# - additional comma declarators in the same declaration (int kA = 0, kB = 0;);
+# - zero-initialized statics with no initializer (static int kZero;) —
+#   statics are zero-initialized by the language;
+# - arithmetic-zero initializers (= -0, = 0x0, = 0u, = 0L);
+# - object-like macros #define <id> (0|EXIT_SUCCESS) or bare 0.
+# ==/!= tests, for-loop counters, and plain assignments (errno = 0) are
+# not declaration-shaped and are not captured.
+_succ_ids = set(re.findall(r'\b(?:const|constexpr|static)\s+[\w:<>]+\s+(\w+)\s*=\s*[-+]?(?:0[xX][0-9a-fA-F]+|0[uUlL]*|-0\b)(?![\w.])', src_raw))
+_succ_ids |= set(re.findall(r'\b(?:const|constexpr|static)\s+[\w:<>]+\s+(\w+)\s*=\s*(?:0|false|EXIT_SUCCESS)\b', src_raw))
+for _dm in re.finditer(r'\b(?:const|constexpr|static)\s+[\w:<>]+\s+(\w+)\s*=\s*(?:0|false|EXIT_SUCCESS)\s*([^;]*);', src_raw):
+    for _extra in re.findall(r',\s*(\w+)\s*=\s*(?:0|false|EXIT_SUCCESS)\b', _dm.group(2)):
+        _succ_ids.add(_extra)
+_succ_ids |= set(re.findall(r'\bstatic\s+[\w:<>]+\s+(\w+)\s*;', src_raw))
+_succ_ids |= set(re.findall(r'#define\s+(\w+)\s*\(?\s*(?:0|EXIT_SUCCESS)\s*\)?\s*(?:\n|$)', src_raw))
 # positive duty: the guarded statement must return (failure by return, not
 # by exit, not swallowed). Covers `return -1;`, `return 1;`, `return false;`.
 retn = re.compile(r'\breturn\b')
