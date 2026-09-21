@@ -255,6 +255,47 @@ for _m in re.finditer(r'(?<![=!<>])=\s*([^;]+);', src_nostr):
     if re.search(r'\b(?:_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b', _m.group(1)):
         print("FAIL: exit-family function bound to a callable alias in the TU (function-pointer exit evasion)", file=sys.stderr)
         raise SystemExit(1)
+# exit-helper ban (R7m-N1a, delegation axis): a failure-action can escape the
+# action-scope scan by delegating to a helper that itself calls an
+# exit-family function. The delegation must be visible somewhere: any
+# function DEFINED in this TU whose body contains an exit-family call is an
+# exit-helper, and its identifier is banned from appearing as a call in any
+# guarded action. (The TU's own exit-family calls all live in parse_args'
+# error paths, not in helpers reachable from the guarded actions; a NEW
+# exit-helper called from a guarded action is exactly the evasion class.)
+_exit_helpers = []
+_cur = None
+for _i, _l in enumerate(src):
+    # Function-definition start: K&R on one line ('... { body ...'), K&R with
+    # the brace ending the line ('... {'), or Allman ('...)' then a line that
+    # is exactly '{'). All three must be tracked (R7m-N1a: helpers may use
+    # any brace style like any other code).
+    _dm = re.match(r'(?:(?:static|inline|constexpr)\s+)*[A-Za-z_][\w:<>,\s*&]*?\s(\w+)\s*\([^;{}]*\)\s*(.*)$', _l)
+    _rest = _dm.group(2) if _dm else ''
+    if _dm and _rest.strip() == '':
+        # bare head: Allman if the next line is exactly '{', else not a def
+        if _i + 1 < len(src) and src[_i + 1].strip() == '{':
+            _cur = (_dm.group(1), _i, 0)
+            continue
+    elif _dm and '{' in _rest:
+        # brace opens on this line (K&R one-line or K&R multi-line)
+        _cur = (_dm.group(1), _i, _rest.count('{') - _rest.count('}'))
+        if re.search(r'\b(?:_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\s*\(', _l):
+            _exit_helpers.append(_cur[0])
+        if _cur[2] <= 0:
+            _cur = None
+        continue
+    if _cur:
+        _cur = (_cur[0], _cur[1], _cur[2] + _l.count('{') - _l.count('}'))
+        if re.search(r'\b(?:_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\s*\(', _l):
+            _exit_helpers.append(_cur[0])
+        if _cur[2] <= 0 and _i > _cur[1]:
+            _cur = None
+for _h in sorted(set(_exit_helpers)):
+    for _i, _l in enumerate(src):
+        if pat.search(_l) and re.search(r'\b' + re.escape(_h) + r'\s*\(', _l[_l.index(')'):] if ')' in _l else _l):
+            print(f"FAIL: guarded action delegates to exit-helper '{_h}' (delegation evasion class)", file=sys.stderr)
+            raise SystemExit(1)
 # positive duty: the guarded statement must return (failure by return, not
 # by exit, not swallowed). Covers `return -1;`, `return 1;`, `return false;`.
 retn = re.compile(r'\breturn\b')
@@ -318,7 +359,13 @@ for h in hits:
     # (not log-only/empty, M-J1/M-J1b), nonzero (return 0/false/
     # EXIT_SUCCESS reports success on the failure path, M-K2a/M-L2b), and
     # unconditional (a nested `if` in the action is the
-    # conditional-return-else-swallow tell, M-K2b).
+    # conditional-return-else-swallow tell, M-K2b). The value must be
+    # literal (R7m-N1b, expression-composition axis): a ternary-valued
+    # (`return getenv(…) ? 0 : 1;`) or arithmetic (`return 1 - 1;`)
+    # expression masks the success value from the literal pin while
+    # returning it at runtime — any `return <expr>;` whose expression
+    # contains `?` or an arithmetic/comparison operator is rejected, so
+    # only literal/identifier returns survive.
     if not retn.search(action):
         print("FAIL: a scan_prompts_file guarded statement does not return on failure", file=sys.stderr)
         raise SystemExit(1)
@@ -328,6 +375,11 @@ for h in hits:
     if re.search(r'\bif\s*\(', action):
         print("FAIL: a scan_prompts_file guarded statement nests a conditional before its return (conditional-return-else-swallow class)", file=sys.stderr)
         raise SystemExit(1)
+    for _rm in re.finditer(r'\breturn\s+([^;]+);', action):
+        _rv = _rm.group(1)
+        if re.search(r'\?|[-+*/%]|<<|>>|[<>=!]=|\b(?:true|false)\b\s*[-+*/^&|]', _rv):
+            print("FAIL: a scan_prompts_file guarded return uses a composed expression (ternary/arithmetic/comparison) for its value (expression-composition evasion class)", file=sys.stderr)
+            raise SystemExit(1)
 PY
 echo "PASS"
 
