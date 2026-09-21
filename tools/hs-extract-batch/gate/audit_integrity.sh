@@ -240,14 +240,21 @@ pat = re.compile(r'if\s*\(\s*!\s*scan_prompts_file\(')
 # exit-family vocabulary: bare exit, underscore exit, quick/terminate
 # variants, pthread_exit — name + optional space + '('
 exitf = re.compile(r'\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\s*\(')
-# exit-alias ban: binding an exit-family NAME to a callable (function
-# pointer = &exit, = exit, fp = exit;) makes guarded-path exits invisible
-# to any name+paren regex. The alias itself is banned TU-wide (pristine
-# TU has zero such bindings; MUT-F2a's `= &exit;` is the class).
-aliasf = re.compile(r'=\s*&?\s*(?:::\s*)?(?:std\s*::\s*)?\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b\s*[;,\)]')
-if aliasf.search(src_raw):
-    print("FAIL: exit-family function bound to a callable alias in the TU (function-pointer exit evasion)", file=sys.stderr)
-    raise SystemExit(1)
+# exit-alias ban: binding an exit-family NAME to a callable makes guarded-
+# path exits invisible to any name+paren regex. Form-blind: EVERY
+# `= <rhs>;` initializer whose RHS (up to the terminating `;`, newlines
+# crossed) mentions an exit-family name at all is rejected — plain,
+# addressed, qualified (::/std::), parenthesized, and ternary-composed
+# spellings (MUT-F2a, M-K1/M-K1b, MUT-L0/L1) all fall out. For this scan
+# only, string literals are blanked so prose mentioning the family cannot
+# false-trip; `\b` word tokens keep exit_member-style accesses clean; the
+# lookbehind skips ==/!=/<=/>= comparisons. (Pristine TU: zero such RHS
+# tokens; benign bindings like &std::getenv PASS.)
+src_nostr = re.sub(r'"(?:[^"\\]|\\.)*"', '""', src_raw)
+for _m in re.finditer(r'(?<![=!<>])=\s*([^;]+);', src_nostr):
+    if re.search(r'\b(?:_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b', _m.group(1)):
+        print("FAIL: exit-family function bound to a callable alias in the TU (function-pointer exit evasion)", file=sys.stderr)
+        raise SystemExit(1)
 # positive duty: the guarded statement must return (failure by return, not
 # by exit, not swallowed). Covers `return -1;`, `return 1;`, `return false;`.
 retn = re.compile(r'\breturn\b')
@@ -255,19 +262,27 @@ hits = [i for i, l in enumerate(src) if pat.search(l)]
 if len(hits) != 2:
     print(f"FAIL: expected 2 guarded call sites, found {len(hits)}", file=sys.stderr); raise SystemExit(1)
 for h in hits:
-    # Window derivation, placement-agnostic:
-    # - braced (K&R, brace on the guarded line): extend to the closing brace;
-    # - Allman (brace on a later line): seed depth from the first '{' after
-    #   the guarded line, then extend to its closing brace;
-    # - brace-less single statement (`if (cond)\n    exit(1);` or one-liner):
-    #   no '{' ahead before the next blank-line/top-level boundary — extend
-    #   to the first line ending in ';' (the statement terminator) so an
-    #   exit on ANY continuation line of the guarded statement is scanned.
-    depth = src[h].count('{') - src[h].count('}')
+    # Statement-centric window derivation (R7l F-3 fix): the window is the
+    # guarded STATEMENT, never enclosing code.
+    # - K&R (brace opens on the guarded line, unbalanced): extend to the
+    #   matching closing brace;
+    # - single-line braced (braces self-balance on the guarded line): the
+    #   statement IS that line — do NOT seed into following lines (the old
+    #   Allman lookahead swallowed enclosing code and false-rejected
+    #   compliant `{ log; return 2; }` callers);
+    # - Allman (no brace on the guarded line, one within 3 lines): seed
+    #   depth from that brace, extend to its close;
+    # - brace-less: extend to the statement terminator ';' (max 5 lines).
+    ob = src[h].count('{'); cb = src[h].count('}')
     j = h
-    if depth <= 0:
-        # find the next '{' within the following 3 lines (Allman) — else
-        # treat as brace-less and scan to the statement terminator ';'
+    if ob > cb:
+        depth = ob - cb
+        while depth > 0 and j + 1 < len(src):
+            j += 1
+            depth += src[j].count('{') - src[j].count('}')
+    elif ob == cb and ob > 0:
+        j = h
+    else:
         k = h
         while k + 1 < len(src) and k - h < 3 and '{' not in src[k + 1]:
             k += 1
@@ -278,35 +293,39 @@ for h in hits:
                 j += 1
                 depth += src[j].count('{') - src[j].count('}')
         else:
-            # brace-less: scan to the first ';' at/after the guarded line
-            # (max 5 lines — a guarded statement is short), then include it
             e = h
             while e + 1 < len(src) and e - h < 5 and not src[e].rstrip().endswith(';'):
                 e += 1
             j = e
-    else:
-        while depth > 0 and j + 1 < len(src):
-            j += 1
-            depth += src[j].count('{') - src[j].count('}')
     window = '\n'.join(src[h:j+1])
-    # negative duty: no exit-family call (incl. _exit, pthread_exit) anywhere
-    # in the guarded statement's window;
-    if exitf.search(window):
+    # Action scope: everything after the guard's closing paren, matched to
+    # its opening paren (condition may nest parens). Pins run on the action
+    # uniformly at every placement (R7l F-1 fix — no empty after_guard
+    # residue at single-line callers).
+    mguard = re.match(r'.*?if\s*\(', window)
+    i = mguard.end(); d = 1
+    while i < len(window) and d > 0:
+        if window[i] == '(': d += 1
+        elif window[i] == ')': d -= 1
+        i += 1
+    action = window[i:]
+    # negative duty: no exit-family call (incl. _exit, pthread_exit) in the
+    # guarded statement's action;
+    if exitf.search(action):
         print("FAIL: a scan_prompts_file caller exits inside its guarded statement", file=sys.stderr)
         raise SystemExit(1)
-    # positive duty: the guarded statement must RETURN a failure signal on
-    # the failure path. A log-only or empty action swallows the pre-scan's
-    # signal (M-J1/M-J1b); `return 0;`/`return false;` reports success on
-    # failure (M-K2a); a return nested behind a conditional with an
-    # else-swallow path is M-K2b — the nested-`if` tell is rejected.
-    if not retn.search(window):
+    # positive duty: the action must RETURN a failure signal — present
+    # (not log-only/empty, M-J1/M-J1b), nonzero (return 0/false/
+    # EXIT_SUCCESS reports success on the failure path, M-K2a/M-L2b), and
+    # unconditional (a nested `if` in the action is the
+    # conditional-return-else-swallow tell, M-K2b).
+    if not retn.search(action):
         print("FAIL: a scan_prompts_file guarded statement does not return on failure", file=sys.stderr)
         raise SystemExit(1)
-    if re.search(r'\breturn\s+(?:0|false)\b', window):
+    if re.search(r'\breturn\s+(?:0|false|EXIT_SUCCESS)\b', action):
         print("FAIL: a scan_prompts_file guarded statement returns success on the failure path", file=sys.stderr)
         raise SystemExit(1)
-    after_guard = window[window.index('\n') + 1:] if '\n' in window else ''
-    if re.search(r'\bif\s*\(', after_guard):
+    if re.search(r'\bif\s*\(', action):
         print("FAIL: a scan_prompts_file guarded statement nests a conditional before its return (conditional-return-else-swallow class)", file=sys.stderr)
         raise SystemExit(1)
 PY
