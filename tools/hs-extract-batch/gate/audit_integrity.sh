@@ -201,7 +201,7 @@ echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 if ! grep -qE "static bool scan_prompts_file\(" tools/hs-extract-batch/hs-extract-batch.cpp; then
 echo "FAIL: scan_prompts_file not found in hs-extract-batch.cpp (moved TU? update this check's target)"; exit 1
 fi
-if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE '\b(exit|abort|quick_exit|terminate|_Exit)[[:space:]]*\('; then
+if sed -n '/static bool scan_prompts_file/,/^}/p' tools/hs-extract-batch/hs-extract-batch.cpp | grep -qE '\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)[[:space:]]*\('; then
 echo "FAIL: scan_prompts_file calls an exit-family function"; exit 1
 fi
 if ! grep -q "struct PromptsScan" tools/hs-extract-batch/hs-extract-batch.cpp; then
@@ -222,11 +222,35 @@ fi
 # on a continuation line inside the if-block is the same failure class as
 # one on the guarded line itself. Single-line form has an empty window and
 # is covered by the same scan (the guarded line is included).
-python3 - tools/hs-extract-batch/hs-extract-batch.cpp <<'PY' || { echo "FAIL: a scan_prompts_file caller exits inside its guarded statement"; exit 1; }
+python3 - tools/hs-extract-batch/hs-extract-batch.cpp <<'PY' || { echo "FAIL: scan_prompts_file caller duty violated (see which FAIL printed above)"; exit 1; }
 import sys, re
-src = open(sys.argv[1]).read().splitlines()
+
+# Strip comments BEFORE any window/brace derivation (harness doctrine:
+# never scan raw text — a `}` or `;` inside a comment truncates windows,
+# and a comment mentioning exit( cannot false-FAIL). Length-preserving
+# block-comment removal keeps line indices meaningful.
+src_raw = open(sys.argv[1]).read()
+src_raw = re.sub(r'/\*.*?\*/', lambda m: re.sub(r'[^\n]', ' ', m.group(0)), src_raw, flags=re.S)
+src_raw = re.sub(r'^\s*//.*$', '', src_raw, flags=re.M)
+src_raw = re.sub(r'//[^"\n]*$', '', src_raw, flags=re.M)
+src_raw = re.sub(r'//[^"]*"[^"\n]*$', '', src_raw, flags=re.M)
+src = src_raw.splitlines()
+
 pat = re.compile(r'if\s*\(\s*!\s*scan_prompts_file\(')
-exitf = re.compile(r'\b(exit|abort|quick_exit|terminate|_Exit)\s*\(')
+# exit-family vocabulary: bare exit, underscore exit, quick/terminate
+# variants, pthread_exit — name + optional space + '('
+exitf = re.compile(r'\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\s*\(')
+# exit-alias ban: binding an exit-family NAME to a callable (function
+# pointer = &exit, = exit, fp = exit;) makes guarded-path exits invisible
+# to any name+paren regex. The alias itself is banned TU-wide (pristine
+# TU has zero such bindings; MUT-F2a's `= &exit;` is the class).
+aliasf = re.compile(r'=\s*&?\s*\b(_?exit|abort|quick_exit|terminate|_Exit|pthread_exit)\b\s*[;,\)]')
+if aliasf.search(src_raw):
+    print("FAIL: exit-family function bound to a callable alias in the TU (function-pointer exit evasion)", file=sys.stderr)
+    raise SystemExit(1)
+# positive duty: the guarded statement must return (failure by return, not
+# by exit, not swallowed). Covers `return -1;`, `return 1;`, `return false;`.
+retn = re.compile(r'\breturn\b')
 hits = [i for i, l in enumerate(src) if pat.search(l)]
 if len(hits) != 2:
     print(f"FAIL: expected 2 guarded call sites, found {len(hits)}", file=sys.stderr); raise SystemExit(1)
@@ -265,7 +289,16 @@ for h in hits:
             j += 1
             depth += src[j].count('{') - src[j].count('}')
     window = '\n'.join(src[h:j+1])
+    # negative duty: no exit-family call (incl. _exit, pthread_exit) anywhere
+    # in the guarded statement's window;
     if exitf.search(window):
+        print("FAIL: a scan_prompts_file caller exits inside its guarded statement", file=sys.stderr)
+        raise SystemExit(1)
+    # positive duty: the guarded statement must RETURN on the failure path.
+    # A log-only or empty action swallows the pre-scan's signal — the
+    # silent-under-count failure this check exists to prevent.
+    if not retn.search(window):
+        print("FAIL: a scan_prompts_file guarded statement does not return on failure", file=sys.stderr)
         raise SystemExit(1)
 PY
 echo "PASS"
