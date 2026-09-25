@@ -235,8 +235,8 @@ Throughput figures below are from large-run measurements (>=10K-prompt
 datasets, 2026-08); small runs are startup/latency-dominated — measure yours
 with `--profile`.
 
-Throughput (measured 2026-07 on the RTX 2060 of that date; re-measure on
-current hardware before quoting — the RTX 3090 now in service is faster):
+Throughput (measured 2026-07 on a CPU+GPU development machine of that date;
+re-measure on current hardware before quoting):
 
 | Dataset Size | GPU Layers | Time | Throughput |
 |--------------|------------|------|------------|

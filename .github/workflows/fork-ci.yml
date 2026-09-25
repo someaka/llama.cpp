@@ -4,14 +4,14 @@ name: Fork CI
 # GPU verification (CUDA + Vulkan) is NOT automated  -  it must be done
 # manually on the respective machines after merging:
 #
-#   CUDA (A's machine, RTX 3090):
+#   CUDA (any CUDA-capable machine):
 #     cmake -B build-cuda -DGGML_CUDA=ON -DGGML_NATIVE=ON ...
 #     cmake --build build-cuda --target llama-hs-extract-batch test-hidden-states
 #     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/llama-hs-extract-batch --self-test
 #     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/test-hidden-states <model.gguf>
 #     LD_LIBRARY_PATH=build-cuda/bin build-cuda/bin/llama-hs-extract-batch <model> <prompts> all <out> --batch --assignments <file> -ngl 99
 #
-#   Vulkan (D's machine):
+#   Vulkan (any Vulkan-capable machine):
 #     cmake -B build-vulkan -DGGML_VULKAN=ON -DGGML_NATIVE=ON ...
 #     cmake --build build-vulkan --target llama-hs-extract-batch test-hidden-states
 #     (same self-test + extraction commands with build-vulkan/bin/)
@@ -190,7 +190,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models/test-model.gguf
-          key: test-model-gemma4-e2b-q4km-v1
+          key: test-model-hs-fixture-v1
 
       - name: Download test model
         timeout-minutes: 5
@@ -198,8 +198,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p models
-          wget --continue --timeout=120 -O models/test-model.gguf \
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
+          # Test fixture: any GGUF of a supported hidden-state architecture
+          # works; override via the HS_TEST_MODEL_URL repository variable.
+          MODEL_URL="${HS_TEST_MODEL_URL:-https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf}"
+          wget --continue --timeout=120 -O models/test-model.gguf "$MODEL_URL"
           ls -lh models/test-model.gguf
 
       - name: Run hidden-states test binaries with model

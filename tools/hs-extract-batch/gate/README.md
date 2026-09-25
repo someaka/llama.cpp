@@ -76,9 +76,10 @@ relocate the volatile tree, adjust the `GOLD` constant.
 
 ## Required model
 
-- Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default). Gate
-  model: gemma E2B Q4_K_M (sha256
-  `389c868898bffed97fd178646f88562cafecc6f60983a636bac53b131fd068a2`).
+- Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default).
+  The committed baseline digests were captured with the exact model fixture
+  listed in `fork-ci.yml` (see `HS_TEST_MODEL_URL` default there); using any
+  other model invalidates byte-identity comparison.
 
 ## Running the gate after a refactor
 
@@ -102,8 +103,8 @@ relocate the volatile tree, adjust the `GOLD` constant.
 
 Only meaningful from a commit that is TRUSTED (e.g. the tree before a
 refactor lands). The current baseline was captured 2026-08-18 on the
-production CUDA path (RTX 3090, from-scratch `build-cuda`, `-ngl 99`,
-inputs from `gen_inputs.py`). The CPU-era digests
+production CUDA path (from-scratch `build-cuda`, `-ngl 99`, inputs from
+`gen_inputs.py`). The CPU-era digests
 (before 2026-08-18) were captured on a CUDA-off binary at `-ngl 0` and are
 NOT comparable -- never mix anchors across backends; re-capture instead:
 

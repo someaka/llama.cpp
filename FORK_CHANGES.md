@@ -2,9 +2,8 @@
 
 This fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) adds
 capture-grade hidden-state extraction to core decode, the HTTP server, and
-dedicated extraction tools, with a byte-identity regression gate. Built for,
-and validated by, the CrimsonRed emotion-probe pipeline; the extraction layer
-itself is domain-neutral.
+dedicated extraction tools, with a byte-identity regression gate. The
+extraction layer is domain-neutral.
 
 ## Fork State
 
@@ -202,9 +201,8 @@ machine).
   clean trees reproduce this anchor exactly, AOT or PTX-JIT),
   `audit_integrity.sh` (all structural checks; the count derives from the
   script's check headers),
-  `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures),
-  `regen_manifest_lines.py` (adoption-manifest drift check; CI runs it with
-  `--check`). See `gate/README.md` for the model contract and workflow.
+     `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures).
+     See `gate/README.md` for the model contract and workflow.
   After each upstream sync window (a `git merge origin/master` into `main`,
   resolved and re-verified as one unit — the git recipe above shows the
   current delta), re-run the gate: fresh-build digests must match the
