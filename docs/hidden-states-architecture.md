@@ -168,9 +168,9 @@ creation (flag set), at the setter (enable), and at the server route.
   `hidden_states[i]` (slot 0 = embeddings ≡ HF `hidden_states[0]`,
   per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs — joining is a two-line
-  adoption per the manifest; the 26 non-classic shapes (parallel-residual,
-  hybrid recurrent) are refused pending per-builder semantic decisions.
-  See `docs/hidden-states-adoption-manifest.md`.
+  adoption (builder call + registry case); the 26 non-classic shapes
+  (parallel-residual, hybrid recurrent) are refused pending per-builder
+  semantic decisions.
 
 ## The llama/gemma extraction crash (found and fixed on this branch)
 

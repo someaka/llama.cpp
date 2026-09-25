@@ -64,8 +64,7 @@ with an error naming the architecture, and the server answers unsupported
 architectures with a 400-class error. Nothing is captured, and behavior is
 unchanged, until an architecture joins the registry. Adoption is a two-change
 recipe (builder call + registry case; for builders already carrying the tap,
-only the registry case remains), classified per builder in
-`docs/hidden-states-adoption-manifest.md`. The capture mechanism and the
+only the registry case remains). The capture mechanism and the
 layer index convention are documented in `docs/hidden-states-architecture.md`.
 The live extent of the sweep is repo data, not doc content:
 `grep -l capture_layer_output src/models/*.cpp`.
@@ -178,16 +177,10 @@ machine).
 ## Documentation
 
 - `docs/hidden-states-architecture.md`  -  unified capture mechanism, layer
-  index convention
-- `docs/hidden-states-adoption-manifest.md`  -  per-builder adoption
-  classification (ADOPT / REFUSE lists) and the adoption recipe
-- `docs/pr-text-hidden-states.md` — archived 2026-09-18 to
-  `docs/history/pr-text-hidden-states.md` (the upstream-PR path was explicitly
-  dropped; the draft is kept for its API-surface prose only).
+  index convention, and the adoption recipe
 - `tools/hs-extract-batch/README.md`  -  batch extraction tool
 - `tools/hs-extract/README.md`  -  single-prompt tool
 - `tools/server/README.md`  -  `/hidden-states` endpoint ("POST /hidden-states" section)
-- `docs/history/`  -  historical audit reports
 
 ### 8. Golden byte-identity gate
 
@@ -196,13 +189,13 @@ machine).
   no fallbacks), committed anchor `digests_baseline.json` (restored
   2026-09-16 to the verified 2026-08-18 closure lineage: the 09-13
   "re-baseline" had promoted stale-cache bytes from an incremental build
-  directory; the root-cause analysis is preserved in this repository's
-  `docs/history/` and summarized in `gate/README.md`; fresh builds from
+  directory; the root-cause summary lives in `gate/README.md`; fresh builds
+  from
   clean trees reproduce this anchor exactly, AOT or PTX-JIT),
   `audit_integrity.sh` (all structural checks; the count derives from the
   script's check headers),
-     `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures).
-     See `gate/README.md` for the model contract and workflow.
+  `gen_inputs.py` + `golden_inputs/` (deterministic gate fixtures).
+  See `gate/README.md` for the model contract and workflow.
   After each upstream sync window (a `git merge origin/master` into `main`,
   resolved and re-verified as one unit — the git recipe above shows the
   current delta), re-run the gate: fresh-build digests must match the
