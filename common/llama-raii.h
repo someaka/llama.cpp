@@ -65,6 +65,11 @@ struct LlamaBatch {
     bool initialized;
     LlamaBatch() : batch{}, initialized(false) {}
     void init(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
+        // Free a previously initialized batch before re-init so a second
+        // init() on the same object cannot leak the old allocation.
+        if (initialized) {
+            llama_batch_free(batch);
+        }
         batch = llama_batch_init(n_tokens, embd, n_seq_max);
         initialized = true;
     }

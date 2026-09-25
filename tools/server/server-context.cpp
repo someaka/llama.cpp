@@ -3291,6 +3291,32 @@ private:
                             return;
                         }
 
+                        // pool=none response size guard, pre-decode: the cap
+                        // (HS_MAX_POOL_NONE_FLOATS, server-hidden-states.h) is
+                        // computed from n_tokens at launch, so reject before
+                        // spending a full decode on a request that can never
+                        // respond. Mirrors the post-decode check in
+                        // send_hidden_states (defense in depth).
+                        if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES &&
+                            slot.task->params.hidden_pool == "none") {
+                            const int32_t n_layer_pre = llama_model_n_layer(model_tgt);
+                            const int32_t n_embd_pre  = llama_model_n_embd_out(model_tgt);
+                            const size_t n_slots_pre  = (size_t)(slot.task->params.hidden_all_layers
+                                                                   ? n_layer_pre + 1
+                                                                   : (int32_t)slot.task->params.hidden_layers.size());
+                            const size_t total_pre = (size_t)slot.task->n_tokens() * (size_t)n_embd_pre * n_slots_pre;
+                            if (total_pre > HS_MAX_POOL_NONE_FLOATS) {
+                                send_error(slot,
+                                           string_format(
+                                               "pool=none response too large: %zu floats across %zu layers "
+                                               "(limit: %zu). Reduce input length or number of layers.",
+                                               total_pre, n_slots_pre, (size_t)HS_MAX_POOL_NONE_FLOATS),
+                                           ERROR_TYPE_INVALID_REQUEST);
+                                slot.release();
+                                return;
+                            }
+                        }
+
                         // TODO: support memory-less logits computation
                         if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
                             send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
@@ -3826,6 +3852,13 @@ private:
                 if (!err.empty()) {
                     SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
 
+                    // A failed decode leaves the shared ctx_tgt with capture
+                    // still enabled for HIDDEN_STATES tasks; the only other
+                    // disable (hs_toggle_reset in send_hidden_states) runs on
+                    // the success path. Turn it off here so the buffer is
+                    // released and the next non-HS batch does not inherit it.
+                    llama_set_extract_hidden_states(ctx_tgt, false);
+
                     for (auto & slot : slots) {
                         if (slot.is_processing()) {
                             send_error(slot, err);
@@ -3851,6 +3884,9 @@ private:
                 const std::string hs_err =
                     "hidden-states decode failed to fit the KV cache; reduce concurrent load and retry";
                 SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", hs_err.c_str(), off, n_batch, ret);
+                // Release the capture buffer: send_hidden_states (success path)
+                // never runs for this task, so its hs_toggle_reset cannot fire.
+                llama_set_extract_hidden_states(ctx_tgt, false);
                 for (auto & slot : slots) {
                     if (slot.is_processing() && slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
                         send_error(slot, hs_err);
