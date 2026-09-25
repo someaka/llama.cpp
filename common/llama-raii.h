@@ -10,9 +10,9 @@
 //   LlamaBackend backend;          // calls llama_backend_init()
 //   LlamaModel model(...);          // owns llama_model*
 //   LlamaContext ctx(...);          // owns llama_context*
-//   LlamaBatch batch;               // owns llama_batch (call .init() first,
-//                                   // at most once per instance: a second
-//                                   // init() leaks the first batch)
+//   LlamaBatch batch;               // owns llama_batch (call .init() first;
+//                                   // a second init() frees the previous
+//                                   // batch before re-initializing)
 //
 // All resources are automatically freed on scope exit. Copy is disabled;
 // move is allowed only where stated above.
