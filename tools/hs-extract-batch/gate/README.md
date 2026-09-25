@@ -134,5 +134,4 @@ the committed anchor was restored to the 2026-08-18 closure-lineage
 digests, and every gate run since re-verifies that fresh builds from
 clean trees match it exactly (AOT or PTX-JIT). Rule: an anchor only moves
 with a written cause, and only from a fresh-build digest set — never from
-an incremental-build run. The full forensic history is preserved under
-`docs/history/` in the repository root.
+an incremental-build run.

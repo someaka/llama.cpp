@@ -19,7 +19,7 @@ Rule: if upstream could plausibly merge it, it lives at an upstream-shaped
 seam; if it exists only because this is our fork, it lives in a fork-owned
 path. Upstream-shaped: public API in `include/llama.h`, endpoint logic in
 its own `server-*.cpp` split file, tests in `tests/`, sample data beside
-its tool. Fork-owned paths: `tools/hs-extract-*/gate/`, `docs/history/`,
+its tool. Fork-owned paths: `tools/hs-extract-*/gate/`,
 `.github/workflows/fork-ci.yml`. Fork code edits upstream files only at
 minimal, documented seams; bulk logic goes in fork-owned TUs so future
 merges touch anchors, not blocks. Never place in upstream files:
@@ -27,8 +27,7 @@ machine-lineage baselines, cross-repo paths, private artifact names. Live
 docs cite dates + lessons, never paths. Examples: (1) a tool's test lives
 in `tests/` (upstream shape), not `gate/` (fork-private); (2)
 `digests_baseline.json` lives in `gate/` — machine-lineage bytes upstream
-can't reproduce; (3) an incident report lives in `docs/history/`; the live
-README keeps the date and the lesson, never the path.
+can't reproduce.
 
 ## Features
 
@@ -137,11 +136,6 @@ Debug/parity tool for extracting hidden states from a single prompt with JSON ou
   fork CI (both modes).
 - `examples/hidden-states`  -  minimal public-API example (installed like
   upstream siblings).
-- `tools/cvector-generator/{positive,negative}-gemma4.txt`  -  sample
-  conversation pairs in Gemma chat format for the cvector generator's
-  `--positive-file` / `--negative-file` options (the upstream samples are
-  llama-format; these exercise the same tool against a gemma4 model).
-  Data only: not referenced by any build or test target.
 - `tests/test-hidden-states.cpp` / `tests/test-hidden-states.c`  -  model
   exercising tests for the public extraction API in both C++ and C (run in
   fork CI against a real GGUF).

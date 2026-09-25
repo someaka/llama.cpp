@@ -582,7 +582,7 @@ jobs:
         run: |
           set -euo pipefail
           # PR-facing files must be whitespace-clean: no trailing whitespace,
-          # no blank line at EOF (docs/history Markdown hard-breaks exempt).
+          # no blank line at EOF.
           # The fork's own origin has no master branch — fetch upstream's
           # explicitly, then diff from the live merge-base (never a frozen
           # hash: it goes stale every sync window).

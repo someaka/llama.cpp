@@ -149,8 +149,9 @@ the capture).
 ## What a new architecture must do to join
 
 1. Verify its builder has the standard loop tail: final residual add →
-   `inpL = cur` reassignment at loop bottom. (Non-standard builders: see
-   the adoption manifest — some have no single well-defined residual.)
+   `inpL = cur` reassignment at loop bottom. (Non-standard builders with
+   no single well-defined residual require per-builder semantic decisions
+   and are refused by the capability registry until then.)
 2. Add `capture_layer_output(il, cur);` right after the reassignment.
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
 4. Rebuild, self-test 29/29, `test-hidden-states <gguf>` on a real GGUF of
