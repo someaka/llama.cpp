@@ -78,8 +78,8 @@ relocate the volatile tree, adjust the `GOLD` constant.
 
 - Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default).
   The committed baseline digests were captured with the exact model fixture
-  listed in `fork-ci.yml` (see `HS_TEST_MODEL_URL` default there); using any
-  other model invalidates byte-identity comparison.
+  `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in `fork-ci.yml`);
+  using any other model invalidates byte-identity comparison.
 
 ## Running the gate after a refactor
 

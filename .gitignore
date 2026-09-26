@@ -70,6 +70,7 @@
 /models-mnt
 !/models/.editorconfig
 !/models/ggml-vocab-*.gguf*
+!/models/hs-fixture.gguf
 !/models/templates
 
 # Zig

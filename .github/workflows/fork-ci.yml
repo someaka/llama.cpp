@@ -185,33 +185,26 @@ jobs:
           set -euo pipefail
           build/bin/llama-hs-extract-batch --help
 
-      - name: Cache test model
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: models/test-model.gguf
-          key: test-model-hs-fixture-v1
-
-      - name: Download test model
-        timeout-minutes: 5
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Verify committed hidden-states fixture
         run: |
           set -euo pipefail
-          mkdir -p models
-          # Test fixture: any GGUF of a supported hidden-state architecture
-          # works; override via the HS_TEST_MODEL_URL repository variable.
-          MODEL_URL="${HS_TEST_MODEL_URL:-https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf}"
-          wget --continue --timeout=120 -O models/test-model.gguf "$MODEL_URL"
-          ls -lh models/test-model.gguf
+          # Test fixture: committed in-repo (llama arch: stories260K,
+          # n_layer=5, n_embd=64, n_ctx_train=2048, byte-level vocab 512),
+          # sha256 270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d.
+          # Zero model download per run. Any GGUF of a supported
+          # hidden-state architecture works as a replacement.
+          test -f models/hs-fixture.gguf
+          echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  models/hs-fixture.gguf" | sha256sum -c -
+          ls -lh models/hs-fixture.gguf
 
       - name: Run hidden-states test binaries with model
         run: |
           set -euo pipefail
           echo "::group::test-hidden-states (C++)"
-          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states models/test-model.gguf
+          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states models/hs-fixture.gguf
           echo "::endgroup::"
           echo "::group::test-hidden-states-c (C)"
-          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states-c models/test-model.gguf
+          LD_LIBRARY_PATH=build/bin build/bin/test-hidden-states-c models/hs-fixture.gguf
           echo "::endgroup::"
 
       - name: Run logits probe + hs-extract-batch-test
@@ -225,13 +218,13 @@ jobs:
           cmake --build build --target llama-hs-extract-batch-test -j"${BUILD_PARALLEL}"
           echo "::endgroup::"
           echo "::group::llama-hs-probe (logits identical with/without extraction)"
-          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox"
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/hs-fixture.gguf "The quick brown fox"
           echo "::endgroup::"
           echo "::group::llama-hs-probe (runtime-toggle path, as used by /hidden-states)"
-          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/test-model.gguf "The quick brown fox" --runtime-toggle
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-probe models/hs-fixture.gguf "The quick brown fox" --runtime-toggle
           echo "::endgroup::"
           echo "::group::llama-hs-extract-batch-test (warmup/toggle equivalence, bitwise)"
-          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/test-model.gguf "The quick brown fox" 2
+          LD_LIBRARY_PATH=build/bin build/bin/llama-hs-extract-batch-test models/hs-fixture.gguf "The quick brown fox" 2
           echo "::endgroup::"
 
       - name: Smoke test /hidden-states server endpoint
@@ -240,7 +233,7 @@ jobs:
           set -euo pipefail
           echo "::group::Starting llama-server for endpoint test"
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
-            -m models/test-model.gguf \
+            -m models/hs-fixture.gguf \
             --host 127.0.0.1 --port 8097 \
             -ngl 0 -c 512 -np 1 \
             --cache-ram 0 &
@@ -256,14 +249,14 @@ jobs:
           echo "--- Test: last_token pool ---"
           RESP=$(curl -sf -X POST http://127.0.0.1:8097/hidden-states \
             -H "Content-Type: application/json" \
-            -d '{"input":"Hello world","layers":[0,5,10],"normalize":false,"pool":"last"}')
+            -d '{"input":"Hello world","layers":[0,2,5],"normalize":false,"pool":"last"}')
           echo "$RESP" | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
           assert len(d) == 1, 'expected 1 result'
           assert d[0]['tokens_evaluated'] >= 2, 'expected >= 2 tokens'
           layers = sorted(int(k) for k in d[0]['hidden_states'])
-          assert layers == [0,5,10], f'unexpected layers: {layers}'
+          assert layers == [0,2,5], f'unexpected layers: {layers}'
           print(f'PASS: last_token pool, tokens={d[0][\"tokens_evaluated\"]}, layers={layers}')
           "
           echo "--- Test: skip_mean pool ---"
@@ -394,7 +387,7 @@ jobs:
           set -euo pipefail
           echo "Starting server with small ubatch for multi-ubatch pool=none test..."
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
-            -m models/test-model.gguf \
+            -m models/hs-fixture.gguf \
             -ngl 0 -c 2048 -b 2048 -ub 512 -np 1 --port 8098 \
             --cache-ram 0 &
           SERVER_PID=$!
@@ -406,6 +399,7 @@ jobs:
             fi
             sleep 1
           done
+          # byte-level vocab: 60 reps = ~1742 tokens (>512 ubatch, <= n_ctx 2048)
           LONG_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 60)")
           RESP=$(curl -sf -X POST http://127.0.0.1:8098/hidden-states \
             -H "Content-Type: application/json" \
@@ -424,13 +418,14 @@ jobs:
           assert any(v != 0.0 for v in vec), 'pool=none hidden states are all zero'
           # Row count must equal the REAL prompt length vs a hardcoded hidden
           # size: an internally-consistent tail (decode-split) would still pass
-          # the two asserts above. gemma E2B n_embd = 1536.
-          assert len(vec) == tokens * 1536, f'expected {tokens * 1536} floats for {tokens} tokens, got {len(vec)}'
+          # the two asserts above. stories260K n_embd = 64.
+          assert len(vec) == tokens * 64, f'expected {tokens * 64} floats for {tokens} tokens, got {len(vec)}'
           print(f'PASS: multi-ubatch pool=none extraction, {tokens} tokens, hidden_size={hidden_size}')
           "
           # Decode-split refusal: a prompt longer than n_batch (2048 here) must
           # answer 400, not silently return only the tail chunk (the capture
           # resets on every llama_decode call).
+          # byte-level vocab: 250 reps = ~7252 tokens > n_batch
           SPLIT_TEXT=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 250)")
           SPLIT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8098/hidden-states \
             -H "Content-Type: application/json" \
@@ -447,7 +442,7 @@ jobs:
           set -euo pipefail
           echo "Starting server with --no-hidden-states..."
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
-            -m models/test-model.gguf \
+            -m models/hs-fixture.gguf \
             -ngl 0 -c 512 -b 512 -ub 512 -np 1 --port 8099 --no-hidden-states \
             --cache-ram 0 &
           SERVER_PID=$!
@@ -520,7 +515,7 @@ jobs:
         run: |
           set -euo pipefail
           LD_LIBRARY_PATH=build/bin build/bin/llama-server \
-            -m models/test-model.gguf \
+            -m models/hs-fixture.gguf \
             -ngl 0 -c 512 -b 512 -ub 512 -np 1 --port 8097 --cache-ram 0 &
           SRV=$!
           trap 'kill $SRV 2>/dev/null || true; wait $SRV 2>/dev/null || true' EXIT
