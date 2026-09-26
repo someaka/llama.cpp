@@ -27,7 +27,7 @@ namespace {
 // a test binary must never fall through a failed decode into a "pass".
 std::vector<float> run_and_capture(llama_model * model, const llama_vocab * vocab,
                                    const std::vector<llama_token> & tokens,
-                                   bool server_style) {
+                                   bool server_style, int layer) {
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx  = 2048;
     cparams.n_batch = 2048;
@@ -91,12 +91,8 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     }
     llama_synchronize(ctx);
 
-    // Sample layer 10 (mid-ladder on modern models), clamped to the model's
-    // top slot: a fixed index would die on shallow models (< 11 layers) with
-    // a generic error. On such models the clamp lands on the final block
-    // output — still a valid, comparable slot.
-    const int n_layer = llama_model_n_layer(model);
-    const int layer = std::min(10, n_layer);
+    // Layer is chosen by main (mid-ladder 10, clamped to the model's top
+    // slot) so the printed label and the sampled index can never diverge.
     float * hs = llama_get_hidden_state(ctx, layer);
     if (!hs) {
         fprintf(stderr, "Error: no hidden states available (%s style); n_hidden_tokens = %d\n",
@@ -110,8 +106,8 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
     return out;
 }
 
-void print_row(const char * label, const std::vector<float> & v) {
-    printf("%s - Layer 10, first 5 values:\n", label);
+void print_row(const char * label, const std::vector<float> & v, int layer) {
+    printf("%s - Layer %d, first 5 values:\n", label, layer);
     for (int i = 0; i < 5 && i < (int) v.size(); i++) {
         printf("  [%d]: %.8f\n", i, v[i]);
     }
@@ -153,6 +149,11 @@ int main(int argc, char ** argv) {
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    // Sample layer 10 (mid-ladder on modern models), clamped to the model's
+    // top slot: a fixed index would die on shallow models (< 11 layers) with
+    // a generic error. On such models the clamp lands on the final block
+    // output — still a valid, comparable slot. The same value is printed.
+    const int layer = std::min(10, llama_model_n_layer(model));
     // Standard two-call tokenize (as in hs-probe): start from a sized
     // estimate; a negative return gives the exact size, resize and retry.
     std::vector<llama_token> tokens(strlen(prompt) + 16);
@@ -168,14 +169,14 @@ int main(int argc, char ** argv) {
     tokens.resize(n_tokens);
 
     if (mode == 0) {
-        print_row("Mode 0 (CLI)", run_and_capture(model, vocab, tokens, false));
+        print_row("Mode 0 (CLI)", run_and_capture(model, vocab, tokens, false, layer), layer);
     } else if (mode == 1) {
-        print_row("Mode 1 (Server-style)", run_and_capture(model, vocab, tokens, true));
+        print_row("Mode 1 (Server-style)", run_and_capture(model, vocab, tokens, true, layer), layer);
     } else {
-        std::vector<float> cli    = run_and_capture(model, vocab, tokens, false);
-        std::vector<float> server = run_and_capture(model, vocab, tokens, true);
-        print_row("Mode 0 (CLI)", cli);
-        print_row("Mode 1 (Server-style)", server);
+        std::vector<float> cli    = run_and_capture(model, vocab, tokens, false, layer);
+        std::vector<float> server = run_and_capture(model, vocab, tokens, true, layer);
+        print_row("Mode 0 (CLI)", cli, layer);
+        print_row("Mode 1 (Server-style)", server, layer);
 
         if (cli.size() != server.size()) {
             fprintf(stderr, "COMPARE: MISMATCH (size %zu vs %zu)\n", cli.size(), server.size());
