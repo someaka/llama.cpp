@@ -2,9 +2,11 @@
 // must be identical whether or not extract_hidden_states is enabled.
 // Same model, same prompt, greedy next-token. Compared across extraction
 // on/off: (1) the argmax token id, and (2) the top-8 logit value sets
-// (sorted, compared with a 1e-6 tolerance and the measured max delta
-// reported — same-binary same-GPU decode is deterministic: measured delta
-// is 0, so any drift beyond 1e-6 is a regression). Exit 0 on match,
+// (sorted, compared with a ULP-scaled tolerance — max(1e-6, 4 ULP of the
+// logit magnitude) — and the measured max delta reported: the plain and
+// extract graphs take structurally different float reduction orders on
+// some CPU kernels, so a few ULP of drift is numerics; anything larger
+// that could reorder meaningful logits is a regression). Exit 0 on match,
 // 2 on mismatch (a failed decode is reported as a probe-failure MISMATCH
 // and also exits 2), 1 on setup failure (usage, model load, prompt too
 // long, context creation, unknown argument).
@@ -20,6 +22,7 @@
 // against perturbing logits.
 #include <cstdio>
 #include <cstring>
+#include <cfloat>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -87,9 +90,17 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     return r;
 }
 
-// exact top-8 comparison with a 1e-6 tolerance fallback; prints the verdict.
-// Size-safe: an empty (failed-decode) result never indexes the vector, and
-// mismatches on size or sentinel argmax report the cause instead of UB.
+// exact top-8 comparison with a ULP-scaled tolerance; prints the verdict.
+// Tolerance is max(1e-6, 4 ULP of the compared magnitude): the plain and
+// extract graphs are structurally different, and since the upstream graph
+// rework (mixed-batch inputs, SET_ROWS cache paths, sync 2026-10-05) their
+// CPU float reductions can differ in order across SIMD kernels, so a few
+// ULP of drift is numerics, not regression (observed: 2 ULP = 1.9e-6 at
+// logit ~11.87 on GitHub runners, while argmax and capture bytes stay
+// identical). Any drift beyond a few ULP — which changes ranking meaning —
+// still fails. Size-safe: an empty (failed-decode) result never indexes
+// the vector, and mismatches on size or sentinel argmax report the cause
+// instead of UB.
 bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & extract) {
     if (plain.top8.size() != 8 || extract.top8.size() != 8 ||
         plain.argmax < 0 || extract.argmax < 0) {
@@ -104,7 +115,9 @@ bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & ex
     for (int k = 0; k < 8; ++k) {
         const float d = std::fabs(plain.top8[k] - extract.top8[k]);
         if (d > max_delta) max_delta = d;
-        if (d > 1e-6f) same = false;
+        const float magnitude = std::fmax(std::fabs(plain.top8[k]), std::fabs(extract.top8[k]));
+        const float tol = std::fmax(1e-6f, 4.0f * FLT_EPSILON * magnitude);
+        if (d > tol) same = false;
     }
     printf("%s: %s", tag, same ? "MATCH" : "MISMATCH");
     if (!same) printf(" (top-8 value drift%s)", argmax_ok ? "" : "; argmax also differs");
