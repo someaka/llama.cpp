@@ -1061,7 +1061,6 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
-<<<<<<< HEAD
     // Capture the residual stream leaving block il (the state entering
     // block il+1) for per-layer hidden-state extraction. Architecture
     // graph builders call this once per layer at the bottom of their
@@ -1072,7 +1071,7 @@ struct llm_graph_context {
     // context-side copy requires exactly n_layer entries.
     void capture_layer_output(int il, ggml_tensor * cur);
     void capture_embeddings(ggml_tensor * embd);
-=======
+
     // true when the last layer must be narrowed to the output rows before the nextn hidden state is captured
     bool crop_before_nextn(const ggml_tensor * inp_out_ids) const {
         return inp_out_ids != nullptr && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked);
@@ -1082,7 +1081,6 @@ struct llm_graph_context {
     bool crop_after_nextn(const ggml_tensor * inp_out_ids) const {
         return inp_out_ids != nullptr && cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
     }
->>>>>>> origin/master
 
     //
     // common
