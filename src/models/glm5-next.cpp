@@ -775,7 +775,10 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
 
     // narrow to the output tokens, then collapse the streams
     // Unmasked nextn embeddings need all rows.
-    if (crop_before_nextn(inp_out_ids)) {
+    // Post-capture prune: must fire even under hidden-state extraction (no
+    // capture consumes this stream), so crop_before_nextn's extraction guard
+    // does not apply here.
+    if (inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
         ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
         flat = ggml_get_rows(ctx0, flat, inp_out_ids);
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);

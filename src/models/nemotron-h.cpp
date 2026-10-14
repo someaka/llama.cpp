@@ -237,7 +237,11 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
 
-        if (crop_before_nextn(inp_out_ids)) {
+        // post-capture prune: must fire even under hidden-state extraction
+        // (the capture already holds all-token rows; the nextn/MTP consumer
+        // needs output rows only), so crop_before_nextn's extraction guard
+        // does not apply here
+        if (inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         }
     }
