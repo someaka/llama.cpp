@@ -1120,7 +1120,7 @@ extern "C" {
 
     // Set whether the context extracts per-layer hidden states.
     // Returns 0 on success, -1 if refused (unsupported architecture, MTP
-    // draft context, or a separate output projection) — the context is left
+    // draft context, or a separate output projection) -- the context is left
     // unchanged on refusal.
     LLAMA_API int32_t llama_set_extract_hidden_states(struct llama_context * ctx, bool extract_hidden_states);
 
@@ -1198,14 +1198,14 @@ extern "C" {
     // Supported on every architecture registered in
     // llm_arch_supports_hidden_states() (src/llama-arch.cpp) -- extend that
     // registry to add architectures; this comment intentionally does not
-    // enumerate them;
+    // enumerate them.
     // requires n_embd == n_embd_out (refused at context creation AND at the
     // runtime toggle; decode keeps a final belt check that fails loud).
-    // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
-    // or NULL if extract_hidden_states was not set in context params.
-    // The stride per token equals n_embd (which equals n_embd_out on all
-    // supported architectures; models with a separate output projection are
-    // rejected before any decode).
+    // Returns a pointer to a flat float array of size n_tokens * n_embd
+    // (n_embd == n_embd_out is enforced at context creation and at the
+    // runtime toggle; models with a separate output projection are rejected
+    // before any decode). The stride per token is n_embd. Returns NULL if
+    // extract_hidden_states was not set in context params.
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.
@@ -1217,7 +1217,7 @@ extern "C" {
     LLAMA_API int32_t llama_get_hidden_state_n_tokens(struct llama_context * ctx);
 
     // Batch-get hidden state pointers for multiple layers in a single call.
-    // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd_out floats).
+    // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd floats).
     // Returns 0 on success, -1 if hidden states are unavailable or any layer
     // index is out of range (no out_ptrs entry is written in that case).
     // Performs one synchronize() and one bounds validation pass for the whole
