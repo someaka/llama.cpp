@@ -458,7 +458,6 @@ struct server_slot {
 
     bool can_split() const {
         GGML_ASSERT(task);
-
         // hidden-state extraction: captures each ubatch into a
         // preallocated full-prompt buffer and pools after decode. This is
         // safe across U BATCHES (one decode call), but NOT across decode
@@ -471,6 +470,10 @@ struct server_slot {
             return true;
         }
 
+        // a decision over a non-causal context reads the whole prompt in one batch
+        if (task->type == SERVER_TASK_TYPE_DECISION && !llama_get_causal_attn(ctx_tgt)) {
+            return false;
+        }
         // MTP supports splitting - uses task->need_embd() not need_embd()
         if (!task->need_embd()) {
             return true;
@@ -730,6 +733,10 @@ struct server_slot {
         SLT_INF(*this,
                 "   graphs reused = %10d\n",
                 llama_perf_context(ctx_tgt).n_reused);
+
+        SLT_INF(*this,
+                "  graph reallocs = %10d    / %5d        (same size) / (changed size)\n",
+                llama_perf_context(ctx_tgt).n_reallocs_same, llama_perf_context(ctx_tgt).n_reallocs_diff);
 
         const int32_t n_draft_total       = stats.n_draft_tokens;
         const int32_t n_draft_accepted    = stats.n_draft_accepted;
@@ -1724,6 +1731,11 @@ private:
         if (task.id_slot != -1) {
             ret = get_slot_by_id(task.id_slot);
             if (ret) {
+                // a busy slot is returned untouched, the caller defers the task
+                if (ret->is_processing()) {
+                    return ret;
+                }
+
                 SLT_INF(*ret, "selected slot by id (%d)\n", task.id_slot);
             }
         }
@@ -3737,6 +3749,11 @@ private:
                                 // the children start from the shared prefix, do not go past it
                                 if (slot.task->n_tokens_shared > 0) {
                                     n_past = std::min(n_past, slot.task->n_tokens_shared);
+                                }
+
+                                // the outputs of a decision are read from the batch, so its first position must be evaluated
+                                if (n_decision_first >= 0) {
+                                    n_past = std::min(n_past, n_decision_first);
                                 }
 
                                 // if there is an alora invoked, don't cache after the invocation start

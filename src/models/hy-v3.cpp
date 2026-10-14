@@ -219,8 +219,6 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for HY V3 (MoE).
@@ -382,5 +380,4 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

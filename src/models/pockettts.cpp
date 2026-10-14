@@ -143,6 +143,4 @@ llama_model_pockettts::graph::graph(const llama_model & model, const llm_graph_p
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
