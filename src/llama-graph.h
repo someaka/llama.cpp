@@ -1088,8 +1088,9 @@ struct llm_graph_context {
     void capture_embeddings(ggml_tensor * embd);
 
     // true when the last layer must be narrowed to the output rows before the nextn hidden state is captured
+    // hidden-state extraction suppresses this crop: every token's rows must reach the capture, and the builders prune after the final norm instead
     bool crop_before_nextn(const ggml_tensor * inp_out_ids) const {
-        return inp_out_ids != nullptr && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked);
+        return inp_out_ids != nullptr && !cparams.extract_hidden_states && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked);
     }
 
     // true when the nextn hidden state must be narrowed to the output rows after it is captured

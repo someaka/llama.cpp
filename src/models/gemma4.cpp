@@ -424,7 +424,12 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (crop_after_nextn(inp_out_ids)) {
+    // nextn narrows here after its capture; hidden-state extraction
+    // suppressed the last layer's crop so every token's rows reach the
+    // capture, and prunes here instead (logits stay output-only, and
+    // inp_out_ids stays consumed - an input tensor nothing consumes is
+    // never allocated and aborts in llm_graph_input_out_ids::set_input)
+    if (crop_after_nextn(inp_out_ids) || (cparams.extract_hidden_states && inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
