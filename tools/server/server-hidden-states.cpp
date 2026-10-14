@@ -20,6 +20,9 @@ json server_task_result_hidden_states::to_json() {
     // overhead) on top of the captured floats. At the 25M-float pool=none
     // cap that is a transient ~200-400 MB spike; prefer to_json_text() on
     // any path that handles cap-sized payloads.
+    // Key order: nlohmann's object is std::map<std::string>, so layer keys come
+    // out lexicographic; to_json_text() emits numeric order. Only the key SET
+    // is pinned (fork-ci envelope parity).
     json layers = json::object();
     for (const auto & kv : hidden_states) {
         layers[std::to_string(kv.first)] = kv.second;
@@ -52,6 +55,8 @@ std::string server_task_result_hidden_states::to_json_text() const {
         return out;
     };
     // Envelope matches to_json()'s shape (one result object per call).
+    // Key order: numeric here (hidden_states is std::map<int32_t, ...>); to_json()
+    // emits lexicographic keys. Only the key SET is pinned (fork-ci envelope parity).
     std::string out = "{\"index\":" + std::to_string(index) + ",\"hidden_states\":{";
     bool first_layer = true;
     for (const auto & kv : hidden_states) {

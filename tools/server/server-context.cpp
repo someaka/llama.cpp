@@ -42,7 +42,6 @@
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
@@ -5869,7 +5868,6 @@ void server_routes::init_routes() {
     this->post_hidden_states = [this](const server_http_req & req) {
         return handle_hidden_states(*this, req);
     };
-
 
     this->post_rerank = [this](const server_http_req & req) {
         auto res = create_response();

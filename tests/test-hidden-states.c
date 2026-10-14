@@ -113,7 +113,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "ERROR: layer 0 returned NULL before last-token check\n");
             ok = 0;
         } else {
-            int32_t n_embd = llama_model_n_embd(model);
+            int32_t n_embd = llama_model_n_embd_out(model);
             float * hs_last = hs0 + (size_t)(n_hidden - 1) * n_embd;
             int bad = 0;
             for (int32_t d = 0; d < n_embd; d++) {
@@ -150,7 +150,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "ERROR: top slot n_layer returned NULL\n");
             ok = 0;
         } else {
-            int32_t n_embd = llama_model_n_embd(model);
+            int32_t n_embd = llama_model_n_embd_out(model);
             int top_non_zero = 0;
             for (int i = 0; i < n_hidden * n_embd; i++) {
                 if (hs_top[i] != hs_top[i]) {  // NaN check

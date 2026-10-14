@@ -15,6 +15,8 @@
 #include "server-http.h"  // server_http_req (handler signature)
 #include "server-task.h"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>

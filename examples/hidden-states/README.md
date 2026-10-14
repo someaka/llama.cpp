@@ -40,6 +40,9 @@ uses `%.9g`.)
 
 ## Code Structure
 
+Pseudocode -- the real example builds a manual batch with the llama-raii
+wrapper (see hidden-states.cpp); `llama_batch_get_one` is not used there.
+
 ```cpp
 // 1. Load model
 llama_model* model = llama_model_load_from_file(model_path, params);
@@ -58,7 +61,7 @@ llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()));
 for (int layer = 0; layer < n_layers; layer++) {
     float* hidden = llama_get_hidden_state(ctx, layer);
     int n_tokens = llama_get_hidden_state_n_tokens(ctx);
-    // hidden contains n_tokens * hidden_dim floats
+    // hidden contains n_tokens * n_embd_out floats
 }
 ```
 
@@ -81,7 +84,7 @@ convention as the logits and embeddings getters. No explicit
 
 Hidden states are stored in row-major order:
 ```
-hidden[token * hidden_dim + dim]
+hidden[token * n_embd_out + dim]
 ```
 
 For example, with 4 tokens and 4096 hidden dimensions:
