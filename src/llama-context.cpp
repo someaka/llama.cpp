@@ -4607,6 +4607,9 @@ int32_t llama_get_hidden_states_batch(
     // Indices are hidden_states indices: valid range [0, n_layer] inclusive.
     const int32_t n_model_layers = llama_model_n_layer(&ctx->get_model());
     const int32_t n_hs_slots = n_model_layers + 1;
+    // (Defense-in-depth: llama_context::get_hidden_state() re-validates each
+    // index per call; this outer pass guarantees the whole layer set is valid
+    // before any out_ptrs entry is written.)
     for (int32_t i = 0; i < n_layers; i++) {
         if (layers[i] < 0 || layers[i] >= n_hs_slots) {
             LLAMA_LOG_ERROR("%s: layer %d out of range [0, %d)\n",

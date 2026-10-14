@@ -76,6 +76,8 @@ struct LlamaBatch {
     ~LlamaBatch() { if (initialized) llama_batch_free(batch); }
     LlamaBatch(const LlamaBatch &) = delete;
     LlamaBatch & operator=(const LlamaBatch &) = delete;
+    LlamaBatch(LlamaBatch &&) = delete;
+    LlamaBatch & operator=(LlamaBatch &&) = delete;
 };
 
 // Owns a llama_sampler chain. Used by hs-extract-batch's --generate path,

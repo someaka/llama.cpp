@@ -203,10 +203,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        capture_layer_output(il, cur);
-
         // Input for next layer
         inpL = cur;
+
+        capture_layer_output(il, cur);
     }
     cur = inpL;
 
