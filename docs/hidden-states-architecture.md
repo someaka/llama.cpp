@@ -71,7 +71,7 @@ The 4 registered architectures (`llama`, `gemma`, `gemma4`, `qwen35`) call
 `capture_embeddings(inpL)` once before their layer loop (slot 0) and
 `capture_layer_output(il, cur)` once per layer at
 the bottom of the loop (slots 1..N). Hooks are pre-installed in 101 of the
-160 builders; the other 97 hook-bearing builders install only
+160 model-builder sources (src/models/*.cpp); the other 97 hook-bearing builders install only
 `capture_layer_output` (a builder registered without `capture_embeddings`
 trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
 
@@ -157,14 +157,14 @@ the capture).
    no single well-defined residual require per-builder semantic decisions
    and are refused by the capability registry until then.)
 2. Confirm `capture_layer_output(il, cur);` is present right after the
-   reassignment (pre-installed in 101 of 160 builders; add it only if
+   reassignment (pre-installed in 101 of 160 model-builder sources (src/models/*.cpp); add it only if
    absent).
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
 4. If the builder narrows rows with `crop_before_nextn` / `crop_after_nextn`,
    confirm it prunes after the final norm under extraction (see the
    qwen35/gemma4 tails) so logits stay output-only and `inp_out_ids` stays
    consumed.
-5. Rebuild, self-test 29/29, `test-hidden-states <gguf>` on a real GGUF of
+5. Rebuild, self-test 33/33, `test-hidden-states <gguf>` on a real GGUF of
    that arch.
 
 Refusal needs no code: an unlisted arch is refused by name at context
@@ -180,7 +180,7 @@ creation (flag set), at the setter (enable), and at the server route.
   per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs -- joining is a registry
   case plus confirming the builder calls (hooks are pre-installed in 101 of
-  160 builders); the 26 non-classic shapes (parallel-residual, hybrid
+  160 model-builder sources (src/models/*.cpp)); the 26 non-classic shapes (parallel-residual, hybrid
   recurrent; bert/jamba/chatglm etc. already carry hooks) remain unregistered
   pending per-builder semantic decisions.
 
@@ -227,9 +227,11 @@ Verification (all on real runs):
   gemma4 E4B (`cmp` on full capture dumps) was verified 2026-08-16 but is
   INVALIDATED for qwen35/gemma4 by the upstream nextn-crop merge
   (f0c41e016 via 2d7bfb2ca): `crop_before_nextn` fired unguarded at the last
-  layer whenever `inp_out_ids` was non-null (server path). The
+  layer whenever `inp_out_ids` selected a strict output subset (the server
+  path's last-token batches and the CLI comprehension path's
+  `llama_batch_get_one` batches both do). The
   `!cparams.extract_hidden_states` helper guard and the post-final-norm prune
-  landed at cae44314f; byte-identity must be re-established with a fresh
+  landed at c3c9d5f44; byte-identity must be re-established with a fresh
   `cmp` on full capture dumps for qwen35 / gemma4 E2B / gemma4 E4B on both
   the CLI and server paths (pending: the E2B/E4B gate models have moved off
   disk).

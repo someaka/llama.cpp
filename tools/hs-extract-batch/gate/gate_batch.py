@@ -99,7 +99,13 @@ def model_n_layer(model_path):
         if f.read(4) != b"GGUF":
             sys.exit(f"REFUSED: {model_path} is not a GGUF file")
         (version,) = read_fmt(f, "<I")
-        cnt = "<Q" if version >= 3 else "<I"
+        if version < 2:
+            sys.exit(f"REFUSED: {model_path}: GGUF v{version} predates the "
+                     "u64 count fields ggml reads; refusing instead of misparsing")
+        # Count/length fields are u64 for every GGUF version ggml reads
+        # (ggml/src/gguf.cpp reads 8 bytes unconditionally -- including v2,
+        # verified against models/ggml-vocab-aquila.gguf whose n_kv is u64).
+        cnt = "<Q"
         read_fmt(f, cnt)          # n_tensors (wire order: n_tensors, then n_kv)
         (n_kv,) = read_fmt(f, cnt)
 
