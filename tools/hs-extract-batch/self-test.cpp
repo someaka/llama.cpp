@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 #ifndef _WIN32
-#include <unistd.h>  // getpid for the temp checkpoint filename
+#include <unistd.h>  // mkstemp/close for the temp checkpoint file
 #endif
 
 #include "hs-accum.h"
@@ -265,10 +265,18 @@ int run_self_test() {
         HS_CHECK(hs_fnv1a64("") == 0xcbf29ce484222325ull, "Test 16b (fnv empty = offset basis)");
         HS_CHECK(hs_fnv1a64("hello world") == 0x779a65e7023cd2e7ull, "Test 16c (fnv known vector)");
 
-        // Write checkpoint to temp file - include PID to avoid collision
-        // between concurrent self-test runs (CI) and symlink attacks.
-        char test_ckpt_buf[256];
-        snprintf(test_ckpt_buf, sizeof(test_ckpt_buf), "/tmp/hs_self_test_ckpt_%d.bin", (int)getpid());
+        // mkstemp gives O_EXCL semantics: a pre-planted symlink or a
+        // concurrent-run collision fails the open instead of silently sharing
+        // the path. (A PID in the name is collision avoidance, not symlink
+        // protection.) The derived fixtures (.prompts/.assign/.out/...) inherit
+        // the random base.
+        char test_ckpt_buf[] = "/tmp/hs_self_test_ckpt_XXXXXX";
+        int test_ckpt_fd = mkstemp(test_ckpt_buf);
+        if (test_ckpt_fd < 0) {
+            fprintf(stderr, "  (mkstemp failed)\n");
+            return 1;
+        }
+        close(test_ckpt_fd);
         const char* test_ckpt = test_ckpt_buf;
         // Prompts fixture for the v5 content check: the checkpoint records
         // the rolling hash of the first 42 non-empty lines (41 fillers +
@@ -571,14 +579,14 @@ int run_self_test() {
                         && n_prompts_hdr == 2 && n_embd_hdr == 4
                         && gt.n_groups == 1 && gt.names.size() == 1 && gt.names[0] == "alpha";
                     if (ok23) {
-                        auto r0 = read_prompt_assignments(rf.fp);
+                        auto r0 = read_prompt_assignments(rf.fp, gt.n_groups);
                         ok23 = r0.status == AssignmentReadStatus::ok
                             && r0.assignments.size() == 1
                             && r0.assignments[0].mask_type == 0
                             && r0.assignments[0].skip == 3;
                     }
                     if (ok23) {
-                        auto r1 = read_prompt_assignments(rf.fp);
+                        auto r1 = read_prompt_assignments(rf.fp, gt.n_groups);
                         ok23 = r1.status == AssignmentReadStatus::ok
                             && r1.assignments.size() == 1
                             && r1.assignments[0].mask_type == 1
@@ -590,7 +598,7 @@ int run_self_test() {
                         ok23 = read_assignments_exact_eof(rf.fp);
                     }
                     if (ok23) {
-                        auto r2 = read_prompt_assignments(rf.fp);
+                        auto r2 = read_prompt_assignments(rf.fp, gt.n_groups);
                         ok23 = r2.status == AssignmentReadStatus::eof;
                     }
                 }
@@ -626,7 +634,7 @@ int run_self_test() {
                     int32_t hp = 0, he = 0;
                     GroupTable g2;
                     if (read_assignments_header(rf.fp, hp, he, g2)) {
-                        auto res = read_prompt_assignments(rf.fp);
+                        auto res = read_prompt_assignments(rf.fp, g2.n_groups);
                         ok23b = res.status == AssignmentReadStatus::error;
                     }
                 }
@@ -727,6 +735,92 @@ int run_self_test() {
             expect("-5", 4, {});             // < -n_slots: out of range (low)
             expect("", 4, {});               // empty string: no valid layers
             HS_CHECK(failures == 0, "Test 25 (shared layer-list parser semantics)");
+        }
+
+        // Test 26 (B-P2-11a): read_assignments_header negative fixtures. Test 23
+        // pins the positive path; a corrupt header must be rejected at the
+        // header read, not misparsed downstream.
+        {
+            const std::string hpath = std::string(test_ckpt) + ".badhdr";
+            auto write_hdr = [&](int32_t magic, int32_t n_prompts_v, int32_t n_embd_v, int32_t n_groups_v, int32_t name_len) {
+                FilePtr wf(fopen(hpath.c_str(), "wb"));
+                if (!wf.fp) return;
+                fwrite(&magic, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_prompts_v, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_embd_v, sizeof(int32_t), 1, wf.fp);
+                fwrite(&n_groups_v, sizeof(int32_t), 1, wf.fp);
+                if (n_groups_v == 1) {
+                    fwrite(&name_len, sizeof(int32_t), 1, wf.fp);
+                    if (name_len > 0) fwrite("alpha", 1, (size_t)name_len, wf.fp);
+                }
+            };
+            auto hdr_rejected = [&]() {
+                FilePtr rf(fopen(hpath.c_str(), "rb"));
+                if (!rf.fp) return false;
+                int32_t hp = 0, he = 0;
+                GroupTable gt;
+                return !read_assignments_header(rf.fp, hp, he, gt);
+            };
+            bool ok26 = true;
+            write_hdr(0x12345678, 1, 4, 0, 0);         // bad magic
+            ok26 = ok26 && hdr_rejected();
+            write_hdr(ASSIGNMENTS_MAGIC, 0, 4, 0, 0);  // n_prompts out of range (low)
+            ok26 = ok26 && hdr_rejected();
+            write_hdr(ASSIGNMENTS_MAGIC, 1, 4, -1, 0); // n_groups < 0
+            ok26 = ok26 && hdr_rejected();
+            write_hdr(ASSIGNMENTS_MAGIC, 1, 4, 1, -5); // name_len < 0
+            ok26 = ok26 && hdr_rejected();
+            remove(hpath.c_str());
+            HS_CHECK(ok26, "Test 26 (assignments header negatives rejected)");
+        }
+
+        // Test 27 (B-P2-11b): fnv_roll_line known vector. Rolling over
+        // ["a","b"] hashes each line plus an appended newline, so it must
+        // equal FNV-1a-64 of "a\nb\n": 0x78ed6781f136a14e (hand-computed
+        // from the algorithm in io-util.h).
+        {
+            uint64_t h = 0xcbf29ce484222325ull;
+            h = fnv_roll_line(h, "a");
+            h = fnv_roll_line(h, "b");
+            HS_CHECK(h == 0x78ed6781f136a14eull, "Test 27 (fnv_roll_line known vector)");
+        }
+
+        // Test 28 (B-P2-11c): the empty-output refusal predicate factored out
+        // of the writer's "processed but empty accumulators" guard.
+        HS_CHECK(refuse_empty_output(1, 0) && !refuse_empty_output(0, 0) && !refuse_empty_output(3, 2),
+                 "Test 28 (empty-output refusal predicate)");
+
+        // Test 29 (B-P2-11d): generation-mode checkpoint sum roundtrip. The
+        // gen-mode fingerprint (generate_mode = true) takes the same
+        // write/restore path; sums must roundtrip exactly and the output
+        // mean = sum/count reconstruction must hold.
+        {
+            checkpoint_fingerprint gen_fp = fp;
+            gen_fp.generate_mode = true;
+            AccumulatorMap gen_acc;
+            uint64_t gkey = make_accum_key(1, 2, 3);
+            gen_acc[gkey].sum = {3.0f, 6.0f, 9.0f, 12.0f};  // count=3 -> mean {1,2,3,4}
+            gen_acc[gkey].count = 3;
+            const std::string gen_base = std::string(test_ckpt) + ".gen";
+            bool ok29 = write_checkpoint(gen_acc, gen_base.c_str(), 4, 42, gen_fp);
+            AccumulatorMap gen_restored;
+            int32_t gen_iter = 0;
+            if (ok29) {
+                ok29 = read_checkpoint(gen_base.c_str(), gen_restored, gen_iter, 4, gen_fp, prompts_path.c_str())
+                    && gen_iter == 42;
+            }
+            if (ok29) {
+                auto it = gen_restored.find(gkey);
+                ok29 = it != gen_restored.end() && it->second.count == 3;
+                for (int d = 0; d < 4 && ok29; d++) {
+                    // sums roundtrip exactly; mean = sum/count = d+1
+                    ok29 = std::abs(it->second.sum[d] - (float)(3 * (d + 1))) <= 1e-6f
+                        && std::abs(it->second.sum[d] / it->second.count - (float)(d + 1)) <= 1e-6f;
+                }
+            }
+            remove(gen_base.c_str());
+            remove((gen_base + ".checkpoint").c_str());
+            HS_CHECK(ok29, "Test 29 (gen-mode checkpoint sums roundtrip, mean = sum/count)");
         }
 
         // Cleanup

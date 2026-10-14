@@ -277,8 +277,9 @@ bool write_checkpoint(
     // different extraction settings (see checkpoint_fingerprint in io-util.h).
     {
         int32_t n_fp_layers = (int32_t)fp.layers.size();
+        const uint8_t generate_mode_u8 = fp.generate_mode ? 1 : 0;
         if (!checked_write(&n_fp_layers, sizeof(int32_t), 1, f) ||
-            !checked_write(&fp.generate_mode, sizeof(bool), 1, f) ||
+            !checked_write(&generate_mode_u8, sizeof(uint8_t), 1, f) ||
             !checked_write(&fp.generate_tokens, sizeof(int32_t), 1, f) ||
             !checked_write(&fp.token_skip, sizeof(int32_t), 1, f) ||
             (n_fp_layers > 0 &&
@@ -381,10 +382,11 @@ bool read_checkpoint(
     // settings and resuming would silently merge incompatible accumulators.
     if (version >= CHECKPOINT_VERSION_V3) {
         int32_t n_fp_layers = 0;
-        bool generate_mode = false;
+        uint8_t generate_mode_u8 = 0;
         int32_t generate_tokens = 0, token_skip = 0;
         if (fread(&n_fp_layers, sizeof(int32_t), 1, f) != 1) return false;
-        if (fread(&generate_mode, sizeof(bool), 1, f) != 1) return false;
+        if (fread(&generate_mode_u8, sizeof(uint8_t), 1, f) != 1) return false;
+        bool generate_mode = generate_mode_u8 != 0;
         if (fread(&generate_tokens, sizeof(int32_t), 1, f) != 1) return false;
         if (fread(&token_skip, sizeof(int32_t), 1, f) != 1) return false;
         if (n_fp_layers < 0 || n_fp_layers > MAX_LAYERS) {

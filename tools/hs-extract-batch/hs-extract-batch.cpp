@@ -639,6 +639,10 @@ static bool scan_prompts_file(const char* prompts_file, PromptsScan& scan) {
 
     std::string line;
     while (std::getline(fin, line)) {
+        // Tolerate CRLF input like hs-extract's -f reader (which strips one
+        // trailing '\r'); a kept '\r' changes tokenization and makes the two
+        // front-ends disagree on the same prompts file.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (!line.empty()) scan.n_nonempty++;
         if (line.size() > scan.max_len) scan.max_len = line.size();
     }
@@ -812,8 +816,12 @@ static int run_raw(const Args& args) {
 
     std::string line;
     while (std::getline(fin, line)) {
+        // Tolerate CRLF input like hs-extract's -f reader (which strips one
+        // trailing '\r'); a kept '\r' changes tokenization and makes the two
+        // front-ends disagree on the same prompts file.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) {
-            // Skip empty lines -- matches the counting pass (lines 902-906).
+            // Skip empty lines -- matches the counting pass (scan_prompts_file).
             // The header n_prompts_total already excludes these.
             continue;
         }
@@ -1373,7 +1381,7 @@ static int run_batch(const Args& args) {
     // at the first record.
     {
         for (int32_t w4_idx = 0; w4_idx < n_prompts_expected; w4_idx++) {
-            auto ar = read_prompt_assignments(assign_fin.fp);
+            auto ar = read_prompt_assignments(assign_fin.fp, groups.n_groups);
             if (ar.status != AssignmentReadStatus::ok) {
                 fprintf(stderr, "Error: assignments.bin record %d failed to parse (status=%d) - "
                                 "the file is truncated or corrupt\n", w4_idx, (int)ar.status);
@@ -1514,12 +1522,14 @@ static int run_batch(const Args& args) {
       try {
         std::string p_line;
         while (std::getline(prompts_fin, p_line)) {
+            // Tolerate CRLF input like hs-extract's -f reader (see scan_prompts_file).
+            if (!p_line.empty() && p_line.back() == '\r') p_line.pop_back();
             // Skip empty lines to match validation's non-empty count.
             // Without this, an empty line in prompts.txt reads an assignment
             // record meant for the next real prompt, silently desyncing all
             // subsequent prompt/assignment pairings.
             if (p_line.empty()) continue;
-            auto assignment_read = read_prompt_assignments(assign_fin);
+            auto assignment_read = read_prompt_assignments(assign_fin, groups.n_groups);
             if (assignment_read.status != AssignmentReadStatus::ok) {
                 // Precise producer-side diagnostic (status, not a
                 // generic consumer-side "assignment read failed").
@@ -1787,16 +1797,8 @@ static int run_batch(const Args& args) {
         // For each assignment: compute masked mean per layer and accumulate
         auto t_mean_start = std::chrono::steady_clock::now();
         for (const auto& assign : assignments) {
-            if (assign.group_id < 0 || assign.group_id > 0xFFFF) {
-                fprintf(stderr, "Error: group_id %d exceeds 16-bit range\n", assign.group_id);
-                stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                return 1;
-            }
-            if (assign.mask_id < 0 || assign.mask_id > 0xFFFF) {
-                fprintf(stderr, "Error: mask_id %d exceeds 16-bit range\n", assign.mask_id);
-                stop_producer_and_join(pfq, producer_thread, records_temp_path);
-                return 1;
-            }
+            // group_id/mask_id range is enforced at the parse site
+            // (read_prompt_assignments) before this loop ever sees them.
 
             // mask_type 0 is the common case (single full-span range): reuse
             // the hoisted buffer with clear+push_back (no allocation).
@@ -1927,7 +1929,7 @@ static int run_batch(const Args& args) {
     // were empty), refuse to write a header-only output.bin and exit non-zero.
     // A silent empty file would be misread downstream as a valid-but-empty
     // result rather than flagged as a failed extraction.
-    if (n_processed > 0 && accumulators.empty()) {
+    if (refuse_empty_output(n_processed, accumulators.size())) {
         fprintf(stderr, "Error: processed %d prompts but accumulated no hidden-state "
                         "means (check token_skip / EOS / masks); refusing to write an "
                         "empty output.bin\n", n_processed);

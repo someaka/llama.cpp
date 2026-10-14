@@ -77,9 +77,17 @@ relocate the volatile tree, adjust the `GOLD` constant.
 ## Required model
 
 - Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default).
-  The committed baseline digests were captured with the exact model fixture
-  `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in `fork-ci.yml`);
-  using any other model invalidates byte-identity comparison.
+  The committed baseline digests were captured with `gemma-4-E2B.Q4_K_M.gguf`
+  (gemma4 architecture, 35 layers) on the production CUDA path; the file
+  formerly lived under CrimsonRed/data/models/ and has since moved off disk.
+  The model's sha256 is NOT recorded anywhere: `digests_baseline.json` stores
+  only artifact digests, so the anchor identifies the model by name only --
+  always run baseline and check against the same GGUF file. Note that
+  `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in `fork-ci.yml`)
+  is a different, much smaller CI fixture (llama arch, 5 layers): it CANNOT run
+  the gate scenarios (s5/s6 request layer 17 and s7-s9 request layer 35) and
+  must not be used as HS_GATE_MODEL. Using any model other than the E2B Q4_K_M
+  invalidates byte-identity comparison.
 
 ## Running the gate after a refactor
 
@@ -111,8 +119,8 @@ NOT comparable -- never mix anchors across backends; re-capture instead:
 ```bash
 python3 tools/hs-extract-batch/gate/gate_batch.py baseline \
     build-cuda/bin/llama-hs-extract-batch
-cp /tmp/hs-batch-golden/proc-*/digests_baseline.json \
-   tools/hs-extract-batch/gate/digests_baseline.json
+# the driver prints 'baseline digests written to <path>' - copy that exact path:
+cp <printed-path> tools/hs-extract-batch/gate/digests_baseline.json
 ```
 
 ## Why byte-identity on GPU is sound here

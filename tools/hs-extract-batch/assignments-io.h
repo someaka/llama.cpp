@@ -24,7 +24,7 @@ static constexpr int32_t MAX_RANGES         = 100000;  // max ranges per assignm
 static constexpr int32_t MAX_GROUP_NAME_LEN = 1000;    // max group name length
 static constexpr int32_t ALL_GPU_LAYERS     = 99;      // load all layers on GPU
 static constexpr int      PROGRESS_INTERVAL  = 100;     // prompts between progress reports
-static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max batch size for multi mode
+static constexpr int32_t MAX_BATCH_SIZE     = 256;     // max --batch-size value (multi-prompt batching is unimplemented; >1 is rejected at startup)
 
 // -- Argument Parsing ---------------------------------------------------
 
@@ -77,7 +77,7 @@ bool read_assignments_header(
  * Returns explicit status so EOF, valid zero-assignment prompts, and truncated
  * records cannot be confused.
  */
-AssignmentReadResult read_prompt_assignments(FILE* f);
+AssignmentReadResult read_prompt_assignments(FILE* f, int32_t n_groups);
 
 /**
  * Verify the assignments stream ends exactly at the last expected record.

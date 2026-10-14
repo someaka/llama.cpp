@@ -33,3 +33,11 @@ inline void decode_accum_key(uint64_t key, int32_t& group_id, int32_t& mask_id, 
     mask_id   = (int32_t)((key >> 16) & 0xFFFF);
     group_id  = (int32_t)((key >> 32) & 0xFFFFFFFF);
 }
+
+// Refusal predicate for the "processed but empty accumulators" failure mode:
+// prompts were processed but nothing accumulated (token_skip / EOS / masks
+// swallowed every span). A header-only output.bin would be misread downstream
+// as a valid-but-empty result, so the writer must refuse instead.
+inline bool refuse_empty_output(int32_t n_processed, size_t n_accumulators) {
+    return n_processed > 0 && n_accumulators == 0;
+}

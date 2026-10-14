@@ -24,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 # Per-process scratch root: two concurrent gate instances must never share
@@ -84,9 +85,55 @@ def base_cmd(bin_path, model, layers, out, extra, assign_key="main"):
             "--batch", "--assignments", str(INPUTS / ASSIGN_FILES[assign_key]),
             "-ngl", "99"] + list(extra)
 
+def model_n_layer(model_path):
+    """Pre-flight: read *.block_count from the GGUF KV table."""
+    import struct
+
+    def read_fmt(f, fmt):
+        b = f.read(struct.calcsize(fmt))
+        if len(b) != struct.calcsize(fmt):
+            sys.exit(f"REFUSED: {model_path}: truncated GGUF metadata")
+        return struct.unpack(fmt, b)
+
+    with open(model_path, "rb") as f:
+        if f.read(4) != b"GGUF":
+            sys.exit(f"REFUSED: {model_path} is not a GGUF file")
+        (version,) = read_fmt(f, "<I")
+        cnt = "<Q" if version >= 3 else "<I"
+        read_fmt(f, cnt)          # n_tensors (wire order: n_tensors, then n_kv)
+        (n_kv,) = read_fmt(f, cnt)
+
+        def rv(f, vtype):
+            if vtype in (0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12):
+                return read_fmt(f, {0: "<b", 1: "<B", 2: "<h", 3: "<H", 4: "<i",
+                                    5: "<I", 6: "<f", 7: "<?", 10: "<q",
+                                    11: "<Q", 12: "<d"}[vtype])[0]
+            if vtype == 8:
+                (ln,) = read_fmt(f, cnt)
+                return f.read(ln)
+            if vtype == 9:
+                (et,) = read_fmt(f, "<I")
+                (n,) = read_fmt(f, cnt)
+                return [rv(f, et) for _ in range(n)]
+            sys.exit(f"REFUSED: {model_path}: unknown GGUF value type {vtype}")
+
+        for _ in range(n_kv):
+            (klen,) = read_fmt(f, cnt)
+            key = f.read(klen).decode("utf-8", "replace")
+            (vtype,) = read_fmt(f, "<I")
+            val = rv(f, vtype)
+            if key.endswith("block_count"):
+                if isinstance(val, list):
+                    sys.exit(f"REFUSED: {model_path}: block_count is not a scalar")
+                return int(val)
+    sys.exit(f"REFUSED: {model_path}: no *.block_count key in GGUF metadata")
+
 def run_full(bin_path, model, layers, out, extra, assign_key="main", timeout=1800):
     cmd = base_cmd(bin_path, model, layers, out, extra, assign_key)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"FAIL: run exceeded {timeout}s wall clock: {' '.join(cmd)}")
     if r.returncode != 0:
         sys.exit(f"FAIL: run exited {r.returncode}: {' '.join(cmd)}\nstderr tail:\n{r.stderr[-1500:]}")
     return r
@@ -98,24 +145,37 @@ def run_kill_and_resume(bin_path, model, layers, out, extra, assign_key="main"):
     # kill run
     cmd = base_cmd(bin_path, model, layers, out, extra + ["--checkpoint-every", "5"], assign_key)
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # Wall-clock bound on the kill phase: symmetric with run_full's timeout so a
-    # wedged binary (GPU hang after checkpoint 1) fails the gate instead of
-    # hanging the stderr drain forever.
+    stderr_src = proc.stderr
+    if stderr_src is None:  # unreachable: stderr=PIPE
+        proc.kill()
+        sys.exit("FAIL: Popen did not provide a stderr pipe for the kill run")
+    # Wall-clock bound on the kill phase: stderr is drained on a helper thread
+    # and the deadline is enforced by proc.wait(timeout) on the main thread, so
+    # a wedged binary (GPU hang after checkpoint 1) fails the gate instead of
+    # blocking forever inside readline().
     deadline = time.monotonic() + 1800
     checkpoints_seen = 0
     killed = False
-    for line in proc.stderr:
-        if "Checkpoint saved" in line:
-            checkpoints_seen += 1
-            if checkpoints_seen == 2:
-                proc.send_signal(signal.SIGKILL)
-                killed = True
-                break
-        if time.monotonic() > deadline:
-            proc.kill()
-            proc.wait()
-            sys.exit(f"FAIL: kill run exceeded 1800s wall clock (saw {checkpoints_seen} checkpoints)")
-    proc.wait(timeout=60)
+
+    def _drain():
+        nonlocal checkpoints_seen, killed
+        for line in stderr_src:
+            if "Checkpoint saved" in line:
+                checkpoints_seen += 1
+                if checkpoints_seen == 2:
+                    proc.send_signal(signal.SIGKILL)
+                    killed = True
+                    return
+
+    drainer = threading.Thread(target=_drain, daemon=True)
+    drainer.start()
+    try:
+        proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        sys.exit(f"FAIL: kill run exceeded 1800s wall clock (saw {checkpoints_seen} checkpoints)")
+    drainer.join(timeout=60)
     if not killed:
         proc.kill()
         sys.exit(f"FAIL: never saw 2nd checkpoint in kill run (saw {checkpoints_seen})")
@@ -172,7 +232,18 @@ def main():
                      "the gate runs the production path; no fallbacks.")
         if not pathlib.Path(model_path).exists():
             sys.exit(f"REFUSED: model {model_key} not found at {model_path} -- "
-                     f"the gate runs the production path; no fallbacks.")
+                     "the gate runs the production path; no fallbacks.")
+        # Pre-flight: the scenarios request layer indices up to 35. Refuse a
+        # model that cannot satisfy them BEFORE the first scenario burns GPU
+        # time (hs_parse_layer_list would reject it mid-run with a confusing
+        # argument error).
+        max_needed = max(int(t) for _, _, layers, *_ in SCENARIOS
+                         for t in layers.split(","))
+        n_layer = model_n_layer(model_path)
+        if max_needed >= n_layer + 1:
+            sys.exit(f"REFUSED: model {model_key} has {n_layer} layers "
+                     f"(n_slots={n_layer + 1}) but scenario layers request index "
+                     f"{max_needed} - wrong model for the gate")
     for req in ("prompts.txt", "assignments.bin", "assignments_gen.bin"):
         if not (INPUTS / req).exists():
             sys.exit(f"REFUSED: inputs missing at {INPUTS / req} - run gen_inputs.py")
@@ -191,11 +262,13 @@ def main():
         print(f"[{mode}] {name} ...", flush=True)
         digests[name] = do_scenario(bin_path, name, model_key, layers, extra, assign_key, is_resume, target / name)
 
-    (GOLD / f"digests_{mode}.json").write_text(json.dumps(digests, indent=2))
+    dig_path = GOLD / f"digests_{mode}.json"
+    dig_path.write_text(json.dumps(digests, indent=2))
 
     if mode == "baseline":
         n = sum(len(v) for v in digests.values())
         print(f"baseline captured: {len(digests)} scenarios, {n} artifacts")
+        print(f"baseline digests written to {dig_path}")
         return 0
 
     # check mode: compare

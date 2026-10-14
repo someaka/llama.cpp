@@ -84,7 +84,7 @@ bool read_assignments_header(
  * Returns explicit status so EOF, valid zero-assignment prompts, and truncated
  * records cannot be confused.
  */
-AssignmentReadResult read_prompt_assignments(FILE* f) {
+AssignmentReadResult read_prompt_assignments(FILE* f, int32_t n_groups) {
     int32_t n_assignments = 0;
     if (fread(&n_assignments, sizeof(int32_t), 1, f) != 1) {
         if (feof(f)) return {AssignmentReadStatus::eof, {}};
@@ -110,6 +110,13 @@ AssignmentReadResult read_prompt_assignments(FILE* f) {
         // path, comprehension path, checkpoint writer) is covered.
         if (a.group_id < 0 || a.group_id > 0xFFFF) {
             fprintf(stderr, "Error: group_id %d exceeds 16-bit range  -  corrupt assignments.bin\n", a.group_id);
+            return {AssignmentReadStatus::error, {}};
+        }
+        // group_id indexes GroupTable.names (size n_groups). A group_id at or
+        // above n_groups is out of bounds for every consumer. Reject here, at
+        // the parse site, exactly like the 16-bit range check above.
+        if (a.group_id >= n_groups) {
+            fprintf(stderr, "Error: group_id %d >= n_groups %d  -  corrupt assignments.bin\n", a.group_id, n_groups);
             return {AssignmentReadStatus::error, {}};
         }
         if (a.mask_id < 0 || a.mask_id > 0xFFFF) {

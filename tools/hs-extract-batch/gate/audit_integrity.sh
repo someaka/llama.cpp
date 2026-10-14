@@ -46,7 +46,7 @@ echo "=== Check 3: RAII LlamaBackend (constructed by wrapper, no raw init) ==="
 # wrapper's default ctor calls llama_backend_init()); (b) the same TU must
 # NOT call llama_backend_init directly — bypassing the wrapper is exactly
 # what the RAII rule forbids (comment-stripped, so prose mentions don't count).
-for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp; do
+for f in examples/hidden-states/hidden-states.cpp tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp; do
   strip_comments "$f" | grep -qE "LlamaBackend +[A-Za-z_][A-Za-z_0-9]*;" && echo "PASS: $f" || { echo "FAIL: missing RAII LlamaBackend declaration in $f"; exit 1; }
   if strip_comments "$f" | grep -qE '\bllama_backend_init[[:space:]]*\('; then
     echo "FAIL: raw llama_backend_init call in $f — LlamaBackend wrapper owns backend init"; exit 1
@@ -142,7 +142,7 @@ total_calls = 0
 sum_raw = 0
 for tu in tool_tus:
     raw = Path(tu).read_text()
-    raw_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
+    raw_calls = len(re.findall(r"\bchecked_write(?:_h)?\s*\(", raw))
     # Strip line comments FIRST: apostrophes inside // comments can pair into a
     # fake multi-line char literal during the literal pass and swallow real code
     # (this ate 3 of 8 checked_write sites in hs-extract-batch.cpp once).
@@ -153,7 +153,7 @@ for tu in tool_tus:
     raw = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), raw, flags=re.S)
     raw = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw)
     raw = re.sub(r"'(?:\\.|[^'\\])*'", "''", raw)
-    stripped_calls = len(re.findall(r"\bchecked_write\s*\(", raw))
+    stripped_calls = len(re.findall(r"\bchecked_write(?:_h)?\s*\(", raw))
     if stripped_calls < raw_calls:
         # fail-closed: the literal stripper mis-synced and ate real call sites
         print(f"FAIL: literal stripper ate {raw_calls - stripped_calls} checked_write call sites in {tu}; fix the strip order")
@@ -178,7 +178,7 @@ for tu in tool_tus:
     if buf.strip():
         joined.append((start, buf))
     for lineno, code in joined:
-        if 'checked_write(' in code:
+        if re.search(r"\bchecked_write(?:_h)?\s*\(", code):
             total_calls += 1
             # a tested call is inside if(...)/return/&&/|| or assigns to a var
             if not re.search(r'(if\s*\(|return|&&|\|\||=\s*\w+$|bool\s+ok)', code):
@@ -600,6 +600,11 @@ echo "=== Check 14: shared RAII header used by all fork tools ==="
 if [ ! -f common/llama-raii.h ]; then
   echo "FAIL: common/llama-raii.h missing"; exit 1
 fi
+# Explicit exemption (not yet on the RAII header): tools/hs-probe/logits-probe.cpp
+# and tools/hs-extract-batch-test/hs-extract-batch-test.cpp still call
+# llama_backend_init()/llama_backend_free() raw. Convert them to
+# LlamaBackend/LlamaModel/LlamaContext from common/llama-raii.h, then add them
+# to this list AND the Check 3 list.
 for f in tools/hs-extract/hs-extract.cpp tools/hs-extract-batch/hs-extract-batch.cpp tests/test-hidden-states.cpp; do
   # code, not prose: the raw file must carry the include, AND the stripped
   # file must still carry an include statement at that spot (so a commented-out

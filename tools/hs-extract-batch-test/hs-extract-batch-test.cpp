@@ -11,7 +11,6 @@
 // Exit codes: 0 = identical (mode 2) or ran (modes 0/1), 1 = setup error,
 // 2 = mode-2 comparison mismatch.
 
-#include "common.h"
 #include "llama.h"
 #include <cstdio>
 #include <cstring>

@@ -94,7 +94,7 @@ This is a test prompt.
 ```
 Header:
   magic:           int32 (0x43524431)
-  n_prompts:       int32 (must match the number of lines in prompts.txt)
+  n_prompts:       int32 (must match the number of non-empty lines in prompts.txt)
   n_embd_expected: int32 (must match the model's hidden dimension; 0 skips the check)
   n_groups:        int32
   Per group:
@@ -146,6 +146,10 @@ Per group (sorted by group_id):
 ```
 Header:
   n_prompts_total: int32
+  (no magic or version: raw mode is a debug/parity dump consumed only by the
+  hs-probe parity harness, which knows the layout. By design there is no
+  magic -- do not add one; it would change the byte layout the parity checks
+  read. Validity is established by the caller, not the file.)
 
 Per prompt:
   prompt_idx: int32
@@ -187,7 +191,7 @@ llama-hs-extract-batch model.gguf prompts.txt all output.bin \
 
 If interrupted, re-run with `--resume` to continue from the last checkpoint.
 Note: `--resume` is refused when `--save-per-record` is set, so a run killed
-mid-write leaves a `.records` sidecar with a trailing partial record; readers
+mid-write leaves a `.records.bin.tmp` sidecar with a trailing partial record; readers
 must trim to the record boundary (a 2026-07-22 killed run left an e2b
 stories sidecar one record short — trimmed to the boundary 2026-09-14, the
 207,024 complete records are internally consistent).
