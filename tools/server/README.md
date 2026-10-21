@@ -1046,18 +1046,23 @@ mixed inside one cell: **abs** = max over elements of |delta|; **rel-L2** =
 prompt, pooling and layers. Models: `hs-fixture` = the llama 5-layer test
 fixture (64-wide, 5 layers, layer 0 = embedding); `qwen35` =
 `SuperQwen3.8-27b-abliterated-Q4_K_M.gguf` (arch qwen35, n_layer 64, n_embd
-5120, so layer 64 is the final slot). `normalize=false` throughout.
+5120, so layer 64 is the final slot). `normalize=false` throughout. `n` below
+is the request's `tokens_evaluated` unless a row says "trials"; each row names
+the pooling mode, the layer set and either `n` or the trial count it was
+measured with, and a row that omits one is not a reproducible cell.
 
 | Axis | Change from baseline | Metric, scope, value |
 |---|---|---|
-| Flash-Attention | server started `-fa off` vs the CLIs at their default (auto) | rel-max 1.6, hs-fixture, `-ngl 0`, layers 4-5; abs not recorded. Only the server can move this axis (the CLIs have no `-fa` flag); at `-ngl 99` on CUDA the axis is inert on hs-fixture. Pre-crop-fix `gemma-4-E2B` measured rel-max ~1e3; that model is off disk, so re-measure before quoting it. |
-| Backend build | CPU-only build vs CUDA build | Numerics differ (verified 2026-08-18, see `gate/README.md`); abs not recorded. Never compare captures across builds. |
-| Compute placement | GPU compute (default op offload) vs CPU-only placement, same `-ngl` | abs 9.6e-3, hs-fixture, pool=none, all tokens, deep layers; the last-token sub-figure was not reproduced in the round-7 re-measurement (1.2e-3..1.5e-3). |
-| Concurrency, per-slot KV (`-np N`) | 2-4 requests in flight vs solo | bit-identical (0.0): 30/30 comparisons on qwen35, 132/132 on hs-fixture, pool=none, 3 trials per regime. |
-| Concurrency, unified KV (`--kv-unified`, the default when `-np` is unset) | 2-4 requests in flight vs solo | pool=none: abs up to ~2e2 at layer 64 and 0.01-0.14 at layers 4-5 on qwen35; rel-L2 7.2e-4..2.6e-3 at layers 4-5. Onset depends on prompt length (two short prompts often stay identical). Pooling attenuates the error roughly 10-70x at depth (n=4: layer-64 abs 38.8 pool=none, 3.19 pool=last, 0.81 pool=skip_mean) but never restores bit-identity. The drifting request is not always the longest; a single clean trial proves nothing; 3 trials per regime. |
+| Flash-Attention | server started `-fa off` vs the CLIs at their default (auto) | hs-fixture, `-ngl 0`, 3 trials: abs 9.5e-3 (layer 4) and 1.4e-2 (layer 5); rel-max is order 1-10 at pool=none and 0.02-0.04 at pool=last (pooling averages the near-zero elements that dominate rel-max). Only the server can move this axis (the CLIs have no `-fa` flag); at `-ngl 99` on CUDA the axis is inert on hs-fixture. Pre-crop-fix `gemma-4-E2B` measured rel-max ~1e3; that model is off disk, so re-measure before quoting it. |
+| Backend build | CPU-only build vs CUDA build | No metric recorded (qualitative): numerics differ on gemma-4-E2B, verified 2026-08-18, see `gate/README.md`; no abs / rel-L2 / rel-max is quoted for this axis. Never compare captures across builds. |
+| Compute placement | GPU compute (default op offload) vs CPU-only placement, both at `-ngl 0` | abs 9.6e-3, hs-fixture, pool=none, all tokens, layers 4-5; the last-token-only sub-scope was not reproduced in the round-7 re-measurement, which measured abs 1.2e-3..1.5e-3 there. |
+| Concurrency, per-slot KV (`-np N`) | 2-4 requests in flight vs solo | bit-identical (0.0), pool=none, 3 trials per regime: 30/30 comparisons on qwen35 (prompts 24-91 tokens), 132/132 on hs-fixture (prompts 12-128 tokens). |
+| Concurrency, unified KV (`--kv-unified`, the default when `-np` is unset) | 2-4 requests in flight vs solo | qwen35, 3 trials per regime, pools/layers as noted: abs up to ~1.1e2 at layer 64 and 8.7e-3..0.14 at layers 4-5 on qwen35 (rel-L2 7.2e-4..2.6e-3 at layers 4-5). Onset is prompt-length dependent: at n=2 drift appeared at <=17 tokens (3/3 trials), so "short prompts stay identical" holds only for very short ones. Pooling attenuates at depth only: for one composition (n=4, four 115-token prompts) layer-64 abs is 62.2 pool=none, 3.79 pool=last, 2.23 pool=skip_mean (16x and 28x), with no attenuation at layer 4. Drift magnitude and direction are restart-invariant (deterministic given the batch composition); the drifting request is not always the longest. |
 
 For research data run one extraction request at a time (`--parallel 1`), or
-accept that concurrent load is not bit-reproducible.
+keep the KV pool per slot (`-np N`, `--kv-unified` off): per-slot KV was
+bit-identical in every measured comparison, while a shared unified pool is not
+bit-reproducible under concurrency.
 
 *Request body (JSON):*
 
