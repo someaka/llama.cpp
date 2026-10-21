@@ -84,10 +84,12 @@ python3 - <<'PY'
 import re
 from pathlib import Path
 # post-decomposition the tool is 5 TUs; FilePtr lives in io-util.h.
-# Scan every TU so a target file with zero fclose() cannot vacuous-pass.
+# Scan every TU so a target file with zero fclose() cannot vacuous-pass, and
+# scan the header too: an fclose outside the RAII wrapper can live there.
 tool_tus = [
     'tools/hs-extract-batch/hs-extract-batch.cpp',
     'tools/hs-extract-batch/io-util.cpp',
+    'tools/hs-extract-batch/io-util.h',
     'tools/hs-extract-batch/assignments-io.cpp',
     'tools/hs-extract-batch/self-test.cpp',
     'tools/hs-extract/hs-extract.cpp',
@@ -107,7 +109,7 @@ for tu in tool_tus:
   brace_depth = 0
   for lineno, line in enumerate(lines, 1):
       stripped = line.strip()
-      if stripped.startswith('struct FilePtr'):
+      if re.match(r'^struct\s+FilePtr\s*\{', stripped):
           in_fileptr = True
           brace_depth = 0
       if in_fileptr:
@@ -494,15 +496,23 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
     src = re.sub(r'//[^\n"]*$', '', src, flags=re.M)
     src = re.sub(r'//[^\n]*"[^"\n]*$', '', src, flags=re.M)
     stripped = src
-    aliases = set(re.findall(r"(\w+)\s*=\s*[^;\n]*" + LIMITS, stripped))
+    aliases = set()
+    # Resolve alias chains to a fixpoint: `m = nl; li <= m` must be caught too
+    # (a single-hop collector only sees `nl`).
+    for _ in range(8):
+        rhs_alt = LIMITS + (("|" + "|".join(re.escape(a) for a in sorted(aliases))) if aliases else "")
+        found = set(re.findall(r"(\w+)\s*=\s*[^;\n]*(?:" + rhs_alt + r")\b", stripped))
+        if found <= aliases:
+            break
+        aliases |= found
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases))
     pat = r"(^|[^A-Za-z0-9_])\w+\s*<=\s*(?:" + LIMITS
     if alias_alt:
         pat += "|" + alias_alt
-    pat += r")"
+    pat += r")\b"
     # `li < limit + 1` (or `<= limit + k`, `<= limit - k`) is the same
     # off-by-one written differently; reject any additive term on the bound.
-    bound = r"(?:" + LIMITS + ("|" + alias_alt if alias_alt else "") + r")"
+    bound = r"(?:" + LIMITS + ("|" + alias_alt if alias_alt else "") + r")\b"
     pat_add = r"(^|[^A-Za-z0-9_])\w+\s*<[=]?\s*" + bound + r"\s*[+\-]"
     for lineno, line in enumerate(stripped.splitlines(), 1):
         if re.search(pat, line) or re.search(pat_add, line):
@@ -550,7 +560,7 @@ fi
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[gm_idx\]\.group_id[[:space:]]*==[[:space:]]*group_id'; then
   echo "FAIL: writer group-advance equality walk missing (pre-built-index advance replaced; update this check if the algorithm changed)"; exit 1
 fi
-n_scans=$(strip_comments tools/hs-extract-batch/io-util.cpp | grep -cE 'for[[:space:]]*\([[:space:]]*(const auto&|auto)[[:space:]]+(gmp|gm)[[:space:]]*:[[:space:]]*gm_pairs\)')
+n_scans=$(strip_comments tools/hs-extract-batch/io-util.cpp | grep -cE 'for[[:space:]]*\([^)]*:[[:space:]]*gm_pairs[[:space:]]*\)')
 if [ "$n_scans" -ne 1 ]; then
   echo "FAIL: $n_scans range-scans over gm_pairs (expected exactly 1: the n_groups counter) — O(K^2) rescan regression"; exit 1
 fi
@@ -636,24 +646,28 @@ if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_
   echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
 # The predicate above only proves a comparison exists. An unbounded cap
-# (MAX_PREFETCH = 1000000, or 64 * 1024, or a dead duplicate = 8 that masks
-# the live value) satisfies it and defeats backpressure. Require exactly one
-# assignment whose right-hand side is a bare integer literal inside [1,1024].
-prefetch_assigns=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -cE 'MAX_PREFETCH[[:space:]]*=[[:space:]]*[^=]' || true)
-if [ "$prefetch_assigns" -ne 1 ]; then
-  echo "FAIL: expected exactly one MAX_PREFETCH assignment, found $prefetch_assigns (dead duplicates can mask an unbounded live value)"
-  exit 1
-fi
-max_prefetch=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | sed -n 's/.*MAX_PREFETCH[[:space:]]*=[[:space:]]*\([^;]*\);.*/\1/p' | head -1 | tr -d '[:space:]')
-if [ -z "$max_prefetch" ] || ! printf '%s' "$max_prefetch" | grep -qE '^[0-9]+$'; then
-  echo "FAIL: MAX_PREFETCH initializer is not a plain integer literal (value: ${max_prefetch:-none})"
-  exit 1
-fi
-if [ "$max_prefetch" -lt 1 ] || [ "$max_prefetch" -gt 1024 ]; then
-  echo "FAIL: MAX_PREFETCH bound outside [1,1024] (value: $max_prefetch)"
-  exit 1
-fi
-echo "PASS"
+# (1000000, 64 * 1024, {1000000}, SIZE_MAX, or a dead duplicate that masks the
+# live value) would satisfy it and defeat backpressure. Parse every
+# declaration of the name (assignment or brace-init), require exactly one, and
+# require a plain decimal literal inside [1,1024]. Python, not `[ -gt ]`,
+# because bash arithmetic rejects values above INT64_MAX and treats the error
+# as false -- SIZE_MAX would otherwise pass.
+python3 - <<'PY'
+import re, sys
+src = open("tools/hs-extract-batch/hs-extract-batch.cpp").read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'//[^\n]*', '', src)
+decls = re.findall(r'MAX_PREFETCH\s*(?:=(?!=)\s*([^;{}]+)|\{\s*([^}]*)\})\s*;', src)
+if len(decls) != 1:
+    sys.exit(f"FAIL: expected exactly one MAX_PREFETCH declaration, found {len(decls)} (a dead duplicate can mask an unbounded live value)")
+raw = (decls[0][0] or decls[0][1]).strip()
+if not re.fullmatch(r'[0-9]+', raw):
+    sys.exit(f"FAIL: MAX_PREFETCH initializer is not a plain decimal integer literal (value: {raw})")
+val = int(raw)
+if not (1 <= val <= 1024):
+    sys.exit(f"FAIL: MAX_PREFETCH bound outside [1,1024] (value: {val})")
+print("PASS")
+PY
 
 echo "=== Check 16: server pool=none response size limit ==="
 # The /hidden-states endpoint must cap pool=none response size to

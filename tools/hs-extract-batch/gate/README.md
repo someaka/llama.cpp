@@ -32,9 +32,10 @@ against the baseline. Exit 0 means all bytes identical; exit 1 means
 mismatch OR setup/run failure (messages distinguish them: `REFUSED` /
 `inputs missing` are setup problems, `MISMATCHES` is a byte regression).
 
-Determinism at `-ngl 99` on this GPU was verified empirically (2026-08-18:
-every scenario type byte-identical across repeat runs, including resume
-parity and sampled generation).
+Determinism at `-ngl 99` was verified empirically on an NVIDIA RTX 3090
+(24 GB, CUDA build) on 2026-08-18: every scenario type byte-identical across
+repeat runs, including resume parity and sampled generation. Re-verify on any
+other device before treating the baseline digests as portable.
 
 The driver refuses CPU-only binaries up front (no `libggml-cuda.so*` next to
 the binary aborts with `REFUSED`): the gate runs the production path, and a

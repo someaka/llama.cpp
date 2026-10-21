@@ -11,8 +11,13 @@ Processes thousands of prompts efficiently using streaming architecture and opti
 - **Checkpoint/resume** - Save progress and resume interrupted runs
 
 > Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
-> CUDA results for the same prompt are not value-comparable at deep layers. Pin
-> the backend (and `-ngl`) for research data.
+> CUDA results for the same prompt are not value-comparable at deep layers.
+> Front-end parity with `hs-extract` and the server requires all four parity
+> conditions pinned: the backend build, the effective Flash-Attention
+> resolution, the effective compute placement, and a KV layout that shares no
+> pool across decoding requests (`--parallel 1` on the server). See
+> `tools/server/README.md` ("Parity protocol") for the measurement definitions
+> and the per-axis deviations. Pin the backend (and `-ngl`) for research data.
 
 - **Self-test mode** - Validate setup without requiring a model
 - **Binary I/O** - Compact output format for downstream processing

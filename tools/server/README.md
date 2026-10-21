@@ -1031,34 +1031,30 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 
 Values on the wire are JSON numbers rounded through 9 significant digits
 (the same precision as the CLI tools' text output); each number parses back
-to the exact float32 value. Numeric parity across front-ends: on the same
-pinned backend build, the same effective Flash-Attention setting, and the
-same effective compute placement (both CPU-only, or both with GPU compute),
-all fork front-ends are bit-identical after parsing (verified on CUDA and
-CPU; `hs-extract-batch --raw` vs `hs-extract` measured 0.0 max delta at
-every layer on hs-fixture). When the effective Flash-Attention resolution
-differs between front-ends, values diverge grossly: only the server can move
-this axis (`-fa on|off`); the CLIs have no `-fa` flag and always use the
-library default (auto), which is also the server default, so with defaults at
-`-ngl 0` the three front-ends agree bit-for-bit. Starting the server `-fa off`
-against default CLIs measured max relative 1.6 on hs-fixture at deep layers,
-layer 0 identical (a ~1e3 relative divergence was seen on gemma-4; re-measure
-before quoting it). A compute-placement difference (GPU
-compute vs CPU-only at the same `-ngl`) is milder but real: measured max
-|delta| 9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers
-of hs-fixture, layer 0 identical. Concurrency also matters, and the trigger is
-a shared KV pool, not the request count: with per-slot KV (`-np N`) two to
-four concurrent requests stay bit-identical to a solo run (30/30 comparisons
-on qwen35, 132/132 on hs-fixture), while a unified KV pool (`--kv-unified`,
-the default when `-np` is unset) can diverge from a solo run when two or more
-requests decode together. Onset depends on prompt length -- two short prompts
-often stay identical -- but at longer prompts the drift reaches ~2e2 absolute
-at layer 64 on qwen35 (0.01-0.14 absolute at layers 4-5, relative
-2e-4..3.2e-3 there) and up to 1.6e-2 across tokens on hs-fixture. Layer 0 is
-always exact, the drifting request is not always the longest, and a single
-clean trial proves nothing. Relative error here means max over elements of
-|delta|/|reference|, so near-zero elements dominate it. For research data, run
-one extraction request at a time (`--parallel 1`).
+to the exact float32 value.
+
+**Parity protocol.** Bit-identity holds only when all four conditions are
+pinned: (1) the same backend build, (2) the same effective Flash-Attention
+resolution, (3) the same effective compute placement, (4) a KV layout that
+does not share one pool across decoding requests (see the concurrency rows).
+"Bit-identical" means element-by-element equality after JSON parsing.
+"Absolute" means max over elements of |delta|; "relative" means max over
+elements of |delta|/|reference|, so near-zero elements dominate it. Layer 0
+is the embedding row and was exact in every measurement below.
+
+**Measured deviations** (each against a solo request, same build, same
+prompt, same pooling; `hs-fixture` = llama 5-layer test fixture (64-wide),
+`qwen35` = Qwen3.8-27B Q4_K_M (64 blocks, 5120-wide)):
+
+| Axis | Change from baseline | Observation (pool=none, all tokens unless noted) |
+|---|---|---|
+| Flash-Attention | server `-fa off`, CLIs at their default | relative 1.6 at deep layers on hs-fixture, layer 0 exact. Only the server can move this axis; the CLIs have no `-fa` flag and use the library default (auto), which is also the server default, so with defaults the front-ends agree bit-for-bit at `-ngl 0`. A ~1e3 relative divergence was measured on `gemma-4-E2B` before the fork's crop fix; re-measure before quoting it. |
+| Compute placement | GPU compute vs CPU-only at the same `-ngl` | absolute 9.6e-3 across tokens and 3.7e-3 at the last token, deep layers, hs-fixture |
+| Concurrency, per-slot KV (`-np N`) | 2-4 requests in flight vs solo | 0.0 (bit-identical): 30/30 comparisons on qwen35, 132/132 on hs-fixture |
+| Concurrency, unified KV (`--kv-unified`, the default when `-np` is unset) | 2-4 requests in flight vs solo | onset depends on prompt length (two short prompts often stay identical); at longer prompts absolute up to ~2e2 at layer 64 and 0.01-0.14 at layers 4-5 on qwen35 (relative 2e-4..3.2e-3 there), 1.6e-2 across tokens on hs-fixture; the drifting request is not always the longest; a single clean trial proves nothing |
+
+For research data run one extraction request at a time (`--parallel 1`), or
+accept that concurrent load is not bit-reproducible.
 
 *Request body (JSON):*
 
@@ -1076,20 +1072,13 @@ one extraction request at a time (`--parallel 1`).
 - **`skip_mean`**: Returns the mean over tokens `[skip_offset, n_tokens)`. Shape per layer: `[1, n_embd_out]`.
 - **`none`**: Returns all per-token hidden states without pooling. Shape per layer: `[n_tokens, n_embd_out]`.
 
-> Numeric parity: on the same pinned backend build, the same effective
-> Flash-Attention setting, and the same effective compute placement, the
-> `/hidden-states` values are bit-identical to the `hs-extract` /
-> `hs-extract-batch` CLIs after parsing (verified on CUDA and CPU).
-> If the server is started with `-fa off` while the CLIs run the default (auto),
-> values diverge grossly; a compute-placement difference at the same `-ngl`
-> gives a milder divergence (measured 9.6e-3 max |delta| on deep layers).
-> Concurrency is a third axis: a shared KV pool (`--kv-unified`, the default
-> when `-np` is unset) can diverge from a solo run when two requests decode
-> together (onset depends on prompt length; up to ~2e2 absolute at layer 64 on
-> qwen35, 1.6e-2 across tokens on hs-fixture, layer 0 always exact), so run one
-> request at a time (`--parallel 1`) when the values must be reproducible.
-> Use one front-end, one pinned `-ngl`, and one effective Flash-Attention
-> setting for a research run.
+> Numeric parity: the `/hidden-states` values equal `hs-extract` /
+> `hs-extract-batch` after parsing only when all four conditions above are
+> pinned (backend build, Flash-Attention resolution, compute placement, KV
+> layout). See **Parity protocol** for the conditions, the measurement
+> definitions, and the per-axis deviations. For a research run use one
+> front-end, one `-ngl`, one effective Flash-Attention setting, and one
+> request at a time.
 
 *Response format:*
 
