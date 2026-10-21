@@ -48,9 +48,10 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > (auto), which is also the server default, so pin `-fa auto` instead of relying
 > on both sides happening to default the same way. Concurrency is a fourth
 > condition: a server with a unified KV pool (`--kv-unified`, the default when
-> `-np` is unset) drifts from a solo run once two requests decode together, so
-> run it with `--parallel 1`. hs-extract-batch is the parity-of-record for probe
-> data; the server is parity-of-record only under those pins.
+> `-np` is unset) can diverge from a solo run when two requests decode together
+> (onset depends on prompt length), so run it with `--parallel 1`.
+> hs-extract-batch is the parity-of-record for probe data; the server is
+> parity-of-record only under those pins.
 
 
 ## Examples

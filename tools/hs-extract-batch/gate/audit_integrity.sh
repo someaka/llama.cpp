@@ -500,8 +500,12 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
     if alias_alt:
         pat += "|" + alias_alt
     pat += r")"
+    # `li < limit + 1` (or `<= limit + k`, `<= limit - k`) is the same
+    # off-by-one written differently; reject any additive term on the bound.
+    bound = r"(?:" + LIMITS + ("|" + alias_alt if alias_alt else "") + r")"
+    pat_add = r"(^|[^A-Za-z0-9_])\w+\s*<[=]?\s*" + bound + r"\s*[+\-]"
     for lineno, line in enumerate(stripped.splitlines(), 1):
-        if re.search(pat, line):
+        if re.search(pat, line) or re.search(pat_add, line):
             print(f"FAIL: off-by-one risk in {tu}:{lineno}: {line.strip()}")
             failed = True
 if not aliases:
@@ -631,12 +635,22 @@ fi
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_producer_and_join"; then
   echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
-# The predicate above only proves a comparison exists; an unbounded cap
-# (MAX_PREFETCH = 1000000) satisfies it and defeats backpressure. Pin the
-# magnitude and guard against a vacuous extraction (no match -> empty).
-max_prefetch=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | sed -n 's/.*MAX_PREFETCH *= *\([0-9][0-9]*\).*/\1/p' | head -1)
-if [ -z "$max_prefetch" ] || [ "$max_prefetch" -lt 1 ] || [ "$max_prefetch" -gt 1024 ]; then
-  echo "FAIL: MAX_PREFETCH bound missing or outside [1,1024] (value: ${max_prefetch:-none})"
+# The predicate above only proves a comparison exists. An unbounded cap
+# (MAX_PREFETCH = 1000000, or 64 * 1024, or a dead duplicate = 8 that masks
+# the live value) satisfies it and defeats backpressure. Require exactly one
+# assignment whose right-hand side is a bare integer literal inside [1,1024].
+prefetch_assigns=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -cE 'MAX_PREFETCH[[:space:]]*=[[:space:]]*[^=]' || true)
+if [ "$prefetch_assigns" -ne 1 ]; then
+  echo "FAIL: expected exactly one MAX_PREFETCH assignment, found $prefetch_assigns (dead duplicates can mask an unbounded live value)"
+  exit 1
+fi
+max_prefetch=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | sed -n 's/.*MAX_PREFETCH[[:space:]]*=[[:space:]]*\([^;]*\);.*/\1/p' | head -1 | tr -d '[:space:]')
+if [ -z "$max_prefetch" ] || ! printf '%s' "$max_prefetch" | grep -qE '^[0-9]+$'; then
+  echo "FAIL: MAX_PREFETCH initializer is not a plain integer literal (value: ${max_prefetch:-none})"
+  exit 1
+fi
+if [ "$max_prefetch" -lt 1 ] || [ "$max_prefetch" -gt 1024 ]; then
+  echo "FAIL: MAX_PREFETCH bound outside [1,1024] (value: $max_prefetch)"
   exit 1
 fi
 echo "PASS"

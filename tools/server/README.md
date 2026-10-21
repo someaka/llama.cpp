@@ -1048,14 +1048,17 @@ compute vs CPU-only at the same `-ngl`) is milder but real: measured max
 |delta| 9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers
 of hs-fixture, layer 0 identical. Concurrency also matters, and the trigger is
 a shared KV pool, not the request count: with per-slot KV (`-np N`) two to
-four concurrent requests stay bit-identical to a solo run (135/135 comparisons
-on qwen35, 7/7 trials on hs-fixture), while a unified KV pool (`--kv-unified`,
-the default when `-np` is unset) drifts as soon as two requests decode
-together -- measured up to 1.6e-2 across tokens on hs-fixture and up to 1.4e2
-absolute at layer 64 on qwen35 (relative 0.01-0.14 at layers 4-5), layer 0
-exact, the drifting request is not always the longest, and a single clean trial
-proves nothing. For research data, run one extraction request at a time
-(`--parallel 1`).
+four concurrent requests stay bit-identical to a solo run (30/30 comparisons
+on qwen35, 132/132 on hs-fixture), while a unified KV pool (`--kv-unified`,
+the default when `-np` is unset) can diverge from a solo run when two or more
+requests decode together. Onset depends on prompt length -- two short prompts
+often stay identical -- but at longer prompts the drift reaches ~2e2 absolute
+at layer 64 on qwen35 (0.01-0.14 absolute at layers 4-5, relative
+2e-4..3.2e-3 there) and up to 1.6e-2 across tokens on hs-fixture. Layer 0 is
+always exact, the drifting request is not always the longest, and a single
+clean trial proves nothing. Relative error here means max over elements of
+|delta|/|reference|, so near-zero elements dominate it. For research data, run
+one extraction request at a time (`--parallel 1`).
 
 *Request body (JSON):*
 
@@ -1081,10 +1084,10 @@ proves nothing. For research data, run one extraction request at a time
 > values diverge grossly; a compute-placement difference at the same `-ngl`
 > gives a milder divergence (measured 9.6e-3 max |delta| on deep layers).
 > Concurrency is a third axis: a shared KV pool (`--kv-unified`, the default
-> when `-np` is unset) drifts from a solo run as soon as two requests decode
-> together (up to ~1.6e-2 across tokens on hs-fixture, layer 0 exact; much
-> larger on qwen35), so run one request at a time (`--parallel 1`) when the
-> values must be reproducible.
+> when `-np` is unset) can diverge from a solo run when two requests decode
+> together (onset depends on prompt length; up to ~2e2 absolute at layer 64 on
+> qwen35, 1.6e-2 across tokens on hs-fixture, layer 0 always exact), so run one
+> request at a time (`--parallel 1`) when the values must be reproducible.
 > Use one front-end, one pinned `-ngl`, and one effective Flash-Attention
 > setting for a research run.
 
