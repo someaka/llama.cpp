@@ -144,3 +144,14 @@ digests, and every gate run since re-verifies that fresh builds from
 clean trees match it exactly (AOT or PTX-JIT). Rule: an anchor only moves
 with a written cause, and only from a fresh-build digest set — never from
 an incremental-build run.
+
+## What `audit_integrity.sh` is and is not
+
+It is a regression tripwire over the shape of the code that implements each
+invariant. It is not a proof system. A mutation that keeps the natural
+spelling is caught; a deliberately unusual spelling that changes the effective
+behaviour can pass, and closing one such spelling invites another (the check
+suite has been hardened round after round for exactly this reason). The
+primary evidence is behavioural: the self-test suite, the gate byte-compare,
+and the live server receipts. The audit is the secondary net that catches
+accidental drift in code that is edited every day.
