@@ -112,6 +112,9 @@ def check_row(axis, value):
         if len(re.findall(LAYER_SET, value)) < 2:
             fail(f"{axis}: row measures two models but names a layer set for only one arm")
 
+    if ".." in value and not re.search(r"\b(?:observed|ceiling)\b", value):
+        fail(f"{axis}: a numeric range must say whether it is observed or a ceiling")
+
     has_n = re.search(r"\bn=\d+", value) or re.search(r"\b\d+\s+trials\b", value)
     if not has_n and "n not recorded" not in value:
         fail(f"{axis}: measured row has neither n=, a trial count, nor an explicit 'n not recorded'")
@@ -122,7 +125,11 @@ def main():
         print(f"FAIL: missing {SERVER_README}")
         sys.exit(1)
 
-    rows = table_rows(SERVER_README.read_text())
+    text = SERVER_README.read_text()
+    preamble = text.split("| Axis | Change from baseline |")[0]
+    if "not bounds" not in preamble:
+        fail("the parity preamble no longer states that observed ranges are not bounds")
+    rows = table_rows(text)
     if len(rows) != len(AXES):
         fail(f"expected {len(AXES)} table rows, found {len(rows)}")
 
