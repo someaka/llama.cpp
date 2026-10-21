@@ -112,6 +112,11 @@ def check_row(axis, value):
         if len(re.findall(LAYER_SET, value)) < 2:
             fail(f"{axis}: row measures two models but names a layer set for only one arm")
 
+    lowered = value.lower()
+    for word in ("ceiling", "never exceeds", "guaranteed", "hard bound"):
+        if word in lowered:
+            fail(f"{axis}: bound-style wording '{word}' is not allowed; report an observed range")
+
     if ".." in value and not re.search(r"\b(?:observed|ceiling)\b", value):
         fail(f"{axis}: a numeric range must say whether it is observed or a ceiling")
 
