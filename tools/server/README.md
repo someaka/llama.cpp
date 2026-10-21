@@ -1035,14 +1035,19 @@ to the exact float32 value. Numeric parity across front-ends: on the same
 pinned backend build, the same effective Flash-Attention setting, and the
 same effective compute placement (both CPU-only, or both with GPU compute),
 all fork front-ends are bit-identical after parsing (verified on CUDA and
-CPU; `--raw` vs `hs-extract` measured 0.0 max delta at every layer on
-hs-fixture). When the effective Flash-Attention resolution differs between
-front-ends (observed at `-ngl 0`: the CLI enables it, the server disables
-it), values diverge grossly (up to ~1e3 relative at deep layers) -- see the
-accuracy note below. A compute-placement difference (GPU compute vs
-CPU-only at the same `-ngl`) is milder but real: measured max |delta|
-9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers of
-hs-fixture, layer 0 identical.
+CPU; `hs-extract-batch --raw` vs `hs-extract` measured 0.0 max delta at
+every layer on hs-fixture). When the effective Flash-Attention resolution
+differs between front-ends (observed at `-ngl 0`: the CLI enables it, the
+server disables it), values diverge grossly (up to ~1e3 relative at deep
+layers) -- see the accuracy note below. A compute-placement difference (GPU
+compute vs CPU-only at the same `-ngl`) is milder but real: measured max
+|delta| 9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers
+of hs-fixture, layer 0 identical. Concurrency also matters: two requests in
+flight stay bit-identical to a solo run, but with three or four sequences
+sharing one decode the longest sequence drifts by up to ~1.5e-3 at layers
+4-5 (layer 0 exact; reproducible 3/3). For research data, run one extraction
+request at a time (`--parallel 1`) or accept that concurrent load is not
+bit-reproducible.
 
 *Request body (JSON):*
 
@@ -1067,6 +1072,9 @@ hs-fixture, layer 0 identical.
 > If the two front-ends resolve Flash-Attention differently (possible at `-ngl 0`),
 > values diverge grossly; a compute-placement difference at the same `-ngl`
 > gives a milder divergence (measured 9.6e-3 max |delta| on deep layers).
+> Concurrency is a third axis: with three or four sequences decoding together
+> the longest one drifts up to ~1.5e-3 at layers 4-5, so run one request at a
+> time (`--parallel 1`) when the values must be reproducible.
 > Use one front-end, one pinned `-ngl`, and one effective Flash-Attention
 > setting for a research run.
 

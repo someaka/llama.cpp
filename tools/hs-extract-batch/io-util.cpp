@@ -354,9 +354,18 @@ bool read_checkpoint(
     FilePtr f(fopen(ckpt_path.c_str(), "rb"));
     if (!f) return false;  // no checkpoint -- fresh start
 
+    // A checkpoint that exists but is short must be reported as truncated,
+    // not as absent: the caller's fallback message says "no valid checkpoint
+    // found", which is wrong for a file that is present and corrupt.
+    auto short_read = [&](const char * field) {
+        fprintf(stderr, "Error: checkpoint %s is truncated while reading %s - corrupt or incomplete checkpoint (remove it to start fresh)\n",
+                ckpt_path.c_str(), field);
+        return false;
+    };
+
     // Read and validate checkpoint version
     int32_t version = 0;
-    if (fread(&version, sizeof(int32_t), 1, f) != 1) return false;
+    if (fread(&version, sizeof(int32_t), 1, f) != 1) return short_read("version");
     if (version != CHECKPOINT_VERSION && version != CHECKPOINT_VERSION_V5 &&
         version != CHECKPOINT_VERSION_V4 && version != CHECKPOINT_VERSION_V3 &&
         version != CHECKPOINT_VERSION_V2 && version != CHECKPOINT_VERSION_V1) {
@@ -369,7 +378,7 @@ bool read_checkpoint(
     const bool is_v1 = (version == CHECKPOINT_VERSION_V1);
 
     // Read n_iterated
-    if (fread(&n_iterated, sizeof(int32_t), 1, f) != 1) return false;
+    if (fread(&n_iterated, sizeof(int32_t), 1, f) != 1) return short_read("n_iterated");
 
     // Validate n_iterated to prevent negative loop counts
     if (n_iterated < 0) {
@@ -384,11 +393,11 @@ bool read_checkpoint(
         int32_t n_fp_layers = 0;
         uint8_t generate_mode_u8 = 0;
         int32_t generate_tokens = 0, token_skip = 0;
-        if (fread(&n_fp_layers, sizeof(int32_t), 1, f) != 1) return false;
-        if (fread(&generate_mode_u8, sizeof(uint8_t), 1, f) != 1) return false;
+        if (fread(&n_fp_layers, sizeof(int32_t), 1, f) != 1) return short_read("fingerprint layer count");
+        if (fread(&generate_mode_u8, sizeof(uint8_t), 1, f) != 1) return short_read("generate_mode");
         bool generate_mode = generate_mode_u8 != 0;
-        if (fread(&generate_tokens, sizeof(int32_t), 1, f) != 1) return false;
-        if (fread(&token_skip, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&generate_tokens, sizeof(int32_t), 1, f) != 1) return short_read("generate_tokens");
+        if (fread(&token_skip, sizeof(int32_t), 1, f) != 1) return short_read("token_skip");
         if (n_fp_layers < 0 || n_fp_layers > MAX_LAYERS) {
             fprintf(stderr, "Error: checkpoint fingerprint layer count %d out of range [0, %d] - corrupt checkpoint\n",
                     n_fp_layers, MAX_LAYERS);
@@ -396,7 +405,7 @@ bool read_checkpoint(
         }
         std::vector<int32_t> fp_layers((size_t)n_fp_layers);
         if (n_fp_layers > 0 && fread(fp_layers.data(), sizeof(int32_t), (size_t)n_fp_layers, f) != (size_t)n_fp_layers) {
-            return false;
+            return short_read("fingerprint layer table");
         }
         if (generate_mode != expected.generate_mode || generate_tokens != expected.generate_tokens ||
             token_skip != expected.token_skip || fp_layers != expected.layers) {
@@ -429,8 +438,8 @@ bool read_checkpoint(
     if (version >= CHECKPOINT_VERSION_V4) {
         uint64_t stored_fnv = 0;
         int32_t stored_n_prompts = 0;
-        if (fread(&stored_fnv, sizeof(uint64_t), 1, f) != 1) return false;
-        if (fread(&stored_n_prompts, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&stored_fnv, sizeof(uint64_t), 1, f) != 1) return short_read("content hash");
+        if (fread(&stored_n_prompts, sizeof(int32_t), 1, f) != 1) return short_read("prompt count");
         if (stored_n_prompts != expected.n_prompts) {
             fprintf(stderr, "Error: checkpoint prompt count mismatch - checkpoint was written over %d prompts "
                             "but the current invocation has %d. Discard the checkpoint (remove %s) or restore "
@@ -501,13 +510,18 @@ bool read_checkpoint(
     // either rename; atomicity guarantees hold for exactly one writer.
     const long acc_region_start = ftell(f);  // for the v6 checksum pass
     int32_t magic = 0;
-    if (fread(&magic, sizeof(int32_t), 1, f) != 1 || magic != OUTPUT_MAGIC) {
+    if (fread(&magic, sizeof(int32_t), 1, f) != 1) {
+        return short_read("accumulator magic");
+    }
+    if (magic != OUTPUT_MAGIC) {
+        fprintf(stderr, "Error: checkpoint %s has accumulator magic 0x%08x, expected 0x%08x - corrupt checkpoint\n",
+                ckpt_path.c_str(), (unsigned) magic, (unsigned) OUTPUT_MAGIC);
         return false;
     }
     int32_t n_groups = 0, n_layers = 0, n_embd = 0;
-    if (fread(&n_groups, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_layers, sizeof(int32_t), 1, f) != 1) return false;
-    if (fread(&n_embd, sizeof(int32_t), 1, f) != 1) return false;
+    if (fread(&n_groups, sizeof(int32_t), 1, f) != 1) return short_read("n_groups");
+    if (fread(&n_layers, sizeof(int32_t), 1, f) != 1) return short_read("n_layers");
+    if (fread(&n_embd, sizeof(int32_t), 1, f) != 1) return short_read("n_embd");
 
     // Validate checkpoint dimensions to prevent OOM from corrupt data
     if (n_groups < 0 || n_groups > MAX_GROUPS) {
@@ -533,8 +547,8 @@ bool read_checkpoint(
 
     for (int32_t g = 0; g < n_groups; g++) {
         int32_t group_id = 0, n_masks = 0;
-        if (fread(&group_id, sizeof(int32_t), 1, f) != 1) return false;
-        if (fread(&n_masks, sizeof(int32_t), 1, f) != 1) return false;
+        if (fread(&group_id, sizeof(int32_t), 1, f) != 1) return short_read("group_id");
+        if (fread(&n_masks, sizeof(int32_t), 1, f) != 1) return short_read("n_masks");
 
         // Validate group_id fits in 16-bit range (matches the parse-site bounds check in read_prompt_assignments)
         if (group_id < 0 || group_id > 0xFFFF) {
@@ -550,8 +564,8 @@ bool read_checkpoint(
 
         for (int32_t m = 0; m < n_masks; m++) {
             int32_t mask_id = 0, n_layers_data = 0;
-            if (fread(&mask_id, sizeof(int32_t), 1, f) != 1) return false;
-            if (fread(&n_layers_data, sizeof(int32_t), 1, f) != 1) return false;
+            if (fread(&mask_id, sizeof(int32_t), 1, f) != 1) return short_read("mask_id");
+            if (fread(&n_layers_data, sizeof(int32_t), 1, f) != 1) return short_read("n_layers_data");
 
             if (mask_id < 0 || mask_id > 0xFFFF) {
                 fprintf(stderr, "Error: checkpoint contains mask_id=%d out of range [0, 65535] - corrupt checkpoint\n", mask_id);
@@ -566,8 +580,8 @@ bool read_checkpoint(
 
             for (int32_t l = 0; l < n_layers_data; l++) {
                 int32_t layer_idx = 0, count = 0;
-                if (fread(&layer_idx, sizeof(int32_t), 1, f) != 1) return false;
-                if (fread(&count, sizeof(int32_t), 1, f) != 1) return false;
+                if (fread(&layer_idx, sizeof(int32_t), 1, f) != 1) return short_read("layer_idx");
+                if (fread(&count, sizeof(int32_t), 1, f) != 1) return short_read("count");
 
                 // Validate layer_idx and count to prevent silent corruption
                 if (layer_idx < 0 || layer_idx > 0xFFFF) {
@@ -600,7 +614,7 @@ bool read_checkpoint(
                     // v1 format: stored mean = sum/count. Read mean, then multiply
                     // by count to restore sum. Introduces ~1 ULP error per dimension.
                     if (fread(av.sum.data(), sizeof(float), n_embd, f) != (size_t)n_embd) {
-                        return false;
+                        return short_read("accumulator sum payload");
                     }
                     if (count > 0) {
                         for (int d = 0; d < n_embd; d++) av.sum[d] *= (float)count;
@@ -608,7 +622,7 @@ bool read_checkpoint(
                 } else {
                     // v2+ format: stores raw sum directly (no precision loss).
                     if (fread(av.sum.data(), sizeof(float), n_embd, f) != (size_t)n_embd) {
-                        return false;
+                        return short_read("accumulator sum payload");
                     }
                 }
             }
