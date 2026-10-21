@@ -71,7 +71,7 @@ The 4 registered architectures (`llama`, `gemma`, `gemma4`, `qwen35`) call
 `capture_embeddings(inpL)` once before their layer loop (slot 0) and
 `capture_layer_output(il, cur)` once per layer at
 the bottom of the loop (slots 1..N). Hooks are pre-installed in 101 of the
-160 model-builder sources (src/models/*.cpp); the other 97 hook-bearing builders install only
+165 model-builder sources (src/models/*.cpp); the other 97 hook-bearing builders install only
 `capture_layer_output` (a builder registered without `capture_embeddings`
 trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
 
@@ -127,9 +127,11 @@ Three gates read it:
   maint-review wave closed this gap: the setter is the server's actual path).
   The C wrapper `llama_set_extract_hidden_states` returns 0/-1; the server
   fails the task via send_error rather than decoding with a failed enable.
-- **Server `/hidden-states` route** (`tools/server/server-context.cpp`,
-  post_hidden_states handler): unsupported arch → 400-class
-  `ERROR_TYPE_INVALID_REQUEST` naming the arch, before any decode happens.
+- **Server `/hidden-states` route** (`handle_hidden_states` in
+  `tools/server/server-hidden-states.h`; `tools/server/server-context.cpp`
+  only forwards the `post_hidden_states` lambda to it): unsupported arch →
+  400-class `ERROR_TYPE_INVALID_REQUEST` naming the arch, before any decode
+  happens.
 
 Backstop inside decode: if the registry says supported but the graph builder
 delivered an empty `t_hidden_layers`, that is a contract violation and
@@ -157,7 +159,7 @@ the capture).
    no single well-defined residual require per-builder semantic decisions
    and are refused by the capability registry until then.)
 2. Confirm `capture_layer_output(il, cur);` is present right after the
-   reassignment (pre-installed in 101 of 160 model-builder sources (src/models/*.cpp); add it only if
+   reassignment (pre-installed in 101 of 165 model-builder sources (src/models/*.cpp); add it only if
    absent).
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
 4. If the builder narrows rows with `crop_before_nextn` / `crop_after_nextn`,
@@ -180,7 +182,7 @@ creation (flag set), at the setter (enable), and at the server route.
   per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs -- joining is a registry
   case plus confirming the builder calls (hooks are pre-installed in 101 of
-  160 model-builder sources (src/models/*.cpp)); the 26 non-classic shapes (parallel-residual, hybrid
+  165 model-builder sources (src/models/*.cpp)); the 30 non-classic shapes (parallel-residual, hybrid
   recurrent; bert/jamba/chatglm etc. already carry hooks) remain unregistered
   pending per-builder semantic decisions.
 
