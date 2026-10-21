@@ -182,9 +182,10 @@ creation (flag set), at the setter (enable), and at the server route.
   per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs -- joining is a registry
   case plus confirming the builder calls (hooks are pre-installed in 101 of
-  165 model-builder sources (src/models/*.cpp)); the 30 non-classic shapes (parallel-residual, hybrid
-  recurrent; bert/jamba/chatglm etc. already carry hooks) remain unregistered
-  pending per-builder semantic decisions.
+  165 model-builder sources (src/models/*.cpp)); the 30 non-classic shapes (builders with no
+  `inpL = cur` loop tail -- mamba/mamba2, rwkv6/rwkv7, clip, t5encoder, ...; none of the 30
+  carries a hook) remain unregistered pending per-builder semantic decisions. Builders with the
+  standard tail such as bert/jamba/chatglm already carry hooks but are equally unregistered.
 
 ## The llama/gemma extraction crash (found and fixed on this branch)
 

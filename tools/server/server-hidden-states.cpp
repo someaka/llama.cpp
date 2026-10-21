@@ -13,8 +13,7 @@
 json server_task_result_hidden_states::to_json() {
     // Generic form (used by task-pipeline consumers): doubles as-is. The
     // /hidden-states endpoint writes to_json_text() instead -- nlohmann's
-    // double writer re-expands ~0.3% of %.9g values past 9 digits, so the
-    // wire form is built as text there.
+    // double writer re-expands nearly all %.9g values past 9 digits (measured 99.98%; a widened float32's shortest-double form needs 10-17 digits almost always), so the wire form is built as text there.
     // Memory note (HS-4): each layer vector is deep-copied and widened to a
     // nlohmann double array — roughly 2-6x the raw payload (plus node
     // overhead) on top of the captured floats. At the 25M-float pool=none

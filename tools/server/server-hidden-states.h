@@ -310,9 +310,7 @@ auto handle_hidden_states(Self & self, const server_http_req & req) {
                     ERROR_TYPE_SERVER));
                 return res;
             }
-            // %.9g text form: nlohmann's double writer re-expands ~0.3% of
-            // values past 9 significant digits, so the wire numbers are
-            // emitted raw instead of through the json serializer.
+            // %.9g text form: nlohmann's double writer re-expands nearly all values past 9 significant digits (measured 99.98% on a 3-layer pool=last payload; the shortest-double form of a widened float32 needs 10-17 digits almost always), so the wire numbers are emitted raw instead of through the json serializer.
             res_texts.push_back(hs_result->to_json_text());
         }
     }

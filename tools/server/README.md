@@ -1032,12 +1032,17 @@ This endpoint extracts per-layer hidden-state vectors from a forward pass. It do
 Values on the wire are JSON numbers rounded through 9 significant digits
 (the same precision as the CLI tools' text output); each number parses back
 to the exact float32 value. Numeric parity across front-ends: on the same
-pinned backend build AND the same effective Flash-Attention setting, all
-fork front-ends are bit-identical after parsing (verified on CUDA and CPU).
-When the effective Flash-Attention resolution differs between front-ends
-(observed at `-ngl 0`: the CLI enables it, the server disables it), values
-diverge grossly (up to ~1e3 relative at deep layers) -- see the accuracy
-note below.
+pinned backend build, the same effective Flash-Attention setting, and the
+same effective compute placement (both CPU-only, or both with GPU compute),
+all fork front-ends are bit-identical after parsing (verified on CUDA and
+CPU; `--raw` vs `hs-extract` measured 0.0 max delta at every layer on
+hs-fixture). When the effective Flash-Attention resolution differs between
+front-ends (observed at `-ngl 0`: the CLI enables it, the server disables
+it), values diverge grossly (up to ~1e3 relative at deep layers) -- see the
+accuracy note below. A compute-placement difference (GPU compute vs
+CPU-only at the same `-ngl`) is milder but real: measured max |delta|
+9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers of
+hs-fixture, layer 0 identical.
 
 *Request body (JSON):*
 
@@ -1055,12 +1060,15 @@ note below.
 - **`skip_mean`**: Returns the mean over tokens `[skip_offset, n_tokens)`. Shape per layer: `[1, n_embd_out]`.
 - **`none`**: Returns all per-token hidden states without pooling. Shape per layer: `[n_tokens, n_embd_out]`.
 
-> Numeric parity: on the same pinned backend build AND the same effective
-> Flash-Attention setting, the `/hidden-states` values are bit-identical to the
-> `hs-extract` / `hs-extract-batch` CLIs after parsing (verified on CUDA and CPU).
+> Numeric parity: on the same pinned backend build, the same effective
+> Flash-Attention setting, and the same effective compute placement, the
+> `/hidden-states` values are bit-identical to the `hs-extract` /
+> `hs-extract-batch` CLIs after parsing (verified on CUDA and CPU).
 > If the two front-ends resolve Flash-Attention differently (possible at `-ngl 0`),
-> values diverge grossly. Use one front-end, one pinned `-ngl`, and one effective
-> Flash-Attention setting for a research run.
+> values diverge grossly; a compute-placement difference at the same `-ngl`
+> gives a milder divergence (measured 9.6e-3 max |delta| on deep layers).
+> Use one front-end, one pinned `-ngl`, and one effective Flash-Attention
+> setting for a research run.
 
 *Response format:*
 
