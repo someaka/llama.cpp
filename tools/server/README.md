@@ -1037,17 +1037,25 @@ same effective compute placement (both CPU-only, or both with GPU compute),
 all fork front-ends are bit-identical after parsing (verified on CUDA and
 CPU; `hs-extract-batch --raw` vs `hs-extract` measured 0.0 max delta at
 every layer on hs-fixture). When the effective Flash-Attention resolution
-differs between front-ends (observed at `-ngl 0`: the CLI enables it, the
-server disables it), values diverge grossly (up to ~1e3 relative at deep
-layers) -- see the accuracy note below. A compute-placement difference (GPU
+differs between front-ends, values diverge grossly: only the server can move
+this axis (`-fa on|off`); the CLIs have no `-fa` flag and always use the
+library default (auto), which is also the server default, so with defaults at
+`-ngl 0` the three front-ends agree bit-for-bit. Starting the server `-fa off`
+against default CLIs measured max relative 1.6 on hs-fixture at deep layers,
+layer 0 identical (a ~1e3 relative divergence was seen on gemma-4; re-measure
+before quoting it). A compute-placement difference (GPU
 compute vs CPU-only at the same `-ngl`) is milder but real: measured max
 |delta| 9.6e-3 across all tokens and 3.7e-3 at the last token on deep layers
-of hs-fixture, layer 0 identical. Concurrency also matters: two requests in
-flight stay bit-identical to a solo run, but with three or four sequences
-sharing one decode the longest sequence drifts by up to ~1.5e-3 at layers
-4-5 (layer 0 exact; reproducible 3/3). For research data, run one extraction
-request at a time (`--parallel 1`) or accept that concurrent load is not
-bit-reproducible.
+of hs-fixture, layer 0 identical. Concurrency also matters, and the trigger is
+a shared KV pool, not the request count: with per-slot KV (`-np N`) two to
+four concurrent requests stay bit-identical to a solo run (135/135 comparisons
+on qwen35, 7/7 trials on hs-fixture), while a unified KV pool (`--kv-unified`,
+the default when `-np` is unset) drifts as soon as two requests decode
+together -- measured up to 1.6e-2 across tokens on hs-fixture and up to 1.4e2
+absolute at layer 64 on qwen35 (relative 0.01-0.14 at layers 4-5), layer 0
+exact, the drifting request is not always the longest, and a single clean trial
+proves nothing. For research data, run one extraction request at a time
+(`--parallel 1`).
 
 *Request body (JSON):*
 
@@ -1069,12 +1077,14 @@ bit-reproducible.
 > Flash-Attention setting, and the same effective compute placement, the
 > `/hidden-states` values are bit-identical to the `hs-extract` /
 > `hs-extract-batch` CLIs after parsing (verified on CUDA and CPU).
-> If the two front-ends resolve Flash-Attention differently (possible at `-ngl 0`),
+> If the server is started with `-fa off` while the CLIs run the default (auto),
 > values diverge grossly; a compute-placement difference at the same `-ngl`
 > gives a milder divergence (measured 9.6e-3 max |delta| on deep layers).
-> Concurrency is a third axis: with three or four sequences decoding together
-> the longest one drifts up to ~1.5e-3 at layers 4-5, so run one request at a
-> time (`--parallel 1`) when the values must be reproducible.
+> Concurrency is a third axis: a shared KV pool (`--kv-unified`, the default
+> when `-np` is unset) drifts from a solo run as soon as two requests decode
+> together (up to ~1.6e-2 across tokens on hs-fixture, layer 0 exact; much
+> larger on qwen35), so run one request at a time (`--parallel 1`) when the
+> values must be reproducible.
 > Use one front-end, one pinned `-ngl`, and one effective Flash-Attention
 > setting for a research run.
 

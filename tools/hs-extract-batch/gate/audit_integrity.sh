@@ -631,6 +631,14 @@ fi
 if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "stop_producer_and_join"; then
   echo "FAIL: producer-stop-and-join path missing"; exit 1
 fi
+# The predicate above only proves a comparison exists; an unbounded cap
+# (MAX_PREFETCH = 1000000) satisfies it and defeats backpressure. Pin the
+# magnitude and guard against a vacuous extraction (no match -> empty).
+max_prefetch=$(strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | sed -n 's/.*MAX_PREFETCH *= *\([0-9][0-9]*\).*/\1/p' | head -1)
+if [ -z "$max_prefetch" ] || [ "$max_prefetch" -lt 1 ] || [ "$max_prefetch" -gt 1024 ]; then
+  echo "FAIL: MAX_PREFETCH bound missing or outside [1,1024] (value: ${max_prefetch:-none})"
+  exit 1
+fi
 echo "PASS"
 
 echo "=== Check 16: server pool=none response size limit ==="

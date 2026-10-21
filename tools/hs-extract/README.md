@@ -40,12 +40,17 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > losslessly (JSON text → float32 reproduces the exact binary bits), so any
 > output can be compared bit-for-bit against binary captures on the same
 > pinned backend. Front-END outputs (hs-extract vs hs-extract-batch vs the
-> server) are bit-identical to each other when the backend build AND the
-> effective Flash-Attention setting are pinned (verified on CUDA and CPU);
-> when the front-ends resolve Flash-Attention differently (possible at
-> `-ngl 0`: this CLI enables it, the server disables it), values diverge
-> grossly. hs-extract-batch / the server are the parity-of-record for
-> probe data.
+> server) are bit-identical to each other when the backend build, the effective
+> Flash-Attention setting AND the effective compute placement are pinned
+> (verified on CUDA and CPU; `hs-extract-batch --raw` vs this CLI measured 0.0
+> max delta at every layer on hs-fixture). Only the server can move the FA axis
+> (`-fa on|off`); this CLI has no `-fa` flag and always uses the library default
+> (auto), which is also the server default, so pin `-fa auto` instead of relying
+> on both sides happening to default the same way. Concurrency is a fourth
+> condition: a server with a unified KV pool (`--kv-unified`, the default when
+> `-np` is unset) drifts from a solo run once two requests decode together, so
+> run it with `--parallel 1`. hs-extract-batch is the parity-of-record for probe
+> data; the server is parity-of-record only under those pins.
 
 
 ## Examples
