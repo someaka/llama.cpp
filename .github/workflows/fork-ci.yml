@@ -185,6 +185,32 @@ jobs:
           set -euo pipefail
           build/bin/llama-hs-extract-batch --help
 
+      - name: NUL byte in a prompt file must not truncate
+        run: |
+          set -euo pipefail
+          # Regression: `-f` published the file bytes through c_str(), so a NUL
+          # silently ended the prompt and the capture looked valid. Tokenize
+          # the same bytes with and without the tail after the NUL; the counts
+          # must differ (they were equal when the bug was live).
+          work=$(mktemp -d)
+          printf 'abc\0def' > "$work/full.txt"
+          printf 'abc'      > "$work/prefix.txt"
+          tok() {
+            build/bin/llama-hs-extract -m models/hs-fixture.gguf -f "$1" --layers 0 2>&1 \
+              | sed -n 's/.*tokenized prompt into \([0-9][0-9]*\) tokens.*/\1/p'
+          }
+          full=$(tok "$work/full.txt")
+          prefix=$(tok "$work/prefix.txt")
+          echo "full=$full prefix=$prefix"
+          test -n "$full" && test -n "$prefix"
+          if [ "$full" -le "$prefix" ]; then
+            echo "FAIL: NUL truncated the prompt (full=$full prefix=$prefix)"
+            exit 1
+          fi
+          # Determinism: the same bytes tokenize identically twice.
+          test "$(tok "$work/full.txt")" = "$full"
+          echo "PASS: NUL preserved ($full tokens vs $prefix for the prefix)"
+
       - name: Verify committed hidden-states fixture
         run: |
           set -euo pipefail
@@ -628,3 +654,10 @@ jobs:
           # The 19 structural checks live in a committed script so the
           # same audit runs locally (gate) and in CI — one source of truth.
           bash tools/hs-extract-batch/gate/audit_integrity.sh
+
+      - name: Parity table cell contract
+        run: |
+          set -euo pipefail
+          # The table's numbers are measurements (not pinned); its shape is not.
+          # Every measured row must name pooling, layers and n/trials.
+          python3 tools/hs-extract-batch/gate/check_doc_claims.py

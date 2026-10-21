@@ -87,7 +87,7 @@ int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     const char * model_path = nullptr;
-    const char * prompt_text = nullptr;
+    const char * prompt_arg = nullptr;
     const char * prompt_file = nullptr;
     const char * layer_str = "all";
     const char * output_file = nullptr;
@@ -107,7 +107,7 @@ int main(int argc, char ** argv) {
             model_path = argv[i];
         } else if (arg == "-p" || arg == "--prompt") {
             if (++i >= argc) { fprintf(stderr, "Error: --prompt requires an argument\n"); return 1; }
-            prompt_text = argv[i];
+            prompt_arg = argv[i];
         } else if (arg == "--raw") {
             raw_mode = true;
         } else if (arg == "-l" || arg == "--layers") {
@@ -164,16 +164,23 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!prompt_text && !prompt_file) {
+    if (!prompt_arg && !prompt_file) {
         fprintf(stderr, "Error: must specify --prompt or --file\n");
         print_usage(argv[0]);
         return 1;
     }
 
-    if (prompt_text && prompt_file) {
+    if (prompt_arg && prompt_file) {
         fprintf(stderr, "Error: --prompt and --file are mutually exclusive\n");
         return 1;
     }
+
+    // The effective prompt is carried as a length-aware string: `-f` reads
+    // arbitrary bytes, and a NUL in the middle must reach the tokenizer as a
+    // byte (the batch tool does the same). Publishing it through `c_str()`
+    // truncated at the first NUL and produced a valid-looking short capture.
+    std::string prompt_text;
+    if (prompt_arg) prompt_text = prompt_arg;
 
     std::string prompt_str;
     if (prompt_file) {
@@ -192,7 +199,7 @@ int main(int argc, char ** argv) {
         // batch disagree by one token position.
         if (!prompt_str.empty() && prompt_str.back() == '\n') prompt_str.pop_back();
         if (!prompt_str.empty() && prompt_str.back() == '\r') prompt_str.pop_back();
-        prompt_text = prompt_str.c_str();
+        prompt_text = std::move(prompt_str);
     }
 
     LlamaBackend backend;
@@ -226,15 +233,14 @@ int main(int argc, char ** argv) {
         // cause for garbage input. Fall through to the shared empty-tokens
         // error below so an empty --raw string is also diagnosed, not a
         // silent exit 1.
-        tokens = parse_raw_tokens(prompt_text, vocab);
+        tokens = parse_raw_tokens(prompt_text.c_str(), vocab);
         fprintf(stderr, "hs-extract: parsed %zu raw tokens\n", tokens.size());
     } else {
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;
-        std::string prompt(prompt_text);
         // D3: shared bounded tokenizer (tools/hs-extract-common/tokenize.h) -
         // identical output to common_tokenize(vocab, prompt, add_bos, true)
         // on the happy path, plus per-token vocab-bound validation.
-        tokens = hs_tokenize_bounded(vocab, prompt.c_str(), prompt.size(), add_bos);
+        tokens = hs_tokenize_bounded(vocab, prompt_text.data(), prompt_text.size(), add_bos);
         fprintf(stderr, "hs-extract: tokenized prompt into %zu tokens\n", tokens.size());
     }
 
