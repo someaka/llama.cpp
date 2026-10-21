@@ -42,8 +42,17 @@ static void print_usage(const char * prog) {
     printf("  %s -m model.gguf --raw -p \"1,2,3,4\"\n", prog);
 }
 
-static std::vector<llama_token> parse_raw_tokens(const char * str, const llama_vocab * vocab) {
+static std::vector<llama_token> parse_raw_tokens(const std::string & str, const llama_vocab * vocab) {
     std::vector<llama_token> tokens;
+    // Raw mode takes comma-separated token ids, never prompt text. A NUL here
+    // means the caller passed a binary/text file with --raw; refuse loudly
+    // instead of parsing the prefix (this used to truncate silently, the same
+    // failure the text path had). -p cannot carry a NUL at all (argv).
+    if (str.find('\0') != std::string::npos) {
+        fprintf(stderr, "Error: --raw token list contains a NUL byte "
+                        "(raw mode takes comma-separated token ids, not prompt text)\n");
+        return {};
+    }
     std::stringstream ss(str);
     std::string item;
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
@@ -233,7 +242,7 @@ int main(int argc, char ** argv) {
         // cause for garbage input. Fall through to the shared empty-tokens
         // error below so an empty --raw string is also diagnosed, not a
         // silent exit 1.
-        tokens = parse_raw_tokens(prompt_text.c_str(), vocab);
+        tokens = parse_raw_tokens(prompt_text, vocab);
         fprintf(stderr, "hs-extract: parsed %zu raw tokens\n", tokens.size());
     } else {
         const bool add_bos = llama_vocab_get_add_bos(vocab) && !no_bos;

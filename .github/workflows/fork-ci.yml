@@ -210,6 +210,16 @@ jobs:
           # Determinism: the same bytes tokenize identically twice.
           test "$(tok "$work/full.txt")" = "$full"
           echo "PASS: NUL preserved ($full tokens vs $prefix for the prefix)"
+          # Raw mode takes token ids, not text: a NUL there must be refused,
+          # not silently parsed as the prefix.
+          printf '1,2,3\0,4' > "$work/ids.txt"
+          if build/bin/llama-hs-extract -m models/hs-fixture.gguf --raw -f "$work/ids.txt" --layers 0 \
+               > /dev/null 2> "$work/raw.err"; then
+            echo "FAIL: --raw accepted a NUL byte instead of refusing it"
+            exit 1
+          fi
+          grep -q "raw token list contains a NUL byte" "$work/raw.err"
+          echo "PASS: --raw refuses a NUL byte"
 
       - name: Verify committed hidden-states fixture
         run: |

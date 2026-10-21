@@ -21,16 +21,31 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 ## Options
 
 - `-m, --model MODEL` - Path to GGUF model file (required)
-- `-p, --prompt TEXT` - Input prompt text
-- `-f, --file FILE` - Read prompt from file
+- `-p, --prompt TEXT` - Input prompt text (`argv` cannot carry a NUL byte)
+- `-f, --file FILE` - Read prompt from file as raw bytes
 - `-l, --layers LIST` - Comma-separated layer indices or `all` (default: all) (negative indices resolve Python-style; CLI-only sugar - the server API takes non-negative integers)
-- `--raw` - Interpret prompt as comma-separated token IDs
+- `--raw` - Interpret prompt as comma-separated token IDs (a NUL byte in that
+  input is refused: raw mode takes ids, not text)
 - `--no-bos` - Don't add BOS token. Default: BOS is added only when the
   model's tokenizer declares `add_bos_token` (e.g. gemma yes, qwen no).
 - `-t, --threads N` - Number of CPU threads (default: 4)
 - `-c, --ctx-size N` - Context size (default: auto = token count, capped at n_ctx_train)
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 0)
 - `--output FILE` - Output JSON file (default: stdout)
+
+### Prompt bytes
+
+`-f` reads the file as bytes (binary, no decoding) and strips exactly one
+trailing `\n` and then one trailing `\r`, so it tokenizes like the batch tool's
+`getline`-per-line reading of the same file. Interior NUL bytes are **preserved
+and tokenized**: a byte-level vocabulary renders them as `<0x00>`, so a file
+`abc\0def` tokenizes to 8 tokens (7 byte tokens + BOS) and matches
+`hs-extract-batch` at float32 bit equality on every captured layer. `-p` cannot carry a NUL at all (`argv` is
+NUL-terminated), and `--raw` takes comma-separated token IDs rather than text,
+so a NUL in that input is refused with an error instead of being truncated.
+The server's `/hidden-states` `input` field is a JSON string and does carry
+NULs: it tokenizes the full string and counts the NUL as its own token (see
+`tools/server/README.md`).
 
 > Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
 > CUDA results for the same prompt are not value-comparable at deep layers. Pin
