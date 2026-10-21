@@ -215,7 +215,9 @@ int main(int argc, char ** argv) {
     // produce a valid-looking BOS-only capture; the batch tool refuses an
     // empty prompts file, so refuse here too instead of emitting 1 row.
     if (prompt_text.empty()) {
-        fprintf(stderr, "Error: prompt is empty (the file held no text after stripping one trailing newline)\n");
+        fprintf(stderr, prompt_arg
+                ? "Error: prompt is empty (--prompt was given an empty string)\n"
+                : "Error: prompt is empty (the file held no text after stripping one trailing newline)\n");
         return 1;
     }
 

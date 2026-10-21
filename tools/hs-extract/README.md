@@ -39,9 +39,14 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 trailing `\n` and then one trailing `\r`. A **single-line** file therefore
 tokenizes like the batch tool's `getline`-per-line reading of that line; a
 multi-line file is one prompt here and N prompts there (the batch tool defines
-the line semantics), and an interior `\n` is kept as a byte. An empty file, or
-one holding only a newline, is refused (`prompt is empty`), matching the batch
-tool's refusal of a prompts file with no non-empty prompts. Interior NUL bytes are **preserved
+the line semantics), and an interior `\n` is kept as a byte. The refusal
+predicate is exactly "the post-strip bytes are empty": a 0-byte file, a
+newline-only file (one `\n` or one `\r\n`) and `-p ""` are refused with
+`Error: prompt is empty ...` (exit 1), while whitespace is content and is
+tokenized. A file of two or more blank lines is therefore accepted here (N
+newline tokens) even though `hs-extract-batch` refuses such a prompts file as
+having no non-empty prompts - the two front-ends agree on single-line input,
+not on multi-line files. Interior NUL bytes are **preserved
 and tokenized**: a byte-level vocabulary renders them as `<0x00>`, so a file
 `abc\0def` tokenizes to 8 tokens (7 byte tokens + BOS) and matches
 `hs-extract-batch` at float32 bit equality on every captured layer. `-p` cannot carry a NUL at all (`argv` is

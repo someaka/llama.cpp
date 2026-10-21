@@ -220,8 +220,10 @@ jobs:
           fi
           grep -q "raw token list contains a NUL byte" "$work/raw.err"
           echo "PASS: --raw refuses a NUL byte"
-          # An empty (or newline-only) prompt file must be refused, not turned
-          # into a valid-looking BOS-only capture.
+          # An empty prompt (0 bytes, or one newline) must be refused, not
+          # turned into a valid-looking BOS-only capture. Whitespace is content,
+          # and a file of two or more blank lines is content here (N newline
+          # tokens), unlike the batch tool's per-line reading.
           : > "$work/empty.txt"
           printf '\n' > "$work/nl.txt"
           for f in "$work/empty.txt" "$work/nl.txt"; do
@@ -230,7 +232,7 @@ jobs:
               exit 1
             fi
           done
-          echo "PASS: empty and newline-only prompt files are refused"
+          echo "PASS: a prompt empty after the newline strip is refused"
 
       - name: Verify committed hidden-states fixture
         run: |

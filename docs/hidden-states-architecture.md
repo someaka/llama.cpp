@@ -81,8 +81,8 @@ trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
         capture_layer_output(il, cur);
 ```
 
-The four reference adoptions: `src/models/llama.cpp`, `gemma.cpp`,
-`gemma4.cpp`, `qwen35.cpp`. No model file touches
+The four reference adoptions: `src/models/llama.cpp`, `src/models/gemma.cpp`,
+`src/models/gemma4.cpp`, `src/models/qwen35.cpp`. No model file touches
 `res->t_hidden_layers` directly anymore; the helper is the only writer
 (grep-verifiable: `t_hidden_layers` in `src/models/` = 0 hits).
 

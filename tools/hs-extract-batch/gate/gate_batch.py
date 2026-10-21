@@ -289,7 +289,7 @@ def main():
             dig_path = committed
         else:
             sys.exit(f"REFUSED: baseline digests missing at {dig_path} and no committed anchor at "
-                     f"{committed} - restore gate/digests_baseline.json from a trusted commit; "
+                     f"{committed} - restore tools/hs-extract-batch/gate/digests_baseline.json from a trusted commit; "
                      f"never re-baseline from the binary under test")
     base = json.loads(dig_path.read_text())
     # A baseline containing scenarios that were renamed/removed (or a typo'd
