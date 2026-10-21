@@ -61,7 +61,10 @@ llama-hs-extract-batch --self-test
 - `--mean` - Output token means instead of full per-token data (raw mode only)
 - `--token-skip N` - Skip first N tokens for mean computation (default: 0). Applies only to `--raw --mean` and `--batch --generate`; rejected elsewhere.
 - `--assignments FILE` - Path to assignments.bin (required for batch mode)
-- `--ctx-size N` - Override auto context sizing (default: auto from prompts)
+- `--ctx-size N` - Override auto context sizing (default: auto, sized from the
+  measured token count of the longest prompt; a chars/3.5 estimate is used only
+  if the prompts file cannot be re-read, and the result is capped at the model's
+  training context)
 - `--checkpoint-every N` - Save checkpoint every N prompts (N >= 1, default: 10000)
 - `--resume` - Resume from last checkpoint
 - `-ngl, --n-gpu-layers N` - Number of layers to offload to GPU (default: 99 = all)

@@ -667,6 +667,43 @@ static int32_t ctx_from_scan(const PromptsScan& scan) {
     return n_ctx;
 }
 
+/**
+ * Auto-size n_ctx from the REAL token counts.
+ *
+ * The character heuristic (chars / 3.5, kept in ctx_from_scan for the
+ * cannot-re-read fallback) is 3.5x low for byte-dense input: with a
+ * byte-level vocabulary a line can be one token per byte, so a 600-byte line
+ * needs 602 slots while the estimate says 171 - and the run is then refused
+ * with "exceeds n_ctx" even though the model's training context holds it.
+ * Tokenizes each non-empty line (prompts-file semantics: getline, one trailing
+ * CR stripped) and sizes to the largest count, like hs-extract sizes to the
+ * one prompt it reads.
+ */
+static int32_t ctx_from_prompts(const char * path, const llama_vocab * vocab, bool no_bos,
+                                const PromptsScan & scan) {
+    std::ifstream fin(path, std::ios::binary);
+    if (!fin) {
+        fprintf(stderr, "Warning: cannot re-read '%s' to count tokens; using the character estimate\n", path);
+        return ctx_from_scan(scan);
+    }
+    int32_t max_tokens = 0;
+    std::string line;
+    while (std::getline(fin, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        const auto tokens = tokenize(vocab, line, /*follow_vocab_default=*/true, no_bos);
+        if ((int32_t) tokens.size() > max_tokens) max_tokens = (int32_t) tokens.size();
+    }
+    if (fin.bad()) {
+        fprintf(stderr, "Warning: I/O error re-reading '%s'; using the character estimate\n", path);
+        return ctx_from_scan(scan);
+    }
+    if (max_tokens <= 0) return ctx_from_scan(scan);
+    const int32_t n_ctx = max_tokens > MIN_CTX_SIZE ? max_tokens : MIN_CTX_SIZE;
+    fprintf(stderr, "Auto-ctx: longest prompt is %d tokens (measured) -> n_ctx=%d\n", max_tokens, n_ctx);
+    return n_ctx;
+}
+
 // -- Raw Mode (debug/parity) --------------------------------------------
 
 /**
@@ -731,7 +768,7 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
     if (args.ctx_size > 0) {
         s.n_ctx = args.ctx_size;
     } else {
-        s.n_ctx = ctx_from_scan(scan);
+        s.n_ctx = ctx_from_prompts(args.prompts_file, s.vocab, args.no_bos, scan);
     }
     if (s.n_ctx > s.n_ctx_train) s.n_ctx = s.n_ctx_train;
     fprintf(stderr, "Using n_ctx=%d\n", s.n_ctx);

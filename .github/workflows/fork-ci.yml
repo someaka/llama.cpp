@@ -674,8 +674,8 @@ jobs:
       - name: Quick audit fix integrity check
         run: |
           set -euo pipefail
-          # The 19 structural checks live in a committed script so the
-          # same audit runs locally (gate) and in CI — one source of truth.
+          # The 19 structural checks live in a committed script so the same
+          # audit can be run locally as well as in CI — one source of truth.
           bash tools/hs-extract-batch/gate/audit_integrity.sh
 
       - name: Parity table cell contract
