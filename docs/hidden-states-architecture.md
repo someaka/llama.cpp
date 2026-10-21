@@ -231,7 +231,8 @@ Verification (all on real runs):
   path's last-token batches and the CLI comprehension path's
   `llama_batch_get_one` batches both do). The
   `!cparams.extract_hidden_states` helper guard and the post-final-norm prune
-  landed at c3c9d5f44; byte-identity must be re-established with a fresh
+  landed in the P0 crop-guard commit (`git log --grep 'suppress last-layer
+  output crop'`); byte-identity must be re-established with a fresh
   `cmp` on full capture dumps for qwen35 / gemma4 E2B / gemma4 E4B on both
   the CLI and server paths (pending: the E2B/E4B gate models have moved off
   disk).
