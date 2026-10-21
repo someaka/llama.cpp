@@ -211,6 +211,14 @@ int main(int argc, char ** argv) {
         prompt_text = std::move(prompt_str);
     }
 
+    // An empty prompt (empty file, newline-only file, or `-p ""`) used to
+    // produce a valid-looking BOS-only capture; the batch tool refuses an
+    // empty prompts file, so refuse here too instead of emitting 1 row.
+    if (prompt_text.empty()) {
+        fprintf(stderr, "Error: prompt is empty (the file held no text after stripping one trailing newline)\n");
+        return 1;
+    }
+
     LlamaBackend backend;
 
     llama_model_params model_params = llama_model_default_params();

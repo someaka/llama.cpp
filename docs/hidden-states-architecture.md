@@ -71,7 +71,7 @@ The 4 registered architectures (`llama`, `gemma`, `gemma4`, `qwen35`) call
 `capture_embeddings(inpL)` once before their layer loop (slot 0) and
 `capture_layer_output(il, cur)` once per layer at
 the bottom of the loop (slots 1..N). Hooks are pre-installed in 101 of the
-165 model-builder sources (src/models/*.cpp); the other 97 hook-bearing builders install only
+165 model-builder sources (src/models/*.cpp); 97 of those 101 hook-bearing builders install only
 `capture_layer_output` (a builder registered without `capture_embeddings`
 trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
 

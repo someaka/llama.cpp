@@ -72,8 +72,8 @@ state (a shared tree raced: one instance's scenario cleanup deleted
 another's in-flight directory). Startup prunes `proc-*` trees older than a
 day (crashed runs). `/tmp` is volatile; if the layout is gone, check mode
 never needs the baseline artifacts (it compares digests, not files) and
-falls back to the COMMITTED anchor at `gate/digests_baseline.json`. To
-relocate the volatile tree, adjust the `GOLD` constant.
+falls back to the COMMITTED anchor at `digests_baseline.json` (this
+directory). To relocate the volatile tree, adjust the `GOLD` constant.
 
 ## Required model
 
@@ -84,7 +84,8 @@ relocate the volatile tree, adjust the `GOLD` constant.
   The model's sha256 is NOT recorded anywhere: `digests_baseline.json` stores
   only artifact digests, so the anchor identifies the model by name only --
   always run baseline and check against the same GGUF file. Note that
-  `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in `fork-ci.yml`)
+  `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in
+  `.github/workflows/fork-ci.yml`)
   is a different, much smaller CI fixture (llama arch, 5 layers): it CANNOT run
   the gate scenarios (s5/s6 request layer 17 and s7-s9 request layer 35) and
   must not be used as HS_GATE_MODEL. Using any model other than the E2B Q4_K_M

@@ -6,7 +6,8 @@ when the hardware, model or prompt changes. What is pinned is the cell
 contract - every measured row must name a defined metric (abs, rel-L2,
 rel-max), its pooling mode, a concrete layer set and either `n` or a trial
 count (or state explicitly that n was not recorded). A row that quotes no
-number must say "No metric recorded" and quote no number at all.
+number must say "No metric recorded" and quote no measurement-looking number
+(ISO dates and model names such as gemma-4-E2B are not measurements).
 
 The check is vocabulary-driven rather than spelling-specific: a row must name
 one of the protocol's metrics (abs, rel-L2, rel-max, bit-identical), and any
@@ -38,7 +39,8 @@ SERVER_MAIN = ROOT / "tools/server/server.cpp"
 AXES = [
     "Flash-Attention",
     "Backend build",
-    "Compute placement",
+    "Compute device",
+    "Host op placement",
     "Concurrency, per-slot KV",
     "Concurrency, unified KV",
 ]
