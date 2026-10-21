@@ -34,7 +34,17 @@ PY
 }
 
 echo "=== Check 1: uint64_t key (flat accumulator) ==="
-strip_comments tools/hs-extract-batch/hs-accum.h | grep -q "inline uint64_t make_accum_key" && echo "PASS" || { echo "FAIL: uint64_t make_accum_key missing in code"; exit 1; }
+if ! strip_comments tools/hs-extract-batch/hs-accum.h | grep -q "using AccumulatorMap = std::unordered_map<uint64_t,"; then
+  echo "FAIL: AccumulatorMap key type is not uint64_t (a 32-bit key truncates group/mask/layer)"; exit 1
+fi
+if ! strip_comments tools/hs-extract-batch/hs-accum.h | grep -q "inline uint64_t make_accum_key"; then
+  echo "FAIL: uint64_t make_accum_key missing in code"; exit 1
+fi
+key_uses=$(for f in tools/hs-extract-batch/*.cpp; do strip_comments "$f"; done | grep -c "uint64_t [A-Za-z_][A-Za-z_0-9]* = make_accum_key(" || true)
+if [ "$key_uses" -lt 2 ]; then
+  echo "FAIL: expected at least 2 uint64_t make_accum_key(...) use sites, found $key_uses"; exit 1
+fi
+echo "PASS"
 
 echo "=== Check 2: output_all defined ==="
 strip_comments src/llama-context.cpp | grep -q "const bool output_all *= *cparams\.embeddings;" && echo "PASS" || { echo "FAIL: output_all missing or polarity wrong"; exit 1; }
@@ -116,7 +126,7 @@ for tu in tool_tus:
           brace_depth += line.count('{') - line.count('}')
           if brace_depth <= 0:
               in_fileptr = False
-      elif re.search(r'\bfclose\s*\(', line.split('//')[0]) and not stripped.startswith(('//', '*', '/*')):
+      elif re.search(r'\bfclose\b', line.split('//')[0]) and not stripped.startswith(('//', '*', '/*')):
           outside.append(f'{tu}:{lineno}: {line.strip()}')
 if outside:
     print(f'FAIL: {len(outside)} fclose calls outside FilePtr:')
@@ -192,7 +202,18 @@ print(f'PASS ({total_calls} checked_write call statements ({sum_raw} call sites)
 PY
 
 echo "=== Check 7: assignment reader uses explicit status ==="
-strip_comments tools/hs-extract-batch/assignments-io.h | grep -q "AssignmentReadStatus::error" && echo "PASS" || { echo "FAIL: explicit assignment read status missing"; exit 1; }
+# Pin the READER, not the enum: the header alone trivially satisfies a
+# header-only grep (a reader that returns ok for a truncated header passed).
+# Require a real error-return population in the reader TU and a status check
+# at the call site.
+err_returns=$(strip_comments tools/hs-extract-batch/assignments-io.cpp | grep -c "AssignmentReadStatus::error" || true)
+if [ "$err_returns" -lt 5 ]; then
+  echo "FAIL: assignment reader has only $err_returns AssignmentReadStatus::error returns (expected at least 5: magic, prompts, groups, bounds, truncation)"; exit 1
+fi
+if ! strip_comments tools/hs-extract-batch/hs-extract-batch.cpp | grep -q "status != AssignmentReadStatus::ok"; then
+  echo "FAIL: call site does not test the assignment read status"; exit 1
+fi
+echo "PASS"
 
 echo "=== Check 8: prompt pre-scan is pure and does not call exit ==="
 # auto_size_ctx was removed in the single-pass pre-scan
@@ -506,18 +527,22 @@ for tu in ["tools/hs-extract/hs-extract.cpp", "tools/hs-extract-batch/hs-extract
             break
         aliases |= found
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases))
-    pat = r"(^|[^A-Za-z0-9_])\w+\s*<=\s*(?:" + LIMITS
-    if alias_alt:
-        pat += "|" + alias_alt
-    pat += r")\b"
-    # `li < limit + 1` (or `<= limit + k`, `<= limit - k`) is the same
-    # off-by-one written differently; reject any additive term on the bound.
-    bound = r"(?:" + LIMITS + ("|" + alias_alt if alias_alt else "") + r")\b"
-    pat_add = r"(^|[^A-Za-z0-9_])\w+\s*<[=]?\s*" + bound + r"\s*[+\-]"
+    bound_re = r"\(?\s*(?:" + LIMITS + (("|" + alias_alt) if alias_alt else "") + r")\s*\)?\b"
+    pat = r"(^|[^A-Za-z0-9_])([A-Za-z_]\w*)\s*<=\s*" + bound_re
+    # `li < limit + 1` (or `<= limit + k`, `<= limit - k`, parenthesised bound)
+    # is the same off-by-one written differently; reject any additive term on
+    # the bound.
+    pat_add = r"(^|[^A-Za-z0-9_])([A-Za-z_]\w*)\s*<[=]?\s*" + bound_re + r"\s*[+\-]"
     for lineno, line in enumerate(stripped.splitlines(), 1):
-        if re.search(pat, line) or re.search(pat_add, line):
-            print(f"FAIL: off-by-one risk in {tu}:{lineno}: {line.strip()}")
-            failed = True
+        m = re.search(pat, line) or re.search(pat_add, line)
+        if not m:
+            continue
+        # A constant on the left of the comparison is a sanity guard on a
+        # count (`MAX_LAYERS < n_layers + 1`), not an index bound.
+        if re.match(r'^(?:HS_)?MAX_', m.group(2)):
+            continue
+        print(f"FAIL: off-by-one risk in {tu}:{lineno}: {line.strip()}")
+        failed = True
 if not aliases:
     # fail-closed: a collector that never fires means the grammar has rotted
     print(f"FAIL: Check 9 alias collector matched nothing in {tu} (grammar rot?)")
@@ -560,7 +585,7 @@ fi
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -qE 'gm_pairs\[gm_idx\]\.group_id[[:space:]]*==[[:space:]]*group_id'; then
   echo "FAIL: writer group-advance equality walk missing (pre-built-index advance replaced; update this check if the algorithm changed)"; exit 1
 fi
-n_scans=$(strip_comments tools/hs-extract-batch/io-util.cpp | grep -cE 'for[[:space:]]*\([^)]*:[[:space:]]*gm_pairs[[:space:]]*\)')
+n_scans=$(strip_comments tools/hs-extract-batch/io-util.cpp | grep -cE 'for[[:space:]]*\([^)]*:[[:space:]]*\(?gm_pairs\)?|for_each[[:space:]]*\([[:space:]]*\(?gm_pairs')
 if [ "$n_scans" -ne 1 ]; then
   echo "FAIL: $n_scans range-scans over gm_pairs (expected exactly 1: the n_groups counter) — O(K^2) rescan regression"; exit 1
 fi
@@ -658,11 +683,13 @@ src = open("tools/hs-extract-batch/hs-extract-batch.cpp").read()
 src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
 src = re.sub(r'//[^\n]*', '', src)
 decls = re.findall(r'MAX_PREFETCH\s*(?:=(?!=)\s*([^;{}]+)|\{\s*([^}]*)\})\s*;', src)
+if re.search(r'#\s*define\s+MAX_PREFETCH\b', src):
+    sys.exit("FAIL: MAX_PREFETCH is redefined by a macro (the declaration this check parses is not the value the compiler uses)")
 if len(decls) != 1:
     sys.exit(f"FAIL: expected exactly one MAX_PREFETCH declaration, found {len(decls)} (a dead duplicate can mask an unbounded live value)")
 raw = (decls[0][0] or decls[0][1]).strip()
-if not re.fullmatch(r'[0-9]+', raw):
-    sys.exit(f"FAIL: MAX_PREFETCH initializer is not a plain decimal integer literal (value: {raw})")
+if not re.fullmatch(r'[1-9][0-9]*', raw):
+    sys.exit(f"FAIL: MAX_PREFETCH initializer is not a plain decimal integer literal without leading zeros (value: {raw})")
 val = int(raw)
 if not (1 <= val <= 1024):
     sys.exit(f"FAIL: MAX_PREFETCH bound outside [1,1024] (value: {val})")

@@ -13,9 +13,10 @@ Processes thousands of prompts efficiently using streaming architecture and opti
 > Hidden-state values are reproducible per backend/`-ngl` configuration; CPU and
 > CUDA results for the same prompt are not value-comparable at deep layers.
 > Front-end parity with `hs-extract` and the server requires all four parity
-> conditions pinned: the backend build, the effective Flash-Attention
-> resolution, the effective compute placement, and a KV layout that shares no
-> pool across decoding requests (`--parallel 1` on the server). See
+> conditions pinned: the same backend build, the same effective Flash-Attention
+> resolution, the same effective compute placement, and a KV layout that does
+> not share one pool across decoding requests (on the server: per-slot KV via
+> `-np N`, or one request at a time with `--parallel 1`). See
 > `tools/server/README.md` ("Parity protocol") for the measurement definitions
 > and the per-axis deviations. Pin the backend (and `-ngl`) for research data.
 

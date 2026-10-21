@@ -41,14 +41,14 @@ llama-hs-extract -m model.gguf -p "Hello, world!"
 > output can be compared bit-for-bit against binary captures on the same
 > pinned backend. Front-END outputs (hs-extract vs hs-extract-batch vs the
 > server) are bit-identical to each other only when the four parity conditions
-> are pinned: the backend build, the effective Flash-Attention resolution, the
-> effective compute placement, and a KV layout that shares no pool across
-> decoding requests. Only the server can move the FA axis (`-fa on|off`); this
-> CLI has no `-fa` flag and always uses the library default (auto), which is
-> also the server default. See `tools/server/README.md` ("Parity protocol") for
-> the measurement definitions and the per-axis deviations. hs-extract-batch is
-> the parity-of-record for probe data; the server is parity-of-record only
-> under those pins.
+> are pinned: the same backend build, the same effective Flash-Attention
+> resolution, the same effective compute placement, and a KV layout that does
+> not share one pool across decoding requests. Only the server can move the FA
+> axis (`-fa on|off`); this CLI has no `-fa` flag and always uses the library
+> default (auto), which is also the server default. See
+> `tools/server/README.md` ("Parity protocol") for the measurement definitions
+> and the per-axis deviations. hs-extract-batch is the parity-of-record for
+> probe data; the server is parity-of-record only under those pins.
 
 
 ## Examples

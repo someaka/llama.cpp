@@ -1034,24 +1034,27 @@ Values on the wire are JSON numbers rounded through 9 significant digits
 to the exact float32 value.
 
 **Parity protocol.** Bit-identity holds only when all four conditions are
-pinned: (1) the same backend build, (2) the same effective Flash-Attention
-resolution, (3) the same effective compute placement, (4) a KV layout that
-does not share one pool across decoding requests (see the concurrency rows).
-"Bit-identical" means element-by-element equality after JSON parsing.
-"Absolute" means max over elements of |delta|; "relative" means max over
-elements of |delta|/|reference|, so near-zero elements dominate it. Layer 0
-is the embedding row and was exact in every measurement below.
+pinned: the same backend build, the same effective Flash-Attention resolution,
+the same effective compute placement, and a KV layout that does not share one
+pool across decoding requests. "Bit-identical" means element-by-element
+equality after JSON parsing. Three error metrics are used below and are never
+mixed inside one cell: **abs** = max over elements of |delta|; **rel-L2** =
+||delta|| / ||reference||; **rel-max** = max over elements of
+|delta| / |reference| (near-zero elements dominate it, so it is the harshest).
 
-**Measured deviations** (each against a solo request, same build, same
-prompt, same pooling; `hs-fixture` = llama 5-layer test fixture (64-wide),
-`qwen35` = Qwen3.8-27B Q4_K_M (64 blocks, 5120-wide)):
+**Measured deviations.** Baseline is a solo request with the same build, flags,
+prompt, pooling and layers. Models: `hs-fixture` = the llama 5-layer test
+fixture (64-wide, 5 layers, layer 0 = embedding); `qwen35` =
+`SuperQwen3.8-27b-abliterated-Q4_K_M.gguf` (arch qwen35, n_layer 64, n_embd
+5120, so layer 64 is the final slot). `normalize=false` throughout.
 
-| Axis | Change from baseline | Observation (pool=none, all tokens unless noted) |
+| Axis | Change from baseline | Metric, scope, value |
 |---|---|---|
-| Flash-Attention | server `-fa off`, CLIs at their default | relative 1.6 at deep layers on hs-fixture, layer 0 exact. Only the server can move this axis; the CLIs have no `-fa` flag and use the library default (auto), which is also the server default, so with defaults the front-ends agree bit-for-bit at `-ngl 0`. A ~1e3 relative divergence was measured on `gemma-4-E2B` before the fork's crop fix; re-measure before quoting it. |
-| Compute placement | GPU compute vs CPU-only at the same `-ngl` | absolute 9.6e-3 across tokens and 3.7e-3 at the last token, deep layers, hs-fixture |
-| Concurrency, per-slot KV (`-np N`) | 2-4 requests in flight vs solo | 0.0 (bit-identical): 30/30 comparisons on qwen35, 132/132 on hs-fixture |
-| Concurrency, unified KV (`--kv-unified`, the default when `-np` is unset) | 2-4 requests in flight vs solo | onset depends on prompt length (two short prompts often stay identical); at longer prompts absolute up to ~2e2 at layer 64 and 0.01-0.14 at layers 4-5 on qwen35 (relative 2e-4..3.2e-3 there), 1.6e-2 across tokens on hs-fixture; the drifting request is not always the longest; a single clean trial proves nothing |
+| Flash-Attention | server started `-fa off` vs the CLIs at their default (auto) | rel-max 1.6, hs-fixture, `-ngl 0`, layers 4-5; abs not recorded. Only the server can move this axis (the CLIs have no `-fa` flag); at `-ngl 99` on CUDA the axis is inert on hs-fixture. Pre-crop-fix `gemma-4-E2B` measured rel-max ~1e3; that model is off disk, so re-measure before quoting it. |
+| Backend build | CPU-only build vs CUDA build | Numerics differ (verified 2026-08-18, see `gate/README.md`); abs not recorded. Never compare captures across builds. |
+| Compute placement | GPU compute (default op offload) vs CPU-only placement, same `-ngl` | abs 9.6e-3, hs-fixture, pool=none, all tokens, deep layers; the last-token sub-figure was not reproduced in the round-7 re-measurement (1.2e-3..1.5e-3). |
+| Concurrency, per-slot KV (`-np N`) | 2-4 requests in flight vs solo | bit-identical (0.0): 30/30 comparisons on qwen35, 132/132 on hs-fixture, pool=none, 3 trials per regime. |
+| Concurrency, unified KV (`--kv-unified`, the default when `-np` is unset) | 2-4 requests in flight vs solo | pool=none: abs up to ~2e2 at layer 64 and 0.01-0.14 at layers 4-5 on qwen35; rel-L2 7.2e-4..2.6e-3 at layers 4-5. Onset depends on prompt length (two short prompts often stay identical). Pooling attenuates the error roughly 10-70x at depth (n=4: layer-64 abs 38.8 pool=none, 3.19 pool=last, 0.81 pool=skip_mean) but never restores bit-identity. The drifting request is not always the longest; a single clean trial proves nothing; 3 trials per regime. |
 
 For research data run one extraction request at a time (`--parallel 1`), or
 accept that concurrent load is not bit-reproducible.
