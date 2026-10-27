@@ -206,6 +206,9 @@ struct server_task {
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
         int32_t                  pointer = -1;
 
+        // if set, the outputs are the pooled embeddings of the sequence, one score per class
+        bool                     pooled = false;
+
         // first prompt position that is read, -1 if none
         int32_t pos_first() const {
             int32_t pos = pointer;
@@ -256,7 +259,7 @@ struct server_task {
             // extraction pipeline, hidden-states must use the same graph shape
             // as generation: output_all=false, last-token logits only.
             case SERVER_TASK_TYPE_DECISION:
-                return !decision.markers.empty() || !decision.order.empty();
+                return !decision.markers.empty() || !decision.order.empty() || decision.pooled;
             default:
                 return false;
         }
