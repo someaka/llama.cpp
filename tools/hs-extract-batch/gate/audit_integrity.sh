@@ -791,4 +791,39 @@ if between:
     print("FAIL: hs_toggle_reset guard must be the first statement of send_hidden_states"); raise SystemExit(1)
 print("PASS: capture disable is structural (scope guard)")
 PY
+echo "=== Check 20: architecture census matches the tree ==="
+# The doc quotes three tree-derived numbers (total model builders, hook-bearing
+# builders, non-classic builders). Upstream merges add builders, so an
+# unguarded prose count rots silently. Recompute all three and refuse a doc
+# that disagrees with the tree.
+python3 - <<'PY'
+import glob
+
+def read(p):
+    with open(p, encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+srcs = sorted(glob.glob("src/models/*.cpp"))
+total = len(srcs)
+hooked = [p for p in srcs if "capture_layer_output" in read(p)]
+nonclassic = [p for p in srcs if "inpL = cur" not in read(p)]
+leak = [p for p in nonclassic if "capture_layer_output" in read(p)]
+doc = " ".join(read("docs/hidden-states-architecture.md").split())
+
+fails = []
+if len(hooked) != 101:
+    fails.append(f"hook-bearing builders: tree={len(hooked)}, pinned=101")
+if f"101 of the {total}" not in doc:
+    fails.append(f"doc does not state '101 of the {total}'")
+if f"the {len(nonclassic)} non-classic" not in doc:
+    fails.append(f"doc does not state 'the {len(nonclassic)} non-classic'")
+if leak:
+    fails.append(f"non-classic builders carrying a hook: {leak[:3]}")
+if fails:
+    print("FAIL: architecture census drift: " + "; ".join(fails))
+    print("      update docs/hidden-states-architecture.md and this pin in the same commit")
+    raise SystemExit(1)
+print(f"PASS: census matches tree ({total} builders, {len(hooked)} hooked, {len(nonclassic)} non-classic)")
+PY
+
 echo "OK: All audit fix patterns verified"

@@ -71,7 +71,7 @@ The 4 registered architectures (`llama`, `gemma`, `gemma4`, `qwen35`) call
 `capture_embeddings(inpL)` once before their layer loop (slot 0) and
 `capture_layer_output(il, cur)` once per layer at
 the bottom of the loop (slots 1..N). Hooks are pre-installed in 101 of the
-165 model-builder sources (src/models/*.cpp); 97 of those 101 hook-bearing builders install only
+169 model-builder sources (src/models/*.cpp); 97 of those 101 hook-bearing builders install only
 `capture_layer_output` (a builder registered without `capture_embeddings`
 trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
 
@@ -159,7 +159,7 @@ the capture).
    no single well-defined residual require per-builder semantic decisions
    and are refused by the capability registry until then.)
 2. Confirm `capture_layer_output(il, cur);` is present right after the
-   reassignment (pre-installed in 101 of 165 model-builder sources (src/models/*.cpp); add it only if
+   reassignment (pre-installed in 101 of 169 model-builder sources (src/models/*.cpp); add it only if
    absent).
 3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
 4. If the builder narrows rows with `crop_before_nextn` / `crop_after_nextn`,
@@ -182,8 +182,8 @@ creation (flag set), at the setter (enable), and at the server route.
   per the canonical table at the top of this file).
 - No automatic coverage of the 100+ CLASSIC archs -- joining is a registry
   case plus confirming the builder calls (hooks are pre-installed in 101 of
-  165 model-builder sources (src/models/*.cpp)); the 30 non-classic shapes (builders with no
-  `inpL = cur` loop tail -- mamba/mamba2, rwkv6/rwkv7, clip, t5encoder, ...; none of the 30
+  169 model-builder sources (src/models/*.cpp)); the 32 non-classic shapes (builders with no
+  `inpL = cur` loop tail -- mamba/mamba2, rwkv6/rwkv7, clip, t5encoder, ...; none of the 32
   carries a hook) remain unregistered pending per-builder semantic decisions. Builders with the
   standard tail such as bert/jamba/chatglm already carry hooks but are equally unregistered.
 
