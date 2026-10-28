@@ -807,6 +807,7 @@ def read(p):
 srcs = sorted(glob.glob("src/models/*.cpp"))
 total = len(srcs)
 hooked = [p for p in srcs if "capture_layer_output" in read(p)]
+hook_only = [p for p in hooked if "capture_embeddings" not in read(p)]
 nonclassic = [p for p in srcs if "inpL = cur" not in read(p)]
 leak = [p for p in nonclassic if "capture_layer_output" in read(p)]
 doc = " ".join(read("docs/hidden-states-architecture.md").split())
@@ -818,17 +819,45 @@ if len(hooked) != 101:
 occurrences = len(re.findall(rf"101 of (?:the )?{total}\b", doc))
 if occurrences != 3:
     fails.append(f"doc states '101 of [the] {total}' {occurrences} times, expected 3")
-if "97 of those 101" not in doc:
-    fails.append("doc does not state '97 of those 101'")
+# Hook-only count is recomputed, never trusted as prose: adding
+# capture_embeddings() to one hook-only builder must fail this check.
+if f"{len(hook_only)} of those {len(hooked)}" not in doc:
+    fails.append(f"doc does not state '{len(hook_only)} of those {len(hooked)}'")
 if f"the {len(nonclassic)} non-classic" not in doc:
     fails.append(f"doc does not state 'the {len(nonclassic)} non-classic'")
+if f"none of the {len(nonclassic)} carries a hook" not in doc:
+    fails.append(f"doc does not state 'none of the {len(nonclassic)} carries a hook'")
 if leak:
     fails.append(f"non-classic builders carrying a hook: {leak[:3]}")
+
+# The registry size and membership are tree facts too: adding a case to
+# llm_arch_supports_hidden_states() must force a doc update.
+arch_src = read("src/llama-arch.cpp")
+body = re.search(r"llm_arch_supports_hidden_states\([^)]*\)\s*\{(.*?)\n\}", arch_src, re.S)
+cases = re.findall(r"case\s+(LLM_ARCH_[A-Z0-9_]+)", body.group(1)) if body else []
+if not cases:
+    fails.append("cannot parse llm_arch_supports_hidden_states() case list")
+else:
+    if f"The {len(cases)} registered architectures" not in doc:
+        fails.append(f"doc does not state 'The {len(cases)} registered architectures'")
+    for case in cases:
+        name = case.replace("LLM_ARCH_", "").lower()
+        if f"`{name}`" not in doc:
+            fails.append(f"doc does not name registered architecture '{name}'")
+
+# The ordered-ladder invariant: only capture_layer_output() may append to
+# t_hidden_layers. Any model builder touching the ladder directly bypasses
+# the GGML_ASSERT that keeps slots contiguous.
+ladder = [p for p in srcs if "t_hidden_layers" in read(p)]
+if ladder:
+    fails.append(f"model builders touch t_hidden_layers directly: {ladder[:3]}")
+
 if fails:
     print("FAIL: architecture census drift: " + "; ".join(fails))
     print("      update docs/hidden-states-architecture.md and this pin in the same commit")
     raise SystemExit(1)
-print(f"PASS: census matches tree ({total} builders, {len(hooked)} hooked, {len(nonclassic)} non-classic)")
+print(f"PASS: census matches tree ({total} builders, {len(hooked)} hooked, "
+      f"{len(hook_only)} hook-only, {len(nonclassic)} non-classic, {len(cases)} registered)")
 PY
 
 echo "OK: All audit fix patterns verified"

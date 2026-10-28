@@ -1223,8 +1223,10 @@ extern "C" {
     // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd floats).
     // Returns 0 on success, -1 if hidden states are unavailable or any layer
     // index is out of range (no out_ptrs entry is written in that case).
-    // Performs one synchronize() and one bounds validation pass for the whole
-    // layer set, instead of one per llama_get_hidden_state() call.
+    // Performs one synchronize() and one outer bounds validation pass for the
+    // whole layer set, instead of one synchronize per llama_get_hidden_state()
+    // call. Each index is still re-validated by the per-layer getter it calls,
+    // so the total range-check count is n_layers + 1.
     LLAMA_API int32_t llama_get_hidden_states_batch(
             struct llama_context * ctx,
             const int32_t        * layers,
