@@ -19,6 +19,8 @@ add_library(${TARGET} STATIC
     server-hidden-states.cpp
     server-hidden-states.h
     server-context.h
+    server-realtime.cpp
+    server-realtime.h
     server-stream.cpp
     server-stream.h
     server-tools.cpp
