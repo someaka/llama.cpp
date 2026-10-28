@@ -804,13 +804,27 @@ def read(p):
     with open(p, encoding="utf-8", errors="ignore") as f:
         return f.read()
 
+
+def code(p):
+    """File text with comments stripped: a commented-out hook is not a hook."""
+    s = read(p)
+    s = re.sub(r"/\*.*?\*/", " ", s, flags=re.S)
+    s = re.sub(r"//[^\n]*", " ", s)
+    return s
+
+
 srcs = sorted(glob.glob("src/models/*.cpp"))
 total = len(srcs)
-hooked = [p for p in srcs if "capture_layer_output" in read(p)]
-hook_only = [p for p in hooked if "capture_embeddings" not in read(p)]
-nonclassic = [p for p in srcs if "inpL = cur" not in read(p)]
-leak = [p for p in nonclassic if "capture_layer_output" in read(p)]
-doc = " ".join(read("docs/hidden-states-architecture.md").split())
+hooked = [p for p in srcs if "capture_layer_output" in code(p)]
+hook_only = [p for p in hooked if "capture_embeddings" not in code(p)]
+nonclassic = [p for p in srcs if "inpL = cur" not in code(p)]
+leak = [p for p in nonclassic if "capture_layer_output" in code(p)]
+raw_doc = read("docs/hidden-states-architecture.md")
+doc = " ".join(raw_doc.split())
+# The census sentence lives in the mechanism section; binding the claim to
+# that section stops a re-planted literal elsewhere from satisfying the check.
+section = re.search(r"## The mechanism \(three parts\)(.*?)(?=\n## )", raw_doc, re.S)
+section_norm = " ".join(section.group(1).split()) if section else ""
 
 fails = []
 if len(hooked) != 101:
@@ -819,11 +833,17 @@ if len(hooked) != 101:
 occurrences = len(re.findall(rf"101 of (?:the )?{total}\b", doc))
 if occurrences != 3:
     fails.append(f"doc states '101 of [the] {total}' {occurrences} times, expected 3")
-# Hook-only count is recomputed, never trusted as prose, and anchored to its
-# sentence so a bare literal re-planted elsewhere cannot satisfy the check.
-if f"{len(hook_only)} of those {len(hooked)} hook-bearing builders install only" not in doc:
+# Hook-only count is recomputed, never trusted as prose, and must appear in the
+# mechanism section's own sentence -- a literal re-planted elsewhere in the
+# document does not satisfy it.
+census_sentence = (
+    f"Hooks are pre-installed in {len(hooked)} of the {total} model-builder sources "
+    f"(src/models/*.cpp); {len(hook_only)} of those {len(hooked)} hook-bearing builders install only"
+)
+if census_sentence not in section_norm:
     fails.append(
-        f"doc does not state '{len(hook_only)} of those {len(hooked)} hook-bearing builders install only'"
+        "mechanism section does not state the full census sentence "
+        f"('...{len(hooked)} of the {total} ... {len(hook_only)} of those {len(hooked)}...')"
     )
 if f"the {len(nonclassic)} non-classic" not in doc:
     fails.append(f"doc does not state 'the {len(nonclassic)} non-classic'")
