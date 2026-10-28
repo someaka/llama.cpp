@@ -819,10 +819,12 @@ if len(hooked) != 101:
 occurrences = len(re.findall(rf"101 of (?:the )?{total}\b", doc))
 if occurrences != 3:
     fails.append(f"doc states '101 of [the] {total}' {occurrences} times, expected 3")
-# Hook-only count is recomputed, never trusted as prose: adding
-# capture_embeddings() to one hook-only builder must fail this check.
-if f"{len(hook_only)} of those {len(hooked)}" not in doc:
-    fails.append(f"doc does not state '{len(hook_only)} of those {len(hooked)}'")
+# Hook-only count is recomputed, never trusted as prose, and anchored to its
+# sentence so a bare literal re-planted elsewhere cannot satisfy the check.
+if f"{len(hook_only)} of those {len(hooked)} hook-bearing builders install only" not in doc:
+    fails.append(
+        f"doc does not state '{len(hook_only)} of those {len(hooked)} hook-bearing builders install only'"
+    )
 if f"the {len(nonclassic)} non-classic" not in doc:
     fails.append(f"doc does not state 'the {len(nonclassic)} non-classic'")
 if f"none of the {len(nonclassic)} carries a hook" not in doc:
