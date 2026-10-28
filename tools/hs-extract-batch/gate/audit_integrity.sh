@@ -798,6 +798,7 @@ echo "=== Check 20: architecture census matches the tree ==="
 # that disagrees with the tree.
 python3 - <<'PY'
 import glob
+import re
 
 def read(p):
     with open(p, encoding="utf-8", errors="ignore") as f:
@@ -813,8 +814,12 @@ doc = " ".join(read("docs/hidden-states-architecture.md").split())
 fails = []
 if len(hooked) != 101:
     fails.append(f"hook-bearing builders: tree={len(hooked)}, pinned=101")
-if f"101 of the {total}" not in doc:
-    fails.append(f"doc does not state '101 of the {total}'")
+# The prose uses both "101 of the 169" and "101 of 169"; count both spellings.
+occurrences = len(re.findall(rf"101 of (?:the )?{total}\b", doc))
+if occurrences != 3:
+    fails.append(f"doc states '101 of [the] {total}' {occurrences} times, expected 3")
+if "97 of those 101" not in doc:
+    fails.append("doc does not state '97 of those 101'")
 if f"the {len(nonclassic)} non-classic" not in doc:
     fails.append(f"doc does not state 'the {len(nonclassic)} non-classic'")
 if leak:

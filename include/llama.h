@@ -1205,8 +1205,10 @@ extern "C" {
     // Returns a pointer to a flat float array of size n_tokens * n_embd
     // (n_embd == n_embd_out is enforced at context creation and at the
     // runtime toggle; models with a separate output projection are rejected
-    // before any decode). The stride per token is n_embd. Returns NULL if
-    // extract_hidden_states was not set in context params.
+    // before any decode). The stride per token is n_embd. Returns NULL unless
+    // hidden-state extraction is currently enabled, either through the context
+    // params or through llama_set_extract_hidden_states(); the runtime toggle
+    // is how the server turns it on for a single request.
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.

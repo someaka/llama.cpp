@@ -230,13 +230,15 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
     cur = inpL;
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
-        // post-capture prune: must fire even under hidden-state extraction
-        // (the capture already holds all-token rows; the nextn/MTP consumer
-        // needs output rows only), so crop_before_nextn's extraction guard
-        // does not apply here
-        if (inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-        }
+    }
+    // Post-capture prune: the capture already holds all-token rows, and the
+    // nextn/MTP consumer needs output rows only. It must fire under
+    // hidden-state extraction too (crop_before_nextn's guard suppresses that
+    // path), otherwise lm_head sees every row and the logits copy in
+    // llama-context reads the wrong offset.
+    if ((extract_final_inp || cparams.extract_hidden_states) && inp_out_ids &&
+        (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
     // pre-norm state for MTP; set even when extraction is off
