@@ -870,7 +870,7 @@ else:
 # The ordered-ladder invariant: only capture_layer_output() may append to
 # t_hidden_layers. Any model builder touching the ladder directly bypasses
 # the GGML_ASSERT that keeps slots contiguous.
-ladder = [p for p in srcs if "t_hidden_layers" in read(p)]
+ladder = [p for p in srcs if "t_hidden_layers" in code(p)]
 if ladder:
     fails.append(f"model builders touch t_hidden_layers directly: {ladder[:3]}")
 
