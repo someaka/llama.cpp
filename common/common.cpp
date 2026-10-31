@@ -219,6 +219,23 @@ int32_t common_cpu_get_num_math() {
             }
         }
     }
+#elif defined(__riscv) && defined(__linux__)
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    int32_t n_a100 = 0;
+    while (std::getline(cpuinfo, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        std::string separator;
+        uint64_t marchid;
+        if (fields >> key >> separator >> std::hex >> marchid &&
+            key == "marchid" && separator == ":" && marchid == UINT64_C(0x8000000041000002)) {
+            ++n_a100;
+        }
+    }
+    if (n_a100 > 0) {
+        return n_a100;
+    }
 #elif defined(__powerpc64__) || defined(__powerpc__)
     int32_t smt_factor = 1;
     int phy_cpus = common_cpu_get_num_physical_cores();
@@ -917,12 +934,6 @@ std::string wstring_to_utf8(const std::wstring & str) {
 }
 #endif
 
-// returns the path as a UTF-8 string, preserving its separators
-std::string fs_path_to_utf8(const std::filesystem::path & path) {
-    const auto value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
-
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
     // a random suffix gives every writer its own temporary file, across processes and containers
     std::random_device rd;
@@ -946,7 +957,7 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
 
     if (file.fail() || ec) {
         std::filesystem::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+        throw std::runtime_error("failed to write file: " + path.string());
     }
 }
 
@@ -1040,7 +1051,7 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     std::error_code ec;
     common_create_directories(cache_directory, ec);
     if (ec) {
-        throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
+        throw std::runtime_error("failed to create cache directory: " + cache_directory.string());
     }
     return cache_directory / std::filesystem::u8path(filename);
 }
