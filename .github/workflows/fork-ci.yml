@@ -23,6 +23,8 @@ on:
   pull_request:
     branches:
       - main
+  # Manual runs, so a merge can be gated on demand without a new commit.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
