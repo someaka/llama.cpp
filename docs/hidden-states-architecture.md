@@ -253,4 +253,3 @@ Verification (all on real runs):
 - Unsupported-arch behavior before this branch: decode returned 0, getters
   NULL, server answered a misleading 500 (fixed by the capability-registry
   check; the server now answers 400 naming the architecture).
-
