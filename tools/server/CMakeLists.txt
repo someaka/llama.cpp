@@ -29,6 +29,8 @@ add_library(${TARGET} STATIC
     server-mcp.h
     server-schema.cpp
     server-schema.h
+    server-slot-sched.cpp
+    server-slot-sched.h
 )
 
 if (BUILD_SHARED_LIBS)
@@ -40,6 +42,7 @@ target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 # hidden-states: shared masked-mean kernel header (header-only, no new TU)
 target_include_directories(${TARGET} PRIVATE ../hs-extract-common)
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE vendor::hash)
 
 # llama-server-impl: server logic, reusable by app
 

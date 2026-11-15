@@ -222,7 +222,6 @@ llama_context::llama_context(
     }
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
-    cparams.warmup                  = false;
 
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
     cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
@@ -1693,11 +1692,11 @@ bool llama_context::set_h_nextn_rows(int64_t row0, int64_t n_rows, const float *
     return true;
 }
 
-bool llama_context::set_state_src(llama_context * src) {
-    if (cparams.ctx_state_src != src) {
+bool llama_context::set_ctx_state_src(llama_context * ctx_src) {
+    if (cparams.ctx_state_src != ctx_src) {
         sched_need_reserve = true;
     }
-    cparams.ctx_state_src = src;
+    cparams.ctx_state_src = ctx_src;
     return supports_state_row();
 }
 
@@ -1789,14 +1788,6 @@ void llama_context::set_causal_attn(bool value) {
 
 bool llama_context::get_causal_attn() const {
     return cparams.causal_attn;
-}
-
-void llama_context::set_warmup(bool value) {
-    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
-
-    // no scheduler reserve needed because warmups are usually with small batches
-
-    cparams.warmup = value;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -3176,12 +3167,16 @@ uint32_t llama_context::graph_max_nodes() const {
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
         model.arch == LLM_ARCH_MINIMAX_M3 ||
-        model.arch == LLM_ARCH_HY_V4) {
+        model.arch == LLM_ARCH_HY_V4 ||
+        model.arch == LLM_ARCH_INKLING2) {
         res = std::max<uint32_t>(1024u, 32u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
         // DFlash2's convolutions and selector are shape work rather than matmuls,
-        // so they cost ~8.6 nodes per tensor against ~5.9 for a plain DFlash draft
-        res = std::max<uint32_t>(1024u, 12u*model.n_tensors());
+        // so they cost ~8.6 nodes per tensor against ~5.9 for a plain DFlash draft.
+        // The selector lattice scales with the draft block size; 12u was calibrated
+        // on block-8 drafters, so scale the budget for larger blocks (e.g. Ripple's 16).
+        const uint32_t block_scale = std::max<uint32_t>(1u, model.hparams.dflash_block_size/8u);
+        res = std::max<uint32_t>(1024u, 12u*block_scale*model.n_tensors());
     } else {
         res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
         for (const auto & lora : model.loras) {
@@ -4693,7 +4688,6 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_fast              =*/ -1.0f,
         /*.yarn_beta_slow              =*/ -1.0f,
         /*.yarn_orig_ctx               =*/ 0,
-        /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
@@ -4875,13 +4869,6 @@ llama_context * llama_init_from_model(
     return nullptr;
 }
 
-// deprecated
-llama_context * llama_new_context_with_model(
-                 llama_model * model,
-        llama_context_params   params) {
-    return llama_init_from_model(model, params);
-}
-
 void llama_free(llama_context * ctx) {
     delete ctx;
 }
@@ -4976,10 +4963,6 @@ bool llama_get_causal_attn(const llama_context * ctx) {
     return ctx->get_causal_attn();
 }
 
-void llama_set_warmup(llama_context * ctx, bool warmup) {
-    ctx->set_warmup(warmup);
-}
-
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
 }
@@ -5038,8 +5021,8 @@ bool llama_set_embeddings_nextn_rows(llama_context * ctx, int64_t row0, int64_t 
     return ctx->set_h_nextn_rows(row0, n_rows, data);
 }
 
-bool llama_set_embd_state_src(llama_context * ctx, llama_context * src) {
-    return ctx->set_state_src(src);
+bool llama_set_ctx_state_src(llama_context * ctx, llama_context * ctx_src) {
+    return ctx->set_ctx_state_src(ctx_src);
 }
 
 void llama_set_embeddings_layer_inp_dev(llama_context * ctx, bool value) {
@@ -5326,31 +5309,6 @@ bool llama_memory_can_shift(llama_memory_t mem) {
 }
 
 // llama state API
-
-// deprecated
-size_t llama_get_state_size(llama_context * ctx) {
-    return llama_state_get_size(ctx);
-}
-
-// deprecated
-size_t llama_copy_state_data(llama_context * ctx, uint8_t * dst) {
-    return llama_state_get_data(ctx, dst, -1);
-}
-
-// deprecated
-size_t llama_set_state_data(llama_context * ctx, const uint8_t * src) {
-    return llama_state_set_data(ctx, src, -1);
-}
-
-// deprecated
-bool llama_load_session_file(llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
-    return llama_state_load_file(ctx, path_session, tokens_out, n_token_capacity, n_token_count_out);
-}
-
-// deprecated
-bool llama_save_session_file(llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
-    return llama_state_save_file(ctx, path_session, tokens, n_token_count);
-}
 
 // Returns the *actual* size of the state.
 // Intended to be used when saving to state to a buffer.
