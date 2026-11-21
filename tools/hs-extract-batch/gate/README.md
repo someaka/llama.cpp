@@ -146,6 +146,33 @@ clean trees match it exactly (AOT or PTX-JIT). Rule: an anchor only moves
 with a written cause, and only from a fresh-build digest set — never from
 an incremental-build run.
 
+## The 2026-11-21 re-capture (current anchor)
+
+Cause: the 2026-11-15 upstream merge (4835b6a3c, upstream range
+2a4daf0e0..b54752df4) changed CUDA numerics -- e96417565 "cuda: keep
+columns in registers for cooperative softmax" (#28982) and 278a89cb7
+"CUDA/HIP: refactor the use of _sync warp primitives" (#31617). That merge
+was never gate-verified (the gate model was off disk). The committed anchor
+(s5/s6: 09-16-restored closure lineage; s7/s8/s9: 10-05 re-baseline
+7ff69888a) is therefore not reproducible from clean builds of the merged
+tree. Supersedes 7ff69888a.
+
+Differential proof (all 10 gate entries identical across the three):
+- FRESH build of the Nov15 tree 4835b6a3c (worktree llama-fork-nov15),
+- FRESH build of the merged + prune-fixed tree 82ce9de2f (worktree
+  llama-fork-anchor) -- the capture source, pre-migration,
+- the incremental production build-cuda (cache sound this time).
+
+Capture source: 82ce9de2f, fresh configure + build in llama-fork-anchor:
+`cmake -B build-cuda -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+-DLLAMA_CURL=OFF && cmake --build build-cuda -j4 --target
+llama-hs-extract-batch` (nvcc 12.4 /usr/bin/nvcc, host GNU 15.2.0, native
+sm_86, RTX 3090). Model: gemma-4-E2B-it-Q4_K_M.gguf, sha256
+740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8.
+Captured 2026-11-21 via `gate_batch.py baseline <fresh-bin>` + cp of the
+printed digest path (procedure above). The batch-ext migration check
+against this anchor: ALL_BYTE_IDENTICAL (gate-migration-20261121.log).
+
 ## What `audit_integrity.sh` is and is not
 
 It is a regression tripwire over the shape of the code that implements each
