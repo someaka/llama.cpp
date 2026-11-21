@@ -222,9 +222,10 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
 
     // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
+    // hidden-states extraction needs every token row at every layer (same reason as embeddings_layer_inp below)
     bool prune_shared = !needs_unmasked_nextn &&
                         hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
-                        !cparams.embeddings;
+                        !cparams.embeddings && !cparams.extract_hidden_states;
     for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
         prune_shared = !cparams.embeddings_layer_inp[il];
     }
