@@ -52,21 +52,26 @@ int main(int argc, char ** argv) {
     // Every failure exit below frees backend state too (completeness for a
     // smoke test; the OS would reclaim regardless).
 
-    // Build batch
-    struct llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    /* Build batch (ext API: capacity = context n_batch) */
+    struct llama_batch_ext * batch = llama_batch_ext_init(ctx);
     for (int i = 0; i < n_tokens; i++) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = 0;
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "Failed to add token %d to batch\n", i);
+            llama_batch_ext_free(batch);
+            llama_free(ctx);
+            llama_model_free(model);
+            llama_backend_free();
+            return 1;
+        }
+        const llama_pos pos = i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
     }
-    batch.logits[n_tokens - 1] = 1;
-    batch.n_tokens = n_tokens;
+    llama_batch_ext_set_output_logits(batch, n_tokens - 1, true);
 
-    if (llama_decode(ctx, batch) != 0) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
         fprintf(stderr, "Failed to decode\n");
-        llama_batch_free(batch);
+        llama_batch_ext_free(batch);
         llama_free(ctx);
         llama_model_free(model);
         llama_backend_free();
@@ -79,7 +84,7 @@ int main(int argc, char ** argv) {
 
     if (n_hidden <= 0) {
         fprintf(stderr, "ERROR: no hidden tokens extracted\n");
-        llama_batch_free(batch);
+        llama_batch_ext_free(batch);
         llama_free(ctx);
         llama_model_free(model);
         llama_backend_free();
@@ -167,7 +172,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    llama_batch_free(batch);
+    llama_batch_ext_free(batch);
     llama_free(ctx);
     llama_model_free(model);
     llama_backend_free();

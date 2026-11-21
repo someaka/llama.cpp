@@ -500,7 +500,7 @@ static constexpr int REPEAT_PENALTY_LAST_N = 64;
  */
 static bool process_prompt(
     llama_context* ctx,
-    llama_batch& batch,
+    llama_batch_ext * batch,
     float* mean_buf,
     std::vector<int32_t>& header,
     const std::vector<llama_token>& tokens,
@@ -524,19 +524,22 @@ static bool process_prompt(
         llama_memory_clear(mem, true);
     }
 
-    // Fill pre-allocated batch buffer (reused across prompts to avoid heap fragmentation)
+    // Refill the reused batch (clear keeps capacity; no per-prompt heap churn)
     // seq_id=0 (KV cache is cleared per prompt, so no collision)
+    llama_batch_ext_clear(batch);
     for (int i = 0; i < n_tokens; i++) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = 0;  // No logits needed  -  we only extract hidden states
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "Error: batch add failed for prompt %zu (idx=%d)\n", prompt_idx, idx);
+            return false;
+        }
+        const llama_pos pos = i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+        // No logits needed - we only extract hidden states (output defaults false)
     }
-    batch.n_tokens = n_tokens;
 
     // Decode
-    int ret = llama_decode(ctx, batch);
+    int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
     if (ret != 0) {
         fprintf(stderr, "Error: decode failed for prompt %zu (ret=%d)\n", prompt_idx, ret);
         return false;
@@ -847,7 +850,7 @@ static int run_raw(const Args& args) {
 
     // Pre-allocate batch and mean buffer once (avoid per-prompt heap fragmentation)
     LlamaBatch batch_wrapper;
-    batch_wrapper.init(n_ctx, 0, 1);
+    batch_wrapper.init(ctx);
     std::vector<float> mean_buf(n_embd, 0.0f);
     std::vector<int32_t> header;  // per-prompt output header (reused, written in process_prompt)
 
@@ -1023,7 +1026,7 @@ static inline void stop_producer_and_join(
 
 struct GenContext {
     LlamaContext& ctx;
-    llama_batch& batch;
+    llama_batch_ext * batch;
     const Args& args;
     const std::vector<Assignment>& assignments;
     int prompt_idx;
@@ -1038,7 +1041,7 @@ struct GenContext {
 
 static int generate_assignment(GenContext& g) {
     LlamaContext& ctx = g.ctx;
-    llama_batch& batch = g.batch;
+    llama_batch_ext * batch = g.batch;
     const Args& args = g.args;
     const auto& assignments = g.assignments;
     const int prompt_idx = g.prompt_idx;
@@ -1145,7 +1148,7 @@ static int generate_assignment(GenContext& g) {
     llama_sampler * sampler = sampler_owner;  // raw view used by the loop below
 
     for (int gen_step = 0; gen_step < args.generate_tokens; gen_step++) {
-        // KV-cache bounds check: cur_pos must stay < n_ctx or llama_decode
+        // KV-cache bounds check: cur_pos must stay < n_ctx or llama_process
         // writes/reads OOB KV state, the exact fault class that hard-locks
         // the GPU. Without this, a long prompt + large --generate (or a model
         // that never emits EOS) overruns the context window.
@@ -1190,14 +1193,20 @@ static int generate_assignment(GenContext& g) {
         }
 
         // Decode single generated token with logits enabled for next step
-        batch.n_tokens = 1;
-        batch.token[0] = next_token;
-        batch.pos[0] = cur_pos;
-        batch.n_seq_id[0] = 1;
-        batch.seq_id[0][0] = 0;
-        batch.logits[0] = (gen_step < args.generate_tokens - 1) ? 1 : 0;
+        llama_batch_ext_clear(batch);
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, next_token);
+        if (idx < 0) {
+            fprintf(stderr, "Error: generation batch add failed at step %d for prompt %d (idx=%d)\n",
+                    gen_step, prompt_idx, idx);
+            return 1;
+        }
+        const llama_pos pos = cur_pos;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+        if (gen_step < args.generate_tokens - 1) {
+            llama_batch_ext_set_output_logits(batch, idx, true);
+        }
 
-        ret = llama_decode(ctx, batch);
+        ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
         if (ret != 0) {
             fprintf(stderr, "Error: generation decode failed at step %d for prompt %d (ret=%d)\n",
                     gen_step, prompt_idx, ret);
@@ -1441,14 +1450,14 @@ static int run_batch(const Args& args) {
     std::vector<std::pair<int,int>> ranges_buf;   // reused buffer for token ranges
     std::vector<float*> layer_ptrs(target_layers.size());  // Phase 2: reused buffer for layer pointers
 
-    // Pre-allocate a reusable batch buffer sized to n_ctx.
-    // Allocating/freeing a llama_batch on every prompt iteration caused
+    // Pre-allocate a reusable batch bound to the context (capacity n_batch =
+    // n_ctx). Allocating/freeing a batch on every prompt iteration caused
     // heap fragmentation over 90K+ iterations, eventually triggering glibc
-    // "corrupted size vs. prev_size" aborts. By allocating once and reusing,
-    // we eliminate all per-prompt heap churn from the batch structure.
+    // "corrupted size vs. prev_size" aborts. By allocating once and reusing
+    // (clear keeps capacity), we eliminate all per-prompt heap churn.
     LlamaBatch batch_wrapper;
-    batch_wrapper.init(n_ctx, 0, 1);
-    llama_batch& batch = batch_wrapper.batch;
+    batch_wrapper.init(ctx);
+    llama_batch_ext * batch = batch_wrapper.batch;
 
     // --resume + --save-per-record would silently truncate the sidecar:
     // resumed-over prompts (< skip_count) are skipped WITHOUT emitting their
@@ -1754,21 +1763,27 @@ static int run_batch(const Args& args) {
 
         auto t_kv_end = std::chrono::steady_clock::now();
 
-        // Fill pre-allocated batch buffer
+        // Refill the reused batch (clear keeps capacity)
         int n_tokens = (int)tokens.size();
+        llama_batch_ext_clear(batch);
         for (int i = 0; i < n_tokens; i++) {
-            batch.token[i] = tokens[i];
-            batch.pos[i] = i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i] = (args.generate_tokens > 0 && i == n_tokens - 1) ? 1 : 0;
+            const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+            if (idx < 0) {
+                fprintf(stderr, "Error: batch add failed for prompt %d (idx=%d)\n", pp.prompt_idx, idx);
+                stop_producer_and_join(pfq, producer_thread, records_temp_path);
+                return 1;
+            }
+            const llama_pos pos = i;
+            llama_batch_ext_set_pos(batch, idx, &pos);
             // In generation mode, enable logits on last prompt token for sampling
+            if (args.generate_tokens > 0 && i == n_tokens - 1) {
+                llama_batch_ext_set_output_logits(batch, idx, true);
+            }
         }
-        batch.n_tokens = n_tokens;
 
         // Decode (prefill)
         auto t_decode_start = std::chrono::steady_clock::now();
-        int ret = llama_decode(ctx, batch);
+        int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
         if (ret != 0) {
             // B6: name the prompt by its OWN index (pp.prompt_idx), matching
             // every neighboring diagnostic - the bare consumer counter is

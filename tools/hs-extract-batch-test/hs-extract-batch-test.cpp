@@ -46,7 +46,7 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
         cparams.extract_hidden_states = true;
     }
     cparams.no_perf = true;
-    // Logits are controlled at decode time (llama_batch logits flags), not at
+    // Logits are controlled at decode time (llama_batch_ext output flags), not at
     // context creation; both styles leave them off by the same route.
 
     llama_context * ctx = llama_init_from_model(model, cparams);
@@ -66,11 +66,25 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
             warmup_tokens.push_back(eos);
         }
         if (!warmup_tokens.empty()) {
-            llama_batch wb = llama_batch_get_one(warmup_tokens.data(), warmup_tokens.size());
-            if (llama_decode(ctx, wb) != 0) {
+            llama_batch_ext * wb = llama_batch_ext_init(ctx);
+            for (size_t i = 0; i < warmup_tokens.size(); i++) {
+                const int32_t idx = llama_batch_ext_add_token(wb, 0, warmup_tokens[i]);
+                if (idx < 0) {
+                    fprintf(stderr, "Error: warmup batch add failed\n");
+                    llama_batch_ext_free(wb);
+                    exit(1);
+                }
+                const llama_pos pos = (llama_pos) i;
+                llama_batch_ext_set_pos(wb, idx, &pos);
+            }
+            // get_one's compat path marked only the last token as output
+            llama_batch_ext_set_output_logits(wb, (int32_t) warmup_tokens.size() - 1, true);
+            if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, wb) != 0) {
                 fprintf(stderr, "Error: warmup decode failed\n");
+                llama_batch_ext_free(wb);
                 exit(1);
             }
+            llama_batch_ext_free(wb);
             llama_synchronize(ctx);
         }
         if (llama_set_extract_hidden_states(ctx, true) != 0) {
@@ -83,11 +97,25 @@ std::vector<float> run_and_capture(llama_model * model, const llama_vocab * voca
         llama_perf_context_reset(ctx);
     }
 
-    llama_batch batch = llama_batch_get_one(const_cast<llama_token *>(tokens.data()), tokens.size());
-    if (llama_decode(ctx, batch) != 0) {
+    llama_batch_ext * batch = llama_batch_ext_init(ctx);
+    for (size_t i = 0; i < tokens.size(); i++) {
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "Error: batch add failed (%s style)\n", server_style ? "server" : "cli");
+            llama_batch_ext_free(batch);
+            exit(1);
+        }
+        const llama_pos pos = (llama_pos) i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+    }
+    // get_one's compat path marked only the last token as output
+    llama_batch_ext_set_output_logits(batch, (int32_t) tokens.size() - 1, true);
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
         fprintf(stderr, "Error: decode failed (%s style)\n", server_style ? "server" : "cli");
+        llama_batch_ext_free(batch);
         exit(1);
     }
+    llama_batch_ext_free(batch);
     llama_synchronize(ctx);
 
     // Layer is chosen by main (mid-ladder 10, clamped to the model's top

@@ -325,10 +325,24 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
-    int32_t decode_result = llama_decode(ctx, batch);
+    LlamaBatch batch_wrapper;
+    batch_wrapper.init(ctx);
+    llama_batch_ext * batch = batch_wrapper.batch;
+    llama_batch_ext_clear(batch);
+    for (int32_t i = 0; i < (int32_t) tokens.size(); i++) {
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "Error: batch add failed at token %d (idx=%d)\n", i, idx);
+            return 1;
+        }
+        const llama_pos pos = i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+    }
+    // get_one's compat path marked only the last token as output; keep that
+    llama_batch_ext_set_output_logits(batch, (int32_t) tokens.size() - 1, true);
+    int32_t decode_result = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
     if (decode_result != 0) {
-        fprintf(stderr, "Error: llama_decode failed with code %d\n", decode_result);
+        fprintf(stderr, "Error: llama_process failed with code %d\n", decode_result);
         return 1;
     }
 

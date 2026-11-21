@@ -40,8 +40,8 @@ uses `%.9g`.)
 
 ## Code Structure
 
-Pseudocode -- the real example builds a manual batch with the llama-raii
-wrapper (see hidden-states.cpp); `llama_batch_get_one` is not used there.
+Pseudocode -- the real example fills a `llama_batch_ext` through the
+llama-raii wrapper (see hidden-states.cpp).
 
 ```cpp
 // 1. Load model
@@ -52,9 +52,17 @@ llama_context_params ctx_params = llama_context_default_params();
 ctx_params.extract_hidden_states = true;
 llama_context* ctx = llama_init_from_model(model, ctx_params);
 
-// 3. Tokenize and run forward pass
+// 3. Tokenize and run forward pass (ext batch: explicit positions, seq 0)
 std::vector<llama_token> tokens = tokenize(ctx, prompt);
-llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()));
+llama_batch_ext* batch = llama_batch_ext_init(ctx);  // capacity = ctx n_batch
+for (size_t i = 0; i < tokens.size(); i++) {
+    int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+    llama_pos pos = (llama_pos) i;
+    llama_batch_ext_set_pos(batch, idx, &pos);
+}
+llama_batch_ext_set_output_logits(batch, tokens.size() - 1, true);
+llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
+llama_batch_ext_free(batch);  // free before the context
 
 // 4. Extract hidden states from each layer
 //    (the getters synchronize the context themselves; no explicit sync needed)

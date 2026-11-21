@@ -48,18 +48,22 @@ int main(int argc, char ** argv) {
     printf("Tokens: %d\n", n_tokens);
 
     LlamaBatch batch_wrapper;
-    batch_wrapper.init(tokens.size(), 0, 1);
-    llama_batch & batch = batch_wrapper.batch;
+    batch_wrapper.init(ctx);
+    llama_batch_ext * batch = batch_wrapper.batch;
     for (size_t i = 0; i < tokens.size(); i++) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = (llama_pos) i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == tokens.size() - 1) ? 1 : 0;
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "%s: failed to add token %zu to batch\n", __func__, i);
+            return 1;
+        }
+        const llama_pos pos = (llama_pos) i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+        if (i == tokens.size() - 1) {
+            llama_batch_ext_set_output_logits(batch, idx, true);
+        }
     }
-    batch.n_tokens = tokens.size();
 
-    if (llama_decode(ctx, batch) != 0) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
         fprintf(stderr, "%s: failed to decode\n", __func__);
         return 1;
     }

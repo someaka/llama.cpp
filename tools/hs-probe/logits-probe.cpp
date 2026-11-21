@@ -39,19 +39,24 @@ struct ProbeResult {
 ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
                        const std::vector<llama_token> & toks) {
     const int n = (int) toks.size();
-    llama_batch batch = llama_batch_init(n, 0, 1);
+    llama_batch_ext * batch = llama_batch_ext_init(ctx);
     for (int i = 0; i < n; ++i) {
-        batch.token[i]    = toks[i];
-        batch.pos[i]      = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i]   = (i == n - 1);
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, toks[i]);
+        if (idx < 0) {
+            fprintf(stderr, "Error: batch add failed (n=%d, i=%d)\n", n, i);
+            llama_batch_ext_free(batch);
+            return {};
+        }
+        const llama_pos pos = i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+        if (i == n - 1) {
+            llama_batch_ext_set_output_logits(batch, idx, true);
+        }
     }
-    batch.n_tokens = n;
     fprintf(stderr, "probe: decode begin (n=%d)\n", n);
-    if (llama_decode(ctx, batch)) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch)) {
         fprintf(stderr, "Error: decode failed (n=%d)\n", n);
-        llama_batch_free(batch);
+        llama_batch_ext_free(batch);
         return {};
     }
     fprintf(stderr, "probe: decode ok, reading logits\n");
@@ -63,7 +68,7 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     const float * logits = llama_get_logits_ith(ctx, n - 1);
     if (!logits) {
         fprintf(stderr, "Error: no logits returned for batch token %d\n", n - 1);
-        llama_batch_free(batch);
+        llama_batch_ext_free(batch);
         return {};
     }
     const int n_vocab = llama_vocab_n_tokens(vocab);
@@ -86,7 +91,7 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     fflush(stdout);
     for (size_t k = 0; k < top_k; ++k) fprintf(stderr, "  top%zu: tok=%zu logit=%.6f\n", k+1, idx[k], lg[idx[k]]);
 
-    llama_batch_free(batch);
+    llama_batch_ext_free(batch);
     return r;
 }
 

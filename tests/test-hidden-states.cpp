@@ -60,22 +60,26 @@ int main(int argc, char ** argv) {
 
     printf("Tokenized '%s' -> %d tokens\n", prompt, n_tokens);
 
-    // Decode using llama_batch_init (modern API)
+    // Decode using the ext batch API (capacity = context n_batch)
     LlamaBatch batch_wrapper;
-    batch_wrapper.init(n_tokens, 0, 1);
-    llama_batch & batch = batch_wrapper.batch;
+    batch_wrapper.init(ctx);
+    llama_batch_ext * batch = batch_wrapper.batch;
     for (int i = 0; i < n_tokens; i++) {
-        batch.token[i]    = tokens[i];
-        batch.pos[i]      = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i]   = (i == n_tokens - 1) ? 1 : 0;
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        if (idx < 0) {
+            fprintf(stderr, "batch add failed at token %d (idx=%d)\n", i, idx);
+            return 1;
+        }
+        const llama_pos pos = i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+        if (i == n_tokens - 1) {
+            llama_batch_ext_set_output_logits(batch, idx, true);
+        }
     }
-    batch.n_tokens = n_tokens;
 
-    int ret = llama_decode(ctx, batch);
+    int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
     if (ret != 0) {
-        fprintf(stderr, "llama_decode failed with %d\n", ret);
+        fprintf(stderr, "llama_process failed with %d\n", ret);
         return 1;
     }
 
@@ -175,18 +179,23 @@ int main(int argc, char ** argv) {
         // consecutive per sequence, so restart the sequence at 0).
         llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
         LlamaBatch fbatch_wrapper;
-        fbatch_wrapper.init(200, 0, 1);
-        llama_batch & fbatch = fbatch_wrapper.batch;
+        fbatch_wrapper.init(ctx);
+        llama_batch_ext * fbatch = fbatch_wrapper.batch;
         for (int b = 0; b < 3; b++) {
+            llama_batch_ext_clear(fbatch);
             for (int i = 0; i < 200; i++) {
-                fbatch.token[i]    = tokens[i % n_tokens];
-                fbatch.pos[i]      = b * 200 + i;
-                fbatch.n_seq_id[i] = 1;
-                fbatch.seq_id[i][0] = 0;
-                fbatch.logits[i]   = (i == 199) ? 1 : 0;  // upstream requires >=1 output per decode
+                const int32_t idx = llama_batch_ext_add_token(fbatch, 0, tokens[i % n_tokens]);
+                if (idx < 0) {
+                    fprintf(stderr, "FAIL: filler batch add failed (b=%d, i=%d, idx=%d)\n", b, i, idx);
+                    return 1;
+                }
+                const llama_pos pos = b * 200 + i;
+                llama_batch_ext_set_pos(fbatch, idx, &pos);
+                if (i == 199) {
+                    llama_batch_ext_set_output_logits(fbatch, idx, true);  // upstream requires >=1 output per decode
+                }
             }
-            fbatch.n_tokens = 200;
-            int fret = llama_decode(ctx, fbatch);
+            int fret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, fbatch);
             if (b < 2) {
                 if (fret != 0) {
                     fprintf(stderr, "FAIL: filler decode %d unexpectedly failed with %d\n", b + 1, fret);
@@ -212,11 +221,20 @@ int main(int argc, char ** argv) {
 
                 // Recovery: a subsequent good decode re-populates the capture.
                 llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);  // fresh positions (fillers used 0..599)
-                batch.n_tokens = n_tokens;
+                llama_batch_ext_clear(batch);
                 for (int i = 0; i < n_tokens; i++) {
-                    batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
+                    const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+                    if (idx < 0) {
+                        fprintf(stderr, "FAIL: recovery batch add failed at token %d\n", i);
+                        return 1;
+                    }
+                    const llama_pos pos = i;
+                    llama_batch_ext_set_pos(batch, idx, &pos);
+                    if (i == n_tokens - 1) {
+                        llama_batch_ext_set_output_logits(batch, idx, true);
+                    }
                 }
-                if (llama_decode(ctx, batch) != 0) {
+                if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
                     fprintf(stderr, "FAIL: recovery decode failed\n");
                     return 1;
                 }
@@ -247,17 +265,21 @@ int main(int argc, char ** argv) {
             return 1;
         }
         LlamaBatch batch2_wrapper;
-        batch2_wrapper.init(n_tokens, 0, 1);
-        llama_batch & batch2 = batch2_wrapper.batch;
+        batch2_wrapper.init(ctx2);
+        llama_batch_ext * batch2 = batch2_wrapper.batch;
         for (int i = 0; i < n_tokens; i++) {
-            batch2.token[i]    = tokens[i];
-            batch2.pos[i]      = i;
-            batch2.n_seq_id[i] = 1;
-            batch2.seq_id[i][0] = 0;
-            batch2.logits[i]   = (i == n_tokens - 1) ? 1 : 0;
+            const int32_t idx = llama_batch_ext_add_token(batch2, 0, tokens[i]);
+            if (idx < 0) {
+                fprintf(stderr, "FAIL: multi-ubatch batch add failed at token %d\n", i);
+                return 1;
+            }
+            const llama_pos pos = i;
+            llama_batch_ext_set_pos(batch2, idx, &pos);
+            if (i == n_tokens - 1) {
+                llama_batch_ext_set_output_logits(batch2, idx, true);
+            }
         }
-        batch2.n_tokens = n_tokens;
-        if (llama_decode(ctx2, batch2) != 0) {
+        if (llama_process(ctx2, LLAMA_PROCESS_TYPE_DECODE, batch2) != 0) {
             fprintf(stderr, "FAIL: multi-ubatch decode failed\n");
             return 1;
         }

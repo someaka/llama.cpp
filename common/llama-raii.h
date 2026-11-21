@@ -10,9 +10,10 @@
 //   LlamaBackend backend;          // calls llama_backend_init()
 //   LlamaModel model(...);          // owns llama_model*
 //   LlamaContext ctx(...);          // owns llama_context*
-//   LlamaBatch batch;               // owns llama_batch (call .init() first;
-//                                   // a second init() frees the previous
-//                                   // batch before re-initializing)
+//   LlamaBatch batch;               // owns llama_batch_ext (call .init(ctx)
+//                                   // first; capacity is the context's
+//                                   // n_batch; a second init() frees the
+//                                   // previous batch; destroy before the ctx)
 //
 // All resources are automatically freed on scope exit. Copy is disabled;
 // move is allowed only where stated above.
@@ -61,19 +62,19 @@ struct LlamaContext {
 };
 
 struct LlamaBatch {
-    llama_batch batch;
+    llama_batch_ext * batch;
     bool initialized;
-    LlamaBatch() : batch{}, initialized(false) {}
-    void init(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
+    LlamaBatch() : batch(nullptr), initialized(false) {}
+    void init(llama_context * ctx) {
         // Free a previously initialized batch before re-init so a second
         // init() on the same object cannot leak the old allocation.
         if (initialized) {
-            llama_batch_free(batch);
+            llama_batch_ext_free(batch);
         }
-        batch = llama_batch_init(n_tokens, embd, n_seq_max);
+        batch = llama_batch_ext_init(ctx);
         initialized = true;
     }
-    ~LlamaBatch() { if (initialized) llama_batch_free(batch); }
+    ~LlamaBatch() { if (initialized) llama_batch_ext_free(batch); }
     LlamaBatch(const LlamaBatch &) = delete;
     LlamaBatch & operator=(const LlamaBatch &) = delete;
     LlamaBatch(LlamaBatch &&) = delete;
