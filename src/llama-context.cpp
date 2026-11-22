@@ -1249,6 +1249,12 @@ float * llama_context::get_hidden_state(int32_t layer) {
         return nullptr;
     }
 
+    // Slots excluded by llama_set_hidden_state_layers were never captured.
+    if (!cparams.hidden_state_layers.empty() &&
+        std::find(cparams.hidden_state_layers.begin(), cparams.hidden_state_layers.end(), layer) == cparams.hidden_state_layers.end()) {
+        return nullptr;
+    }
+
     if (hidden_state_buf.empty() || n_hidden_tokens == 0) {
         return nullptr;
     }
@@ -1769,7 +1775,41 @@ void llama_context::set_extract_hidden_states(bool value) {
     if (!value) {
         hidden_state_buf.clear();
         hidden_state_buf.shrink_to_fit();
+        cparams.hidden_state_layers.clear();
     }
+}
+
+void llama_context::set_hidden_state_layers(const int32_t * layers, int32_t n_layers) {
+    LLAMA_LOG_DEBUG("%s: n_layers = %d\n", __func__, n_layers);
+
+    std::vector<int32_t> sel;
+    if (n_layers > 0) {
+        if (layers == nullptr) {
+            throw std::runtime_error("hidden-state layer selection: null layer array");
+        }
+        const int32_t n_slots = (int32_t) model.hparams.n_layer() + 1;
+        sel.reserve((size_t) n_layers);
+        for (int32_t i = 0; i < n_layers; i++) {
+            if (layers[i] < 0 || layers[i] >= n_slots) {
+                throw std::runtime_error("hidden-state layer selection: slot " + std::to_string(layers[i])
+                                         + " out of range [0, " + std::to_string(n_slots) + ")");
+            }
+            sel.push_back(layers[i]);
+        }
+        std::sort(sel.begin(), sel.end());
+        sel.erase(std::unique(sel.begin(), sel.end()), sel.end());
+    }
+
+    if (sel == cparams.hidden_state_layers) {
+        return;
+    }
+
+    cparams.hidden_state_layers = std::move(sel);
+
+    // The mask changes which tensors are graph outputs: re-reserve compute
+    // buffers, and invalidate stale capture data from the previous selection.
+    sched_need_reserve = true;
+    n_hidden_tokens = 0;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -2434,8 +2474,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             hidden_state_buf.resize(total_size);
         } catch (const std::exception & err) {
             LLAMA_LOG_ERROR("%s: failed to allocate hidden-state capture buffer "
-                            "(%zu slots x %d tokens x %u embd): %s\n",
-                            __func__, total_size, n_tokens_all, n_embd_out, err.what());
+                            "(%zu floats = %d slots x %d tokens x %u embd): %s\n",
+                            __func__, total_size, n_slots, n_tokens_all, n_embd_out, err.what());
             n_hidden_tokens = 0;
             return -1;
         }
@@ -2692,12 +2732,26 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
                     if (t == nullptr) {
+                        // A null slot is legal only when a requested-layer
+                        // mask excludes it; otherwise the graph builder broke
+                        // its contract.
+                        if (!cparams.hidden_state_layers.empty() &&
+                            std::find(cparams.hidden_state_layers.begin(), cparams.hidden_state_layers.end(), il) == cparams.hidden_state_layers.end()) {
+                            continue;
+                        }
                         LLAMA_LOG_ERROR("%s: t_hidden_layers[%d] is null - graph builder "
                                         "failed to populate layer %d\n", __func__, il, il);
                         n_hidden_tokens = 0;
                         return -1;
                     }
-                    if (il == 0) {
+                    // Width and dtype are part of the builder contract too:
+                    // a short/narrow tensor would die inside ggml with a
+                    // generic out-of-bounds assert, a wider f32 tensor would
+                    // silently mis-copy into the ladder.
+                    GGML_ASSERT(t->type == GGML_TYPE_F32 &&
+                                (uint32_t) t->ne[0] == n_embd_out &&
+                                "hidden state tensor shape/dtype mismatch");
+                    if (n_tokens == 0) {
                         n_tokens = (uint32_t) t->ne[1];
                     } else {
                         GGML_ASSERT((uint32_t) t->ne[1] == n_tokens &&
@@ -2727,7 +2781,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 // Byte arithmetic in size_t: offsets can exceed INT32_MAX.
                 for (int32_t il = 0; il < n_layers; il++) {
                     auto * t = hres->t_hidden_layers[il];
-                    GGML_ASSERT(t != nullptr);
+                    if (t == nullptr) {
+                        continue;  // unrequested slot (masked); validated above
+                    }
                     ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
                     GGML_ASSERT(backend_res != nullptr);
 
@@ -4917,6 +4973,17 @@ int32_t llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden
         return 0;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to set hidden-state extraction: %s\n", __func__, err.what());
+        return -1;
+    }
+}
+
+int32_t llama_set_hidden_state_layers(llama_context * ctx, const int32_t * layers, int32_t n_layers) {
+    // Same exception-to-return-code contract as the toggle above.
+    try {
+        ctx->set_hidden_state_layers(layers, n_layers);
+        return 0;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to set hidden-state layers: %s\n", __func__, err.what());
         return -1;
     }
 }

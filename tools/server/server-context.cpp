@@ -3677,6 +3677,29 @@ private:
                 }
                 return;
             }
+            if (slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES &&
+                !slot_batched->task->params.hidden_all_layers &&
+                !slot_batched->task->params.hidden_layers.empty()) {
+                // Per-request layer mask: capture only the requested slots
+                // (no graph output / D2H copy for the rest). HS tasks decode
+                // alone (can_batch_with), so the mask is task-scoped; the
+                // toggle-off paths clear it. The route already range-checked
+                // the indices; a refusal here is defensive.
+                const std::vector<int32_t> hs_sel(slot_batched->task->params.hidden_layers.begin(),
+                                                  slot_batched->task->params.hidden_layers.end());
+                if (llama_set_hidden_state_layers(ctx_tgt, hs_sel.data(), (int32_t) hs_sel.size()) != 0) {
+                    send_error(*slot_batched->task,
+                               "hidden-state layer selection refused (see server log)",
+                               ERROR_TYPE_SERVER);
+                    llama_set_extract_hidden_states(ctx_tgt, false);
+                    for (auto & slot : slots) {
+                        if (slot.is_processing() && slot.task->id == slot_batched->task->id) {
+                            slot.release();
+                        }
+                    }
+                    return;
+                }
+            }
             if (slot_batched->task->type != SERVER_TASK_TYPE_HIDDEN_STATES) {
                 llama_set_extract_hidden_states(ctx_tgt, false);
             }
@@ -4849,14 +4872,24 @@ private:
                 // Release the capture buffer: send_hidden_states (success path)
                 // never runs for this task, so its hs_toggle_reset cannot fire.
                 llama_set_extract_hidden_states(ctx_tgt, false);
+                // Full cleanup like the hard-error path below: the batch may
+                // carry non-HS slots too, and a truncated batch must not leave
+                // any slot with advanced-but-undecoded prompt state.
                 for (auto & slot : slots) {
-                    if (slot.is_processing() && slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                    if (slot.is_processing()) {
                         send_error(slot, hs_err);
                         slot.release();
                         slot.prompt_clear();
                     }
                 }
-                throw std::runtime_error(hs_err);
+                // Drop the batch and report "handled". Throwing here unwound
+                // through main (nothing catches below update_slots) and
+                // terminated the whole server on a retryable failure class;
+                // returning false would retry a batch whose slots are gone.
+                // The empty batch ends the caller's off-loop; the errored
+                // tasks ship their queued send_error responses.
+                batch.truncate(0);
+                return true;
             }
             if (!try_clear_idle_slots()) {
                 n_batch /= 2;

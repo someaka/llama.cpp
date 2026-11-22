@@ -957,6 +957,7 @@ struct llm_graph_params {
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
             cparams.extract_hidden_states   == other.cparams.extract_hidden_states   &&
+            cparams.hidden_state_layers     == other.cparams.hidden_state_layers     &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
             layer_inp_dev == other.layer_inp_dev &&
             layer_inp_src == other.layer_inp_src &&

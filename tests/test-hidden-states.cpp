@@ -192,7 +192,7 @@ int main(int argc, char ** argv) {
                 const llama_pos pos = b * 200 + i;
                 llama_batch_ext_set_pos(fbatch, idx, &pos);
                 if (i == 199) {
-                    llama_batch_ext_set_output_logits(fbatch, idx, true);  // upstream requires >=1 output per decode
+                    llama_batch_ext_set_output_logits(fbatch, idx, true);  // mark an output row to mirror typical usage; not required by the ext API
                 }
             }
             int fret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, fbatch);
@@ -247,6 +247,106 @@ int main(int argc, char ** argv) {
                 break;
             }
         }
+    }
+
+    // Toggle-off contract (fork API): disabling extraction clears the
+    // capture state; getters return NULL/0 until a re-enabled decode
+    // repopulates them. Then the requested-layer mask: only selected slots
+    // are captured, unrequested getters return NULL, and selected values are
+    // byte-identical to the full-ladder capture.
+    {
+        auto refill = [&]() {
+            llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
+            llama_batch_ext_clear(batch);
+            for (int i = 0; i < n_tokens; i++) {
+                const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+                if (idx < 0) {
+                    fprintf(stderr, "FAIL: batch add failed at token %d\n", i);
+                    return false;
+                }
+                const llama_pos pos = i;
+                llama_batch_ext_set_pos(batch, idx, &pos);
+                if (i == n_tokens - 1) {
+                    llama_batch_ext_set_output_logits(batch, idx, true);
+                }
+            }
+            if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
+                fprintf(stderr, "FAIL: decode failed\n");
+                return false;
+            }
+            llama_synchronize(ctx);
+            return true;
+        };
+
+        if (llama_set_extract_hidden_states(ctx, false) != 0) {
+            fprintf(stderr, "FAIL: toggle-off returned non-zero\n");
+            return 1;
+        }
+        if (llama_get_hidden_state_n_tokens(ctx) != 0 ||
+            llama_get_hidden_state(ctx, 0) != NULL ||
+            llama_get_hidden_state(ctx, n_layer) != NULL) {
+            fprintf(stderr, "FAIL: toggle-off left stale capture state\n");
+            return 1;
+        }
+        printf("PASS: Toggle-off clears capture state (getters NULL/0).\n");
+
+        if (llama_set_extract_hidden_states(ctx, true) != 0) {
+            fprintf(stderr, "FAIL: re-enable returned non-zero\n");
+            return 1;
+        }
+        if (!refill()) return 1;
+        if (llama_get_hidden_state_n_tokens(ctx) != n_tokens || llama_get_hidden_state(ctx, 0) == NULL) {
+            fprintf(stderr, "FAIL: capture not live after re-enable\n");
+            return 1;
+        }
+        printf("PASS: Re-enable restores capture (%d tokens).\n", n_tokens);
+
+        // Full-ladder reference for slots 0 and 2 (fixture has >= 3 slots).
+        std::vector<float> ref0(n_embd), ref2(n_embd);
+        memcpy(ref0.data(), llama_get_hidden_state(ctx, 0), (size_t) n_embd * sizeof(float));
+        memcpy(ref2.data(), llama_get_hidden_state(ctx, 2), (size_t) n_embd * sizeof(float));
+
+        const int32_t sel[2] = {0, 2};
+        if (llama_set_hidden_state_layers(ctx, sel, 2) != 0) {
+            fprintf(stderr, "FAIL: layer selection returned non-zero\n");
+            return 1;
+        }
+        if (!refill()) return 1;
+        float * m0 = llama_get_hidden_state(ctx, 0);
+        float * m2 = llama_get_hidden_state(ctx, 2);
+        if (llama_get_hidden_state_n_tokens(ctx) != n_tokens || m0 == NULL || m2 == NULL ||
+            llama_get_hidden_state(ctx, 1) != NULL || llama_get_hidden_state(ctx, n_layer) != NULL) {
+            fprintf(stderr, "FAIL: mask did not restrict capture to slots {0, 2}\n");
+            return 1;
+        }
+        if (memcmp(ref0.data(), m0, (size_t) n_embd * sizeof(float)) != 0 ||
+            memcmp(ref2.data(), m2, (size_t) n_embd * sizeof(float)) != 0) {
+            fprintf(stderr, "FAIL: masked capture values differ from full-ladder capture\n");
+            return 1;
+        }
+        printf("PASS: Requested-layer mask captures only {0, 2}, values byte-identical.\n");
+
+        // Invalid selection is refused with -1, context unchanged.
+        const int32_t bad[1] = {n_layer + 1};
+        if (llama_set_hidden_state_layers(ctx, bad, 1) != -1) {
+            fprintf(stderr, "FAIL: out-of-range layer selection was not refused\n");
+            return 1;
+        }
+        if (llama_get_hidden_state(ctx, 0) == NULL) {
+            fprintf(stderr, "FAIL: refused selection changed capture state\n");
+            return 1;
+        }
+        // Clearing the mask restores the full ladder.
+        if (llama_set_hidden_state_layers(ctx, NULL, 0) != 0) {
+            fprintf(stderr, "FAIL: clearing the layer selection returned non-zero\n");
+            return 1;
+        }
+        if (!refill()) return 1;
+        if (llama_get_hidden_state(ctx, 1) == NULL || llama_get_hidden_state(ctx, n_layer) == NULL) {
+            fprintf(stderr, "FAIL: clearing the mask did not restore the full ladder\n");
+            return 1;
+        }
+        printf("PASS: Mask refusal (-1) and clear-to-full-ladder contract.\n");
     }
 
     // HS-6a: multi-ubatch accumulation. Same prompt decoded with
@@ -325,6 +425,47 @@ int main(int argc, char ** argv) {
             return 1;
         }
         printf("Supports hidden states: %s (arch: %s)\n", supported ? "true" : "false", arch_name);
+    }
+
+    // Refusal contract (optional second argument: a loadable GGUF whose arch
+    // is NOT in the capability registry, e.g. models/hs-refusal-fixture.gguf
+    // generated by tests/gen-refusal-fixture.py). Creation with extraction on
+    // must fail cleanly; the runtime toggle must return -1 and leave the
+    // context functional.
+    if (argc > 2) {
+        llama_model_params rp = llama_model_default_params();
+        rp.n_gpu_layers = 0;
+        LlamaModel rmodel(llama_model_load_from_file(argv[2], rp));
+        if (!rmodel) {
+            fprintf(stderr, "FAIL: refusal fixture '%s' failed to load\n", argv[2]);
+            return 1;
+        }
+        llama_context_params rc = llama_context_default_params();
+        rc.n_ctx = 64;
+        rc.n_batch = 64;
+        rc.n_ubatch = 64;
+        rc.extract_hidden_states = true;
+        llama_context * rctx_bad = llama_init_from_model(rmodel, rc);
+        if (rctx_bad != NULL) {
+            fprintf(stderr, "FAIL: creation with extraction on a non-registry arch was not refused\n");
+            llama_free(rctx_bad);
+            return 1;
+        }
+        rc.extract_hidden_states = false;
+        LlamaContext rctx(llama_init_from_model(rmodel, rc));
+        if (!rctx) {
+            fprintf(stderr, "FAIL: plain context on the refusal fixture failed\n");
+            return 1;
+        }
+        if (llama_set_extract_hidden_states(rctx, true) != -1) {
+            fprintf(stderr, "FAIL: runtime toggle on a non-registry arch did not return -1\n");
+            return 1;
+        }
+        if (llama_get_hidden_state_n_tokens(rctx) != 0 || llama_get_hidden_state(rctx, 0) != NULL) {
+            fprintf(stderr, "FAIL: refused toggle left capture state behind\n");
+            return 1;
+        }
+        printf("PASS: Non-registry arch refused at creation and at toggle (-1), context unchanged.\n");
     }
 
     // Show some values from layer 0

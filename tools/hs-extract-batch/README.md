@@ -199,6 +199,12 @@ llama-hs-extract-batch model.gguf prompts.txt all output.bin \
 ```
 
 If interrupted, re-run with `--resume` to continue from the last checkpoint.
+Checkpoints (format v7) bind the run to the model file (full-content FNV-1a-64
++ byte size + n_embd + n_layer), `--no-bos`, and the sampling flags
+(`--temperature/--top-k/--top-p/--repeat-penalty`): `--resume` refuses a
+checkpoint written against a different model or different value-affecting
+flags instead of silently merging incompatible accumulators. Pre-v7
+checkpoints resume with a warning (no model/flag binding).
 Note: `--resume` is refused when `--save-per-record` is set, so a run killed
 mid-write leaves a `.records.bin.tmp` sidecar with a trailing partial record; readers
 must trim to the record boundary (a 2026-07-22 killed run left an e2b

@@ -95,7 +95,8 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
     return r;
 }
 
-// exact top-8 comparison with a ULP-scaled tolerance; prints the verdict.
+// exact top-K comparison (K = min(8, n_vocab), passed as expect) with a
+// ULP-scaled tolerance; prints the verdict.
 // Tolerance is max(1e-6, 4 ULP of the compared magnitude): the plain and
 // extract graphs are structurally different, and since the upstream graph
 // rework (mixed-batch inputs, SET_ROWS cache paths, sync 2026-10-05) their
@@ -106,8 +107,8 @@ ProbeResult probe_once(llama_context * ctx, const llama_vocab * vocab,
 // still fails. Size-safe: an empty (failed-decode) result never indexes
 // the vector, and mismatches on size or sentinel argmax report the cause
 // instead of UB.
-bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & extract) {
-    if (plain.top8.size() != 8 || extract.top8.size() != 8 ||
+bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & extract, size_t expect) {
+    if (expect == 0 || plain.top8.size() != expect || extract.top8.size() != expect ||
         plain.argmax < 0 || extract.argmax < 0) {
         printf("%s: MISMATCH (probe failure: plain argmax=%d top8=%zu, extract argmax=%d top8=%zu)\n",
                tag, plain.argmax, plain.top8.size(), extract.argmax, extract.top8.size());
@@ -117,7 +118,7 @@ bool compare(const char * tag, const ProbeResult & plain, const ProbeResult & ex
     bool same = plain.argmax == extract.argmax;
     const bool argmax_ok = same;
     float max_delta = 0.0f;
-    for (int k = 0; k < 8; ++k) {
+    for (size_t k = 0; k < expect; ++k) {
         const float d = std::fabs(plain.top8[k] - extract.top8[k]);
         if (d > max_delta) max_delta = d;
         const float magnitude = std::fmax(std::fabs(plain.top8[k]), std::fabs(extract.top8[k]));
@@ -166,16 +167,22 @@ int main(int argc, char ** argv) {
     mparams.n_gpu_layers = 0;
     llama_model * model = llama_model_load_from_file(model_path, mparams);
     if (!model) { fprintf(stderr, "Error: failed to load model '%s'\n", model_path); return 1; }
+    // Error paths past this point own the model and backend; free both before
+    // exiting (the fork's other tools use RAII for this; probe stays raw C).
+    auto cleanup_exit = [&]() { llama_model_free(model); llama_backend_free(); return 1; };
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    // probe_once clamps the selection width to the vocabulary; compare must
+    // expect the same width (a degenerate vocab < 8 is legal, not a failure).
+    const size_t top_expect = std::min<size_t>(8, (size_t) llama_vocab_n_tokens(vocab));
 
     std::vector<llama_token> toks(64);
     int n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false);
     if (n < 0) { toks.resize(-n); n = llama_tokenize(vocab, prompt, strlen(prompt), toks.data(), toks.size(), true, false); }
-    if (n < 0) { fprintf(stderr, "Error: tokenization failed (needs %d token slots)\n", -n); return 1; }
-    if (n == 0) { fprintf(stderr, "Error: prompt tokenized to zero tokens\n"); return 1; }
+    if (n < 0) { fprintf(stderr, "Error: tokenization failed (needs %d token slots)\n", -n); return cleanup_exit(); }
+    if (n == 0) { fprintf(stderr, "Error: prompt tokenized to zero tokens\n"); return cleanup_exit(); }
     toks.resize(n);
-    if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (probe limit 120, sized for headroom under the probe's 128-slot context)\n", n); return 1; }
+    if (n > 120) { fprintf(stderr, "prompt too long: %d tokens (probe limit 120, sized for headroom under the probe's 128-slot context)\n", n); return cleanup_exit(); }
 
     bool all_ok = true;
 
@@ -185,7 +192,7 @@ int main(int argc, char ** argv) {
     cparams0.n_batch = 128;
     cparams0.n_ubatch = 128;
     llama_context * ctx0 = llama_init_from_model(model, cparams0);
-    if (!ctx0) { fprintf(stderr, "Error: ctx failed (plain)\n"); return 1; }
+    if (!ctx0) { fprintf(stderr, "Error: ctx failed (plain)\n"); return cleanup_exit(); }
     printf("mode=plain  prompt_tokens=%d\n", n);
     const ProbeResult plain = probe_once(ctx0, vocab, toks);
     llama_free(ctx0);
@@ -194,11 +201,11 @@ int main(int argc, char ** argv) {
     llama_context_params cparams1 = cparams0;
     cparams1.extract_hidden_states = true;
     llama_context * ctx1 = llama_init_from_model(model, cparams1);
-    if (!ctx1) { fprintf(stderr, "Error: ctx failed (creation-time extract)\n"); return 1; }
+    if (!ctx1) { fprintf(stderr, "Error: ctx failed (creation-time extract)\n"); return cleanup_exit(); }
     printf("mode=EXTRACT (creation-time)\n");
     const ProbeResult created = probe_once(ctx1, vocab, toks);
     llama_free(ctx1);
-    all_ok = compare("CREATION_TIME", plain, created) && all_ok;
+    all_ok = compare("CREATION_TIME", plain, created, top_expect) && all_ok;
 
     // mode 2 (optional): runtime toggle on a plain context — the server path.
     // llama_memory_clear mirrors server usage: each request decodes fresh, so
@@ -206,20 +213,20 @@ int main(int argc, char ** argv) {
     // (position continuity would otherwise reject it, ret = -1).
     if (runtime_toggle) {
         llama_context * ctx2 = llama_init_from_model(model, cparams0);
-        if (!ctx2) { fprintf(stderr, "Error: ctx failed (runtime toggle)\n"); return 1; }
+        if (!ctx2) { fprintf(stderr, "Error: ctx failed (runtime toggle)\n"); return cleanup_exit(); }
         const ProbeResult warmup = probe_once(ctx2, vocab, toks);
-        all_ok = compare("WARMUP", plain, warmup) && all_ok;
+        all_ok = compare("WARMUP", plain, warmup, top_expect) && all_ok;
         llama_memory_clear(llama_get_memory(ctx2), /*data=*/true);
         if (llama_set_extract_hidden_states(ctx2, true) != 0) {
             fprintf(stderr, "Error: runtime toggle refused (arch/MTP/n_embd_out)\n");
             llama_free(ctx2);
-            return 1;
+            return cleanup_exit();
         }
         printf("mode=EXTRACT (runtime toggle)\n");
         const ProbeResult toggled = probe_once(ctx2, vocab, toks);
         fprintf(stderr, "probe: toggle probe returned argmax=%d top8=%zu\n", toggled.argmax, toggled.top8.size());
         llama_free(ctx2);
-        all_ok = compare("RUNTIME_TOGGLE", plain, toggled) && all_ok;
+        all_ok = compare("RUNTIME_TOGGLE", plain, toggled, top_expect) && all_ok;
     }
 
     llama_model_free(model);

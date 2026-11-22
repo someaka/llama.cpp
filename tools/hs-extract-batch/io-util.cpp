@@ -205,18 +205,44 @@ bool write_batch_output(
 }
 // -- Checkpoint / Resume ------------------------------------------------
 
-static constexpr int32_t CHECKPOINT_VERSION = 6;
+static constexpr int32_t CHECKPOINT_VERSION = 7;
+static constexpr int32_t CHECKPOINT_VERSION_V6 = 6; // legacy: no model/flag binding
 static constexpr int32_t CHECKPOINT_VERSION_V5 = 5; // legacy: no accumulator checksum
 static constexpr int32_t CHECKPOINT_VERSION_V4 = 4; // legacy: single-line anchor + typo'd basis
 static constexpr int32_t CHECKPOINT_VERSION_V3 = 3; // legacy: no content check
 static constexpr int32_t CHECKPOINT_VERSION_V2 = 2; // legacy: no run fingerprint
 static constexpr int32_t CHECKPOINT_VERSION_V1 = 1;  // legacy: stored mean, restored via sum=mean*count
 
+bool hash_model_file(const char* path, uint64_t& fnv64, int64_t& size) {
+    FilePtr f(fopen(path, "rb"));
+    if (!f) {
+        fprintf(stderr, "Error: cannot open model file %s for fingerprint hashing: %s\n",
+                path, strerror(errno));
+        return false;
+    }
+    fnv_stream fnv;
+    int64_t total = 0;
+    static char buf[1 << 20];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        fnv.update(buf, n);
+        total += (int64_t) n;
+    }
+    if (ferror(f)) {
+        fprintf(stderr, "Error: I/O error hashing model file %s\n", path);
+        return false;
+    }
+    fnv64 = fnv.h;
+    size = total;
+    return true;
+}
+
 // Rolling content hash of the first `line_count` non-empty lines of the
 // prompts file (v5 resume check): identical iteration to the live run's
-// producer (same non-empty skip, same newline mixing), so the states match
-// byte-for-byte on unchanged content. Returns false if the file is missing,
-// unreadable, or has fewer than line_count non-empty lines.
+// producer (same trailing-CR strip, same non-empty skip, same newline
+// mixing), so the states match byte-for-byte on unchanged content,
+// including CRLF files. Returns false if the file is missing, unreadable,
+// or has fewer than line_count non-empty lines.
 static bool hash_prompts_prefix(const char* prompts_file, int32_t line_count, uint64_t& out) {
     std::ifstream fin(prompts_file);
     if (!fin) {
@@ -227,6 +253,10 @@ static bool hash_prompts_prefix(const char* prompts_file, int32_t line_count, ui
     int32_t n = 0;
     uint64_t h = 14695981039346656037ull;  // FNV-1a 64-bit offset basis
     while (std::getline(fin, line)) {
+        // Tolerate CRLF exactly like the producer: strip one trailing CR
+        // before the empty check and the hash (a CR-only line is empty for
+        // the producer and scan_prompts_file, and must be here too).
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
         h = fnv_roll_line(h, line);
         if (++n == line_count) {
@@ -297,6 +327,24 @@ bool write_checkpoint(
         f.reset();
         std::remove(temp_path.c_str());
         return false;
+    }
+    // v7: model identity + value-affecting flags (see checkpoint_fingerprint).
+    // Written before the accumulator region; compared exactly on resume.
+    {
+        const uint8_t no_bos_u8 = fp.no_bos ? 1 : 0;
+        if (!checked_write(&fp.model_fnv64, sizeof(uint64_t), 1, f) ||
+            !checked_write(&fp.model_size, sizeof(int64_t), 1, f) ||
+            !checked_write(&fp.model_n_embd, sizeof(int32_t), 1, f) ||
+            !checked_write(&fp.model_n_layer, sizeof(int32_t), 1, f) ||
+            !checked_write(&no_bos_u8, sizeof(uint8_t), 1, f) ||
+            !checked_write(&fp.temperature, sizeof(float), 1, f) ||
+            !checked_write(&fp.top_k, sizeof(int32_t), 1, f) ||
+            !checked_write(&fp.top_p, sizeof(float), 1, f) ||
+            !checked_write(&fp.repeat_penalty, sizeof(float), 1, f)) {
+            f.reset();
+            std::remove(temp_path.c_str());
+            return false;
+        }
     }
     // v6: hash the accumulator region (from here to end of records) and
     // append the digest as a trailer. read_checkpoint recomputes over the
@@ -501,6 +549,54 @@ bool read_checkpoint(
                 }
             }
         }
+    }
+
+    // v7: model identity + value-affecting flags. A same-dimension model
+    // swap, --no-bos, or a sampling change shifts every accumulated vector;
+    // refuse instead of silently merging incompatible means.
+    if (version >= CHECKPOINT_VERSION) {
+        uint64_t m_fnv = 0;
+        int64_t  m_size = 0;
+        int32_t  m_embd = 0, m_layer = 0, m_top_k = 0;
+        uint8_t  no_bos_u8 = 0;
+        float    m_temperature = 0.0f, m_top_p = 1.0f, m_repeat_penalty = 1.0f;
+        if (fread(&m_fnv, sizeof(uint64_t), 1, f) != 1) return short_read("model fnv");
+        if (fread(&m_size, sizeof(int64_t), 1, f) != 1) return short_read("model size");
+        if (fread(&m_embd, sizeof(int32_t), 1, f) != 1) return short_read("model n_embd");
+        if (fread(&m_layer, sizeof(int32_t), 1, f) != 1) return short_read("model n_layer");
+        if (fread(&no_bos_u8, sizeof(uint8_t), 1, f) != 1) return short_read("no_bos");
+        if (fread(&m_temperature, sizeof(float), 1, f) != 1) return short_read("temperature");
+        if (fread(&m_top_k, sizeof(int32_t), 1, f) != 1) return short_read("top_k");
+        if (fread(&m_top_p, sizeof(float), 1, f) != 1) return short_read("top_p");
+        if (fread(&m_repeat_penalty, sizeof(float), 1, f) != 1) return short_read("repeat_penalty");
+        if (m_fnv != expected.model_fnv64 || m_size != expected.model_size ||
+            m_embd != expected.model_n_embd || m_layer != expected.model_n_layer) {
+            fprintf(stderr, "Error: checkpoint model identity mismatch - the checkpoint was written "
+                            "against a different model file (size %lld, n_embd %d, n_layer %d) than the "
+                            "current invocation (size %lld, n_embd %d, n_layer %d). Discard the checkpoint "
+                            "(remove %s) or restore the original model.\n",
+                    (long long) m_size, m_embd, m_layer,
+                    (long long) expected.model_size, expected.model_n_embd, expected.model_n_layer,
+                    ckpt_path.c_str());
+            return false;
+        }
+        if ((no_bos_u8 != 0) != expected.no_bos ||
+            m_temperature != expected.temperature || m_top_k != expected.top_k ||
+            m_top_p != expected.top_p || m_repeat_penalty != expected.repeat_penalty) {
+            fprintf(stderr, "Error: checkpoint BOS/sampling flag mismatch - the checkpoint was written "
+                            "with different value-affecting flags (no_bos=%d temperature=%g top_k=%d "
+                            "top_p=%g repeat_penalty=%g) than the current invocation (no_bos=%d "
+                            "temperature=%g top_k=%d top_p=%g repeat_penalty=%g). Discard the checkpoint "
+                            "(remove %s) or rerun with the original flags.\n",
+                    no_bos_u8, (double) m_temperature, m_top_k, (double) m_top_p, (double) m_repeat_penalty,
+                    expected.no_bos ? 1 : 0, (double) expected.temperature, expected.top_k,
+                    (double) expected.top_p, (double) expected.repeat_penalty, ckpt_path.c_str());
+            return false;
+        }
+    } else if (version == CHECKPOINT_VERSION_V6) {
+        fprintf(stderr, "Warning: checkpoint is v6 (no model/flag binding) - a model swap or "
+                        "--no-bos/sampling change since the checkpoint is not detected. "
+                        "Re-run without --resume for the full v7 guarantee.\n");
     }
 
     // Read accumulator state (binary accumulator format)

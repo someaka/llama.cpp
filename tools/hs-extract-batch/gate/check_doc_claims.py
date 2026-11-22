@@ -176,8 +176,15 @@ def main():
         fail("missing server.cpp; cannot verify the kv-unified default")
     else:
         src = SERVER_MAIN.read_text(errors="replace")
-        if "n_parallel is set to auto" not in src or "params.kv_unified = true" not in src:
-            fail("server.cpp no longer pairs the n_parallel=auto branch with kv_unified = true "
+        if "n_parallel is set to auto" not in src:
+            fail("server.cpp lost the n_parallel=auto trace comment the docs cite")
+        # Pin the assignment INSIDE the auto branch: two independent substring
+        # pins let the assignment move out (forcing unified KV even with -np)
+        # while the check still passed (2026-11-21 round, mutation-confirmed).
+        src_nc = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+        src_nc = re.sub(r'//[^\n]*', '', src_nc)
+        if not re.search(r'if\s*\(\s*params\.n_parallel\s*<\s*0\s*\)\s*\{[^}]*params\.kv_unified\s*=\s*true\s*;', src_nc):
+            fail("server.cpp no longer sets params.kv_unified = true inside the n_parallel<0 (auto) branch "
                  "(the table says --kv-unified is the default when -np is unset)")
 
     if failures:

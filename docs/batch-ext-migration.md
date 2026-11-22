@@ -104,7 +104,8 @@ llama_decode/llama_batch comments in the migrated TUs.
   guard are byte-neutral relative to Nov15, and the incremental cache is
   sound. The anchor is re-captured from the FRESH build of 82ce9de2f
   (pre-migration); model sha256 recorded in the gate README.
-- Behavioral receipts: self-test 33/33; test-hidden-states (C++ and C) with
+- Behavioral receipts: self-test 35/35 (33/33 at migration time; +2 from the
+  2026-11-21 soundness round: CRLF resume, v7 fingerprint); test-hidden-states (C++ and C) with
   models/hs-fixture.gguf; logits-probe plain + --runtime-toggle;
   hs-extract-batch-test mode 2 (CLI vs server bitwise); audit 20/20;
   check_doc_claims; whitespace-clean diffs.

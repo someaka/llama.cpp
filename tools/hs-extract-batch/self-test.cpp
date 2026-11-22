@@ -189,7 +189,7 @@ int run_self_test() {
         HS_CHECK(ok, "Test 14 (single-range hard error negative)");
     }
 
-    // Test 15: overlapping ranges  -  verify correct token deduplication
+    // Test 15: overlapping ranges accumulate with multiplicity (no dedup)
     // ranges = {{0, 2}, {1, 3}} means tokens 0,1 and 1,2 -> token 1 counted twice
     // dim0: (1+3) + (3+5) = 4 + 8 = 12, count = 4, mean = 3.0
     // dim1: (2+4) + (4+6) = 6 + 10 = 16, count = 4, mean = 4.0
@@ -254,6 +254,15 @@ int run_self_test() {
         fp.generate_tokens = 0;
         fp.token_skip = 50;
         fp.layers = {0, 17, 35};
+        fp.model_fnv64 = 0x0123456789abcdefull;
+        fp.model_size = 123456789;
+        fp.model_n_embd = 4;
+        fp.model_n_layer = 35;
+        fp.no_bos = true;
+        fp.temperature = 0.7f;
+        fp.top_k = 40;
+        fp.top_p = 0.9f;
+        fp.repeat_penalty = 1.1f;
         // Content identity is set below, from the prompts fixture itself.
         fp.n_prompts = 3;
 
@@ -339,6 +348,34 @@ int run_self_test() {
                     ok18 = false;
                 }
                 HS_CHECK(ok18, "Test 18 (fingerprint mismatch rejected)");
+            }
+
+            // Test 18b: v7 model/flag binding — every new fingerprint field
+            // must be enforced (a same-dim model swap or a sampling/BOS change
+            // shifts every accumulated vector; resume must refuse).
+            {
+                bool ok18b = true;
+                checkpoint_fingerprint variants[9];
+                for (auto & v : variants) v = fp;
+                variants[0].model_fnv64 ^= 1;
+                variants[1].model_size += 1;
+                variants[2].model_n_embd += 1;
+                variants[3].model_n_layer += 1;
+                variants[4].no_bos = !fp.no_bos;
+                variants[5].temperature += 0.1f;
+                variants[6].top_k += 1;
+                variants[7].top_p -= 0.1f;
+                variants[8].repeat_penalty += 0.1f;
+                for (int v = 0; v < 9; v++) {
+                    AccumulatorMap junk_acc;
+                    int32_t junk_iter = 0;
+                    if (read_checkpoint(test_ckpt, junk_acc, junk_iter, 4, variants[v], prompts_path.c_str())) {
+                        fprintf(stderr, "    (v7 variant %d was accepted)\n", v);
+                        ok18b = false;
+                    }
+                    if (!junk_acc.empty()) ok18b = false;
+                }
+                HS_CHECK(ok18b, "Test 18b (v7 model/flag fingerprint enforced)");
             }
 
             // Test 19: corruption detection at every offset. Version,
@@ -467,6 +504,28 @@ int run_self_test() {
                 if (ok21 && !junk_acc.empty()) ok21 = false;
                 HS_CHECK(ok21, "Test 21 (tampered prompts content rejected)");
                 remove(tampered_path.c_str());
+            }
+
+            // Test 21b: an unchanged CRLF prompts file must resume cleanly.
+            // The producer strips one trailing CR before hashing; the resume
+            // re-derivation must do the same (before the fix it hashed "line\r"
+            // and falsely rejected every CRLF run). A CR-only line is empty
+            // for the producer and must not count here either.
+            {
+                const std::string crlf_path = prompts_path + ".crlf";
+                {
+                    std::ofstream cf(crlf_path.c_str(), std::ios::binary);
+                    for (int i = 0; i < 41; i++) cf << "filler " << i << "\r\n";
+                    cf << "\r\n";              // CR-only line: empty, skipped
+                    cf << "hello world\r\n";
+                    cf << "tail\r\n";
+                }
+                AccumulatorMap crlf_acc;
+                int32_t crlf_iter = 0;
+                bool read_crlf = read_checkpoint(test_ckpt, crlf_acc, crlf_iter, 4, fp, crlf_path.c_str());
+                bool ok21b = read_crlf && (crlf_iter == 42) && (crlf_acc.size() == 2);
+                HS_CHECK(ok21b, "Test 21b (CRLF same-content resume roundtrip)");
+                remove(crlf_path.c_str());
             }
         }
 

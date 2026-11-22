@@ -141,6 +141,7 @@ struct llama_context {
     bool supports_state_row() const;
     void set_nextn_layer_offset(int32_t offset);
     void set_extract_hidden_states(bool value);
+    void set_hidden_state_layers(const int32_t * layers, int32_t n_layers);
     void set_causal_attn(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);

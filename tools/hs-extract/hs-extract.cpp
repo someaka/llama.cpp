@@ -325,6 +325,15 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // Requested-layer mask: capture only the -l slots (see hs-extract-batch).
+    {
+        const std::vector<int32_t> sel(layers.begin(), layers.end());
+        if (llama_set_hidden_state_layers(ctx, sel.data(), (int32_t) sel.size()) != 0) {
+            fprintf(stderr, "Error: failed to set hidden-state layer selection\n");
+            return 1;
+        }
+    }
+
     LlamaBatch batch_wrapper;
     batch_wrapper.init(ctx);
     llama_batch_ext * batch = batch_wrapper.batch;

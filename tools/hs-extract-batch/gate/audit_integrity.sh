@@ -703,11 +703,32 @@ echo "=== Check 16: server pool=none response size limit ==="
 if ! strip_comments tools/server/server-hidden-states.h | grep -A6 -F "if (total_all_layers > HS_MAX_POOL_NONE_FLOATS)" | grep -qE "server_task_result_error|send_error"; then
   echo "FAIL: pool=none response size limit not enforced"; exit 1
 fi
-echo "PASS"
+# Pin the constant's VALUE too (predicate-only pinning let a 1000x inflation
+# pass 20/20 in the 2026-11-21 round). Mirror Check 15's machinery: exactly
+# one declaration, plain decimal literal (digit separators tolerated), sane
+# band, no macro redefinition.
+python3 - <<'PY'
+import re, sys
+src = open("tools/server/server-hidden-states.h").read()
+src = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+src = re.sub(r'//[^\n]*', '', src)
+if re.search(r'#\s*define\s+HS_MAX_POOL_NONE_FLOATS\b', src):
+    sys.exit("FAIL: HS_MAX_POOL_NONE_FLOATS is redefined by a macro (the declaration this check parses is not the value the compiler uses)")
+decls = re.findall(r'HS_MAX_POOL_NONE_FLOATS\s*(?:=(?!=)\s*([^;{}]+)|\{\s*([^}]*)\})\s*;', src)
+if len(decls) != 1:
+    sys.exit(f"FAIL: expected exactly one HS_MAX_POOL_NONE_FLOATS declaration, found {len(decls)} (a dead duplicate can mask an unbounded live value)")
+raw = (decls[0][0] or decls[0][1]).strip().replace("'", "")
+if not re.fullmatch(r'[1-9][0-9]*', raw):
+    sys.exit(f"FAIL: HS_MAX_POOL_NONE_FLOATS initializer is not a plain decimal integer literal without leading zeros (value: {raw})")
+val = int(raw)
+if not (1000000 <= val <= 100000000):
+    sys.exit(f"FAIL: HS_MAX_POOL_NONE_FLOATS bound outside [1000000,100000000] (value: {val})")
+print("PASS")
+PY
 
 echo "=== Check 17: checkpoint v2+ sum-based records (no precision loss) ==="
-if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 6"; then
-  echo "FAIL: checkpoint version is not 6 (v6: accumulator-region checksum)"; exit 1
+if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "CHECKPOINT_VERSION = 7"; then
+  echo "FAIL: checkpoint version is not 7 (v7: model/flag binding + accumulator-region checksum)"; exit 1
 fi
 if ! strip_comments tools/hs-extract-batch/io-util.cpp | grep -q "bool write_sum"; then
   echo "FAIL: write_sum parameter missing from _write_accumulator_to_file signature"; exit 1

@@ -193,7 +193,25 @@ struct checkpoint_fingerprint {
     // any in-range flip inside the embedded accumulator state is detected.
     uint64_t content_fnv64  = 0;
     int32_t n_prompts       = 0;
+    // v7 binds the checkpoint to the model and the value-affecting flags:
+    // a same-dimension model swap, --no-bos, or a sampling change shifts
+    // every accumulated vector, and resuming across them would silently
+    // merge incompatible means. model_fnv64 is FNV-1a-64 over the whole
+    // model file (0 = not computed; pre-v7 checkpoints carry no binding).
+    uint64_t model_fnv64    = 0;
+    int64_t  model_size     = 0;
+    int32_t  model_n_embd   = 0;
+    int32_t  model_n_layer  = 0;
+    bool     no_bos         = false;
+    float    temperature    = 0.0f;
+    int32_t  top_k          = 0;
+    float    top_p          = 1.0f;
+    float    repeat_penalty = 1.0f;
 };
+
+// FNV-1a-64 over the whole model file + its byte size (v7 fingerprint).
+// Streams in 1 MiB chunks; returns false on open/read failure.
+bool hash_model_file(const char* path, uint64_t& fnv64, int64_t& size);
 
 // Write checkpoint: version + n_iterated + run fingerprint (v3) + content
 // identity (v4) + accumulator state (binary accumulator format). The

@@ -72,8 +72,11 @@ The 4 registered architectures (`llama`, `gemma`, `gemma4`, `qwen35`) call
 `capture_layer_output(il, cur)` once per layer at
 the bottom of the loop (slots 1..N). Hooks are pre-installed in 101 of the
 187 model-builder sources (src/models/*.cpp); 97 of those 101 hook-bearing builders install only
-`capture_layer_output` (a builder registered without `capture_embeddings`
-trips `GGML_ASSERT(n_layers == n_layer + 1)` in `src/llama-context.cpp`):
+`capture_layer_output` (a hook-only builder registered without
+`capture_embeddings` trips the ordering assert in `capture_layer_output(0)`
+— `GGML_ASSERT(size() == il + 1, "capture_embeddings must run first")` in
+`src/llama-graph.cpp` — during graph build, before the decode-side
+layer-count assert in `src/llama-context.cpp` is ever reached):
 
 ```cpp
         inpL = cur;
@@ -152,6 +155,20 @@ the capture).
 - The getter does one `synchronize()` per call / per batch call — same as
   before the refactor.
 
+## Requested-layer mask
+
+`llama_set_hidden_state_layers(ctx, layers, n_layers)` selects which ladder
+slots to capture (0 = embeddings .. n_layer = final block output). Empty
+selection (the default) captures the full ladder. With a non-empty selection,
+unrequested slots are neither named as graph outputs nor copied D2H — their
+getters return NULL — while requested slots carry byte-identical values to a
+full-ladder capture. The selection is part of the graph-reuse key, invalidates
+stale capture data, and is cleared when extraction is toggled off. The CLIs
+wire their `-l` list into it; the server sets it per hidden-states request
+(`layers` parameter; `"all"` leaves the full ladder). Rationale: without the
+mask, a 3-layer request on a 36-slot model paid the full 36-slot D2H copy per
+ubatch (measured 12x amplification, identical decode time for 1 vs 36 layers).
+
 ## What a new architecture must do to join
 
 1. Verify its builder has the standard loop tail: final residual add →
@@ -161,13 +178,17 @@ the capture).
 2. Confirm `capture_layer_output(il, cur);` is present right after the
    reassignment (pre-installed in 101 of 187 model-builder sources (src/models/*.cpp); add it only if
    absent).
-3. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
-4. If the builder narrows rows with `crop_before_nextn` / `crop_after_nextn`,
+3. Confirm/add `capture_embeddings(inpL);` before the layer loop. Only the
+   4 reference archs (llama/gemma/gemma4/qwen35) call it today; the 97
+   hook-only builders lack it, and registering one without it aborts at
+   first decode (the ordering assert cited above).
+4. Add its `LLM_ARCH_*` case to `llm_arch_supports_hidden_states`.
+5. If the builder narrows rows with `crop_before_nextn` / `crop_after_nextn`,
    confirm it prunes after the final norm under extraction (see the
    qwen35/gemma4 tails) so logits stay output-only and `inp_out_ids` stays
    consumed.
-5. Rebuild, self-test 33/33, `test-hidden-states <gguf>` on a real GGUF of
-   that arch.
+6. Rebuild, self-test 35/35, `test-hidden-states <gguf>
+   [models/hs-refusal-fixture.gguf]` on a real GGUF of that arch.
 
 Refusal needs no code: an unlisted arch is refused by name at context
 creation (flag set), at the setter (enable), and at the server route.

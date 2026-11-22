@@ -71,6 +71,7 @@ int main(int argc, char ** argv) {
     // The getters synchronize the context before returning data
     // (see llama_get_hidden_state); no explicit sync is needed here.
     int n_layers = llama_model_n_layer(model);
+    const int n_embd = llama_model_n_embd_out(model);
     int32_t n_hidden_tokens = llama_get_hidden_state_n_tokens(ctx);
 
     if (n_hidden_tokens == 0) {
@@ -84,8 +85,9 @@ int main(int argc, char ** argv) {
         float * hidden = llama_get_hidden_state(ctx, il);
         if (hidden) {
             printf("Layer %d: [", il);
-            for (int i = 0; i < 5; i++) {
-                printf("%.4f%s", hidden[i], i < 4 ? ", " : "");
+            const int n_show = n_embd < 5 ? n_embd : 5;
+            for (int i = 0; i < n_show; i++) {
+                printf("%.4f%s", hidden[i], i < n_show - 1 ? ", " : "");
             }
             printf("...]\n");
         } else {

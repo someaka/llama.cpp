@@ -36,6 +36,11 @@ struct llama_cparams {
     bool embeddings_nextn;        // also extract the hidden state before the final output norm
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
     bool extract_hidden_states;   // extract per-layer residual stream activations
+    // Requested hidden-state slots (0 = embeddings .. n_layer = final block
+    // output). Empty = capture the full ladder (default). Non-empty:
+    // unrequested slots are neither marked as graph outputs nor copied D2H,
+    // and their getters return NULL. Set via llama_set_hidden_state_layers.
+    std::vector<int32_t> hidden_state_layers;
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;

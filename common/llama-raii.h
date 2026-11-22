@@ -68,8 +68,12 @@ struct LlamaBatch {
     void init(llama_context * ctx) {
         // Free a previously initialized batch before re-init so a second
         // init() on the same object cannot leak the old allocation.
+        // Invalidate first: if the new allocation throws, the destructor
+        // must not free the already-freed pointer again.
         if (initialized) {
             llama_batch_ext_free(batch);
+            batch = nullptr;
+            initialized = false;
         }
         batch = llama_batch_ext_init(ctx);
         initialized = true;

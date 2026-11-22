@@ -1190,6 +1190,9 @@ Each key in `hidden_states` is the layer index as a decimal string ("0", "34", .
 - For `pool="last"` or `pool="skip_mean"`: length = `n_embd_out`
 - For `pool="none"`: length = `n_tokens * n_embd_out` (reshape to `[n_tokens, n_embd_out]` client-side)
 
+Non-finite values (NaN, ±Inf) are rendered as `null` — JSON has no Inf/NaN.
+This matches the CLI tools' `format_float` and the generic `to_json()` form.
+
 `input` is a length-carrying JSON string, not a C string: a `\u0000` in it is
 tokenized like any other byte and counted in `tokens_evaluated` (measured on
 hs-fixture: an input of 14 tokens with a NUL inserted reports 15). The CLI

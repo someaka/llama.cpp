@@ -1134,6 +1134,15 @@ extern "C" {
     // unchanged on refusal.
     LLAMA_API int32_t llama_set_extract_hidden_states(struct llama_context * ctx, bool extract_hidden_states);
 
+    // Select which hidden-state slots to capture (0 = embeddings, 1..n_layer
+    // = per-block residual stream, n_layer = final block output). n_layers == 0
+    // clears the selection (capture the full ladder, the default). Indices
+    // must be in [0, n_layer]; duplicates are ignored. Unrequested slots are
+    // not captured (no graph output, no device-to-host copy) and their getters
+    // return NULL. Only affects contexts with extraction enabled.
+    // Returns 0 on success, -1 on invalid input (context unchanged).
+    LLAMA_API int32_t llama_set_hidden_state_layers(struct llama_context * ctx, const int32_t * layers, int32_t n_layers);
+
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
@@ -1209,7 +1218,8 @@ extern "C" {
     // before any decode). The stride per token is n_embd. Returns NULL unless
     // hidden-state extraction is currently enabled, either through the context
     // params or through llama_set_extract_hidden_states(); the runtime toggle
-    // is how the server turns it on for a single request.
+    // is how the server turns it on for a single request. Slots excluded by
+    // llama_set_hidden_state_layers() also return NULL (never captured).
     // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
     //
     // Ownership: the returned pointer is owned by the context and MUST NOT be freed.

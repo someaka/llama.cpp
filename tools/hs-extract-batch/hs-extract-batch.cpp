@@ -793,6 +793,15 @@ static bool load_model_session(const Args& args, const PromptsScan& scan, ModelS
         fprintf(stderr, "Error: failed to create context\n");
         return false;
     }
+
+    // Requested-layer mask: capture only the slots this run targets. Without
+    // it the full n_layer+1 ladder is marked as graph outputs and copied D2H
+    // per ubatch regardless of -l (measured 12x copy amplification for a
+    // 3-layer request on a 36-slot model). Selection does not change values.
+    if (llama_set_hidden_state_layers(s.ctx, s.target_layers.data(), (int32_t) s.target_layers.size()) != 0) {
+        fprintf(stderr, "Error: failed to set hidden-state layer selection\n");
+        return false;
+    }
     return true;
 }
 
@@ -1326,7 +1335,9 @@ static int generate_assignment(GenContext& g) {
 // content_fnv is the rolling FNV over every consumed prompts line (0 before
 // any line is consumed); n_prompts binds the run to the dataset size.
 static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vector<int32_t>& layers,
-                                               uint64_t content_fnv, int32_t n_prompts) {
+                                               uint64_t content_fnv, int32_t n_prompts,
+                                               uint64_t model_fnv64, int64_t model_size,
+                                               int32_t model_n_embd, int32_t model_n_layer) {
     checkpoint_fingerprint fp;
     fp.generate_mode   = args.generate_tokens > 0;
     fp.generate_tokens = args.generate_tokens;
@@ -1335,6 +1346,15 @@ static checkpoint_fingerprint make_fingerprint(const Args& args, const std::vect
     std::sort(fp.layers.begin(), fp.layers.end());
     fp.content_fnv64 = content_fnv;
     fp.n_prompts     = n_prompts;
+    fp.model_fnv64    = model_fnv64;
+    fp.model_size     = model_size;
+    fp.model_n_embd   = model_n_embd;
+    fp.model_n_layer  = model_n_layer;
+    fp.no_bos         = args.no_bos;
+    fp.temperature    = args.temperature;
+    fp.top_k          = args.top_k;
+    fp.top_p          = args.top_p;
+    fp.repeat_penalty = args.repeat_penalty;
     return fp;
 }
 
@@ -1360,6 +1380,19 @@ static int run_batch(const Args& args) {
     int32_t& n_embd = ms.n_embd;
     int32_t& n_ctx = ms.n_ctx;
     std::vector<int32_t>& target_layers = ms.target_layers;
+
+    // v7 checkpoint fingerprint: bind the run to the model file content and
+    // the value-affecting flags. Hash only when checkpoints are in play
+    // (--resume or periodic checkpoints); the hash is compared exactly on
+    // resume, so a same-dimension model swap is refused, not silently merged.
+    uint64_t model_fnv64 = 0;
+    int64_t  model_size  = 0;
+    if (args.resume || args.checkpoint_every > 0) {
+        if (!hash_model_file(args.model_path, model_fnv64, model_size)) {
+            return 1;
+        }
+    }
+    const int32_t model_n_layer = llama_model_n_layer(ms.model);
 
     // --batch-size > 1 is rejected: multi-prompt batching is not implemented
     // (shared KV-cache semantics would corrupt extraction). The parser still
@@ -1480,7 +1513,8 @@ static int run_batch(const Args& args) {
     // a mismatch.
     int skip_count = 0;
     if (args.resume) {
-        checkpoint_fingerprint fp = make_fingerprint(args, target_layers, 0, n_prompts_expected);
+        checkpoint_fingerprint fp = make_fingerprint(args, target_layers, 0, n_prompts_expected,
+                                                     model_fnv64, model_size, n_embd, model_n_layer);
         if (!read_checkpoint(args.output_path, accumulators, skip_count, n_embd, fp, args.prompts_file)) {
             fprintf(stderr, "Error: --resume requested but no valid checkpoint found at %s.checkpoint\n",
                     args.output_path);
@@ -1692,7 +1726,8 @@ static int run_batch(const Args& args) {
 
         if (args.checkpoint_every > 0 && n_processed % args.checkpoint_every == 0) {
             if (!write_checkpoint(accumulators, args.output_path, n_embd, prompt_idx,
-                                  make_fingerprint(args, target_layers, content_fnv, n_prompts_expected))) {
+                                  make_fingerprint(args, target_layers, content_fnv, n_prompts_expected,
+                                                   model_fnv64, model_size, n_embd, model_n_layer))) {
                 fprintf(stderr, "Error: checkpoint write failed  -  aborting to prevent data loss\n");
                 return false;
             }

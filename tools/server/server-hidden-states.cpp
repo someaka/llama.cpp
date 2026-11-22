@@ -5,6 +5,7 @@
 // envelope-parity check, which greps this file.
 #include "server-hidden-states.h"
 
+#include <cmath>
 #include <cstdio>
 
 //
@@ -36,7 +37,9 @@ json server_task_result_hidden_states::to_json() {
 std::string server_task_result_hidden_states::to_json_text() const {
     // Same envelope as to_json(), but every value is a %.9g literal -- the
     // CLI tools' exact text precision, emitted as raw JSON numbers (9
-    // significant digits round-trip float32 losslessly).
+    // significant digits round-trip float32 losslessly). Non-finite values
+    // render as null (JSON has no Inf/NaN), matching the CLI's format_float
+    // and nlohmann's to_json() behavior.
     // Field parity is pinned by fork-ci's envelope-parity check: adding a
     // field to to_json() without mirroring it here fails CI, so the two
     // implementations cannot silently drift.
@@ -45,6 +48,10 @@ std::string server_task_result_hidden_states::to_json_text() const {
         for (size_t i = 0; i < vec.size(); i++) {
             if (i > 0) {
                 out += ",";
+            }
+            if (!std::isfinite(vec[i])) {
+                out += "null";
+                continue;
             }
             char buf[32];  // worst-case %.9g is 15 chars; 32 gives headroom
             snprintf(buf, sizeof(buf), "%.9g", (double) vec[i]);

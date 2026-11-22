@@ -78,12 +78,13 @@ directory). To relocate the volatile tree, adjust the `GOLD` constant.
 ## Required model
 
 - Set `export HS_GATE_MODEL=/path/to/model.gguf` (REQUIRED — no default).
-  The committed baseline digests were captured with `gemma-4-E2B.Q4_K_M.gguf`
+  The committed baseline digests were captured with `gemma-4-E2B-it-Q4_K_M.gguf`
   (gemma4 architecture, 35 layers) on the production CUDA path; the file
-  formerly lived under CrimsonRed/data/models/ and has since moved off disk.
-  The model's sha256 is NOT recorded anywhere: `digests_baseline.json` stores
-  only artifact digests, so the anchor identifies the model by name only --
-  always run baseline and check against the same GGUF file. Note that
+  lives under CrimsonRed/data/models/. Its sha256 is recorded in the
+  2026-11-21 re-capture section below
+  (740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8);
+  `digests_baseline.json` stores only artifact digests, so always run
+  baseline and check against the same GGUF file (verify the sha256). Note that
   `models/hs-fixture.gguf` (committed in-repo; sha256 pinned in
   `.github/workflows/fork-ci.yml`)
   is a different, much smaller CI fixture (llama arch, 5 layers): it CANNOT run

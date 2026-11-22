@@ -1756,6 +1756,15 @@ void llm_graph_context::capture_layer_output(int il, ggml_tensor * cur) {
                 "capture_layer_output called out of layer order "
                 "(capture_embeddings must run first)");
 
+    // Requested-layer mask: an unrequested slot keeps its ladder position
+    // (nullptr) but is not named as a graph output and not copied D2H.
+    const int slot = il + 1;
+    if (!cparams.hidden_state_layers.empty() &&
+        std::find(cparams.hidden_state_layers.begin(), cparams.hidden_state_layers.end(), slot) == cparams.hidden_state_layers.end()) {
+        res->t_hidden_layers.push_back(nullptr);
+        return;
+    }
+
     cb(cur, "hidden_state", il);
     res->t_hidden_layers.push_back(cur);
 }
@@ -1771,6 +1780,13 @@ void llm_graph_context::capture_embeddings(ggml_tensor * embd) {
     GGML_ASSERT(embd != nullptr);
     GGML_ASSERT(res->t_hidden_layers.empty() &&
                 "capture_embeddings must be called before capture_layer_output");
+
+    // Requested-layer mask: slot 0 (embeddings) may be excluded too.
+    if (!cparams.hidden_state_layers.empty() &&
+        std::find(cparams.hidden_state_layers.begin(), cparams.hidden_state_layers.end(), 0) == cparams.hidden_state_layers.end()) {
+        res->t_hidden_layers.push_back(nullptr);
+        return;
+    }
 
     cb(embd, "hidden_state_embd", -1);
     res->t_hidden_layers.push_back(embd);
